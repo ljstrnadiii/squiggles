@@ -280,7 +280,7 @@ const deployPolicy = aws.iam.getPolicyDocumentOutput({ statements: [
   {
     sid: "ApplicationBuckets",
     effect: "Allow",
-    actions: ["s3:Get*", "s3:List*", "s3:Put*", "s3:DeleteObject", "s3:AbortMultipartUpload"],
+    actions: ["s3:Get*", "s3:List*", "s3:Put*", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload"],
     resources: [webBucket.arn, pulumi.interpolate`${webBucket.arn}/*`, dataBucket.arn, pulumi.interpolate`${dataBucket.arn}/*`],
   },
   {
