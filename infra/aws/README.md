@@ -1,6 +1,6 @@
 # AWS infrastructure
 
-This Pulumi project implements the first V1 hosted development slice for the static application and one manually uploaded developer dataset. It intentionally has no server-side analytics, authentication, API, or upload service yet.
+This Pulumi project implements static application and private GeoParquet delivery plus the first authentication/control-plane foundation. Cognito and DynamoDB are present, but Google federation, the application API, private signed-cookie delivery, and managed upload are enabled only in their gated follow-up slices. It intentionally has no server-side analytics.
 
 It creates separate private web and dataset buckets, CloudFront with Origin Access Control, SPA routing and range-friendly dataset delivery, Route 53 records for `squiggles.io`, an ACM certificate in `us-east-1`, incomplete multipart-upload cleanup, and an AWS Budget. The free-tier-oriented default is $10/month with notifications at 10%, 50%, and 80%; configuration cannot exceed the project's $50 development ceiling. A budget alerts but is not a hard spending cap.
 
