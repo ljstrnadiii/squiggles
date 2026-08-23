@@ -32,7 +32,9 @@ def _table_bounds(table: pa.Table) -> list[float]:
 class GeoParquetDataSink(Datasink[list[ShardMetadata]]):
     """Ray datasink that writes canonical, Hive-partitioned GeoParquet shards."""
 
-    def __init__(self, path: str, *, row_group_size: int = 16, target_shard_rows: int = 64) -> None:
+    def __init__(
+        self, path: str, *, row_group_size: int = 128, target_shard_rows: int = 512
+    ) -> None:
         self.path = path
         self.row_group_size = row_group_size
         self.target_shard_rows = target_shard_rows

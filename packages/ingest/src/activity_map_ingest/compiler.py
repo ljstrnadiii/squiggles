@@ -43,7 +43,8 @@ class CompileOptions:
     num_cpus: int | None = None
     max_rejections: int | None = None
     max_rejection_rate: float | None = None
-    target_shard_rows: int = 128
+    target_shard_rows: int = 512
+    row_group_rows: int = 128
 
 
 class ActivitySourceAdapter(Protocol):
@@ -495,6 +496,8 @@ def compile_source(options: CompileOptions, adapter: ActivitySourceAdapter) -> d
     source, target = options.input_path.resolve(), options.output_path.resolve()
     if options.target_shard_rows < 1:
         raise ValueError("target shard rows must be positive")
+    if options.row_group_rows < 1 or options.row_group_rows > options.target_shard_rows:
+        raise ValueError("row group rows must be positive and no larger than the shard target")
     if target.exists() and not options.overwrite:
         raise FileExistsError(f"output already exists: {target}; pass --overwrite to replace it")
     parent = target.parent
@@ -535,6 +538,7 @@ def compile_source(options: CompileOptions, adapter: ActivitySourceAdapter) -> d
                     )
                 sink = GeoParquetDataSink(
                     str(Path(output_tmp) / "activities"),
+                    row_group_size=options.row_group_rows,
                     target_shard_rows=options.target_shard_rows,
                 )
                 partitioned.write_datasink(sink)

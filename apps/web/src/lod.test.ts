@@ -3,12 +3,12 @@ import { describe, expect, it } from "vitest";
 import { chooseLod } from "./lod";
 
 describe("chooseLod", () => {
-  it("promotes a local viewport to the highest detail that fits", () => {
-    expect(chooseLod([3200, 8000, 32000, 146044, 900000], 1)).toBe(3);
+  it("keeps zoom as a fidelity ceiling even when finer detail fits", () => {
+    expect(chooseLod([3200, 8000, 32000, 146044, 900000], 1)).toBe(1);
   });
 
   it("uses a balanced level for the full export", () => {
-    expect(chooseLod([126494, 317136, 1259440, 5708384, 13255105], 0)).toBe(1);
+    expect(chooseLod([126494, 317136, 1259440, 5708384, 13255105], 0)).toBe(0);
   });
 
   it("falls back to the lowest available level when every estimate exceeds budget", () => {

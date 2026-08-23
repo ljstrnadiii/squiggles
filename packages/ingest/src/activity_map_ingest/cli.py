@@ -18,21 +18,23 @@ def main() -> int:
     compile_parser.add_argument("--num-cpus", type=int)
     compile_parser.add_argument("--max-rejections", type=int)
     compile_parser.add_argument("--max-rejection-rate", type=float)
-    compile_parser.add_argument("--target-shard-rows", type=int, default=128)
+    compile_parser.add_argument("--target-shard-rows", type=int, default=512)
+    compile_parser.add_argument("--row-group-rows", type=int, default=128)
     validate_parser = commands.add_parser("validate")
     validate_parser.add_argument("dataset", type=Path)
     args = parser.parse_args()
     if args.command == "compile-strava":
         result = compile_strava(
             CompileOptions(
-                args.input,
-                args.output,
-                args.overwrite,
-                args.batch_size,
-                args.num_cpus,
-                args.max_rejections,
-                args.max_rejection_rate,
-                args.target_shard_rows,
+                input_path=args.input,
+                output_path=args.output,
+                overwrite=args.overwrite,
+                batch_size=args.batch_size,
+                num_cpus=args.num_cpus,
+                max_rejections=args.max_rejections,
+                max_rejection_rate=args.max_rejection_rate,
+                target_shard_rows=args.target_shard_rows,
+                row_group_rows=args.row_group_rows,
             )
         )
     else:
