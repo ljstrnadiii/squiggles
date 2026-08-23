@@ -260,7 +260,9 @@ const deployRole = new aws.iam.Role("github-deploy", {
     principals: [{ type: "Federated", identifiers: [githubOidc.arn] }],
     conditions: [
       { test: "StringEquals", variable: "token.actions.githubusercontent.com:aud", values: ["sts.amazonaws.com"] },
-      { test: "StringEquals", variable: "token.actions.githubusercontent.com:sub", values: ["repo:ljstrnadiii/squiggles:environment:production"] },
+      // Repositories created after 2026-07-15 use GitHub's immutable OIDC
+      // subject format. Keep both IDs explicit so renames cannot broaden trust.
+      { test: "StringEquals", variable: "token.actions.githubusercontent.com:sub", values: ["repo:ljstrnadiii@3171991/squiggles@1344040553:environment:production"] },
     ],
   }] }).json,
   maxSessionDuration: 3600,

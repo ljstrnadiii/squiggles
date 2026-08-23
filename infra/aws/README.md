@@ -8,7 +8,7 @@ No Cognito, DynamoDB, SES, Lambda, or API Gateway resource is created in this sl
 
 ## Current status and next step
 
-AWS Identity Center, the `squiggle-dev` CLI profile, the private S3 state backend, and the `dev` stack are initialized. The static delivery resources, developer dataset, GitHub OIDC provider, and non-self-modifying deployment role are deployed. Domain registration is complete; initial `.io` registry delegation and certificate validation are still propagating. The generated Pulumi passphrase is stored in macOS Keychain under service `squiggle-pulumi-dev`; it is not in the repository or an environment file. To inspect the deployed stack from the repository root:
+AWS Identity Center, the `squiggle-dev` CLI profile, the private S3 state backend, and the `dev` stack are initialized. The static delivery resources, developer dataset, GitHub OIDC provider, and non-self-modifying deployment role are deployed. Domain registration, certificate validation, CloudFront aliasing, and authoritative Route 53 records for `squiggles.io` are complete; public resolvers may temporarily retain negative answers from before `.io` delegation completed. The generated Pulumi passphrase is stored in macOS Keychain under service `squiggle-pulumi-dev`; it is not in the repository or an environment file. To inspect the deployed stack from the repository root:
 
 ```zsh
 export AWS_PROFILE=squiggle-dev
@@ -140,7 +140,7 @@ CloudFront commonly takes several minutes to deploy. Outputs include `datasetBas
 
 The `production` GitHub environment stores the Pulumi passphrase as an encrypted secret and the AWS account/deployment-role identifiers as environment variables. It does not store AWS access keys. GitHub exchanges its environment-bound OIDC token for a one-hour AWS session, logs into the private S3 Pulumi backend, and runs the checked-in stack after CI succeeds on `main`.
 
-The IAM trust is restricted to `repo:ljstrnadiii/squiggles:environment:production`. The role can update the current S3/CloudFront/Route 53 delivery resources and read certificate, budget, and IAM state, but it cannot modify IAM. Bootstrap identity changes therefore require the local Identity Center workflow above. Dependabot maintains action, pnpm, and uv dependencies; semantic-release publishes GitHub releases after a successful deployment and does not publish npm or PyPI packages.
+The IAM trust is restricted to GitHub's immutable-ID subject for this repository and its `production` environment. Repositories created after July 15, 2026 include owner and repository IDs in OIDC subjects, so a name-only subject will not authenticate. The role can update the current S3/CloudFront/Route 53 delivery resources and read certificate, budget, and IAM state, but it cannot modify IAM. Bootstrap identity changes therefore require the local Identity Center workflow above. Dependabot maintains action, pnpm, and uv dependencies; semantic-release publishes GitHub releases after a successful deployment and does not publish npm or PyPI packages.
 
 ## Manually upload one developer dataset
 
