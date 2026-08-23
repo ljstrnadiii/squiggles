@@ -210,29 +210,70 @@ button:disabled {
 .view-button span {
   font-size: 13px;
 }
-.mobile-query-title,
-.mobile-menu-button,
 .mobile-menu {
   display: none;
 }
-.dataset-button {
+.mobile-query-title {
+  min-width: 0;
+  max-width: min(280px, 36vw);
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  max-width: 124px;
-}
-.dataset-button > span:first-child {
-  font-size: 14px;
-}
-.dataset-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding: 0.38rem 0.55rem;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
 }
-.system-settings-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+.mobile-query-title span { color: var(--muted); }
+.mobile-menu {
+  position: fixed;
+  z-index: 14;
+  top: 54px;
+  left: 58px;
+  width: min(460px, calc(100vw - 70px));
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 0 0 10px 10px;
+  box-shadow: 0 18px 55px var(--shadow);
+}
+.mobile-menu section {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px;
+}
+.mobile-menu section + section { border-left: 1px solid var(--line-soft); }
+.mobile-menu button {
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border-color: transparent;
+  font-size: 11px;
+}
+.mobile-menu button.active { background: var(--input); }
+.mobile-menu .eyebrow { padding: 5px 7px; }
+.mobile-query-title[aria-expanded="true"] { background: var(--input); }
+.mobile-menu.utility-panel { display: grid; }
+.view-button {
+  width: 31px;
+  height: 31px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+}
+.view-button span { font-size: 14px; }
+.tabs {
+  display: none;
 }
 .theme-control,
 .unit-control {
@@ -734,7 +775,7 @@ button:disabled {
   top: 54px;
   right: 0;
   bottom: 0;
-  width: min(430px, 42vw);
+  width: min(var(--panel-width, 32vw), calc(100vw - 72px));
   padding: 18px;
   overflow: auto;
   background: var(--panel);
@@ -758,11 +799,24 @@ button:disabled {
   font-size: 18px;
 }
 .rich-stats header button {
-  margin-left: auto;
   align-self: flex-start;
   background: transparent;
   border: 0;
   font-size: 20px;
+}
+.panel-size-control {
+  min-width: 86px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 9px;
+}
+.panel-size-control input {
+  min-width: 56px;
+  width: 76px;
+  accent-color: var(--accent);
 }
 .scope-toggle {
   display: inline-flex;
@@ -891,7 +945,7 @@ button:disabled {
   top: 54px;
   right: 0;
   bottom: 0;
-  width: min(780px, 68vw);
+  width: min(var(--panel-width, 68vw), calc(100vw - 72px));
   display: flex;
   flex-direction: column;
   background: var(--panel);
@@ -918,7 +972,6 @@ button:disabled {
   font-size: 10px;
 }
 .activity-table header > button {
-  margin-left: auto;
   padding: 2px 7px;
   background: transparent;
   border: 0;
@@ -1164,99 +1217,19 @@ button:disabled {
   .tabs {
     display: none;
   }
-  .mobile-query-title {
-    min-width: 0;
-    max-width: 150px;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    padding: 0.35rem 0.42rem;
-    border-color: transparent;
-    background: transparent;
-    font-size: 11px;
-    font-weight: 700;
-  }
-  .mobile-query-title span {
-    color: var(--muted);
-  }
-  .mobile-menu-button {
-    width: 32px;
-    height: 32px;
-    display: inline-grid;
-    place-items: center;
-    flex: none;
-    padding: 0;
-    border-color: transparent;
-    background: transparent;
-    font-size: 17px;
-  }
-  .mobile-menu-button.active {
-    background: var(--input);
-  }
+  .mobile-query-title { max-width: min(180px, calc(100vw - 132px)); }
   .mobile-menu {
-    position: fixed;
-    z-index: 14;
     top: 50px;
     left: 6px;
     right: 6px;
-    display: grid;
+    width: auto;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    overflow: hidden;
-    background: var(--raised);
-    border: 1px solid var(--line);
-    border-radius: 0 0 10px 10px;
-    box-shadow: 0 18px 55px var(--shadow);
-  }
-  .mobile-menu section {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    padding: 10px;
-  }
-  .mobile-menu section + section {
-    border-left: 1px solid var(--line-soft);
-  }
-  .mobile-menu button {
-    overflow: hidden;
-    text-align: left;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    background: transparent;
-    border-color: transparent;
-    font-size: 11px;
-  }
-  .mobile-menu button.active {
-    background: var(--input);
-  }
-  .mobile-menu .eyebrow {
-    padding: 5px 7px;
   }
   .utility-button {
     padding: 0.32rem 0.25rem;
     font-size: 9px;
   }
-  .view-button {
-    width: 27px;
-    justify-content: center;
-    font-size: 0;
-  }
-  .dataset-button {
-    width: 27px;
-    justify-content: center;
-    padding-inline: 0;
-  }
-  .dataset-label,
-  .topbar > .system-settings-button,
-  .ai-skills-button {
-    display: none;
-  }
-  .view-button span {
-    font-size: 14px;
-  }
+  .view-button { width: 29px; }
   .system-settings {
     top: auto;
     left: 0;
@@ -1321,7 +1294,8 @@ button:disabled {
     right: 0;
     bottom: 0;
     width: 100%;
-    max-height: min(72vh, 620px);
+    height: min(var(--panel-height, 72vh), calc(100vh - 50px));
+    max-height: none;
     overflow: auto;
     border: 0;
     border-top: 1px solid var(--line);
@@ -1335,7 +1309,8 @@ button:disabled {
     right: 0;
     bottom: 0;
     width: 100%;
-    max-height: min(72vh, 620px);
+    height: min(var(--panel-height, 72vh), calc(100vh - 50px));
+    max-height: none;
     border: 0;
     border-top: 1px solid var(--line);
     box-shadow: 0 -18px 55px var(--shadow);
@@ -1348,6 +1323,13 @@ button:disabled {
   .activity-table header > span {
     display: none;
   }
+  .panel-size-control {
+    min-width: 70px;
+  }
+  .panel-size-control input {
+    width: 58px;
+  }
+  .panel-size-control { font-size: 0; }
   .stats-grid {
     grid-template-columns: repeat(2, 1fr);
   }

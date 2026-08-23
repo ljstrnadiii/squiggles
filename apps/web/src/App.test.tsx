@@ -24,6 +24,9 @@ afterEach(() => { cleanup(); localStorage.clear(); engineCalls.execute.mockClear
 import { App } from "./App";
 
 describe("App", () => {
+  function openQueryMenu() { fireEvent.click(screen.getByRole("button", { name: "Open query menu" })); }
+  function openQuerySettings() { openQueryMenu(); fireEvent.click(screen.getByRole("button", { name: "⌘ Query settings" })); }
+
   it("renders the product name", async () => {
     window.history.replaceState({}, "", "/");
     render(<App />);
@@ -36,7 +39,8 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close about this project" }));
     expect(screen.queryByRole("textbox", { name: "SQL query" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Toggle query toolbar" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "System settings" }));
+    openQueryMenu();
+    fireEvent.click(screen.getByRole("button", { name: "⚙ System settings" }));
     expect(screen.getByRole("region", { name: "System settings" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Use imperial units" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Use system theme" })).toHaveAttribute("aria-pressed", "true");
@@ -44,7 +48,7 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Use light theme" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("img", { name: "Squiggles" })).toHaveAttribute("src", "/logo-light.png");
     fireEvent.click(screen.getByRole("button", { name: "Close system settings" }));
-    fireEvent.click(screen.getByRole("button", { name: "All Activities" }));
+    openQuerySettings();
     expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("streets");
     expect(screen.getByRole("option", { name: "Imagery" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Heat colormap" })).toHaveValue("sunset");
@@ -56,8 +60,10 @@ describe("App", () => {
     const starter = await screen.findByRole("combobox", { name: "SQL starter query" });
     fireEvent.change(starter, { target: { value: "rides" } });
     expect(screen.getByRole("button", { name: "Rendering" })).toBeInTheDocument();
+    openQueryMenu();
     expect(screen.getByRole("button", { name: "Runs above 12k ft" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "AI Skills" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close query menu" }));
     const editor = await screen.findByRole("textbox", { name: "SQL query" });
     await waitFor(() => expect(editor).toHaveTextContent("activity_family = 'ride'"));
     expect(screen.getByRole("checkbox", { name: "Clean" }).closest("label")).toHaveAttribute("data-tooltip", expect.stringContaining("GPS jumps"));
@@ -66,37 +72,43 @@ describe("App", () => {
   it("opens a directly linked local tab with query controls closed", () => {
     window.history.replaceState({}, "", "/?tab=example-high-runs&color=%23dcff4e");
     render(<App />);
+    openQueryMenu();
     expect(screen.getByRole("button", { name: "Runs above 12k ft" })).toHaveClass("active");
+    fireEvent.click(screen.getByRole("button", { name: "Close query menu" }));
     expect(screen.queryByRole("textbox", { name: "SQL query" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Runs above 12k ft" }));
+    openQuerySettings();
     expect(screen.getByLabelText("Route color")).toHaveValue("#476bcc");
   });
 
-  it("offers query and system navigation from the compact menu", () => {
+  it("offers shared query and system navigation without a hamburger", () => {
     window.history.replaceState({}, "", "/");
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Open navigation menu" }));
-    expect(screen.getByRole("navigation", { name: "Mobile navigation" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open navigation menu" })).not.toBeInTheDocument();
+    openQueryMenu();
+    expect(screen.getByRole("navigation", { name: "Query navigation" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "⌘ Query settings" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "⚙ System settings" }));
     expect(screen.getByRole("region", { name: "System settings" })).toBeInTheDocument();
-    expect(screen.queryByRole("navigation", { name: "Mobile navigation" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Query navigation" })).not.toBeInTheDocument();
   });
 
   it("opens an unlisted hosted dataset from its share route", async () => {
     const datasetId = "31ea1577-b6f1-423a-8bda-ea7712345678";
     window.history.replaceState({}, "", `/m/${datasetId}`);
     render(<App />);
-    expect(await screen.findByText("1 routes selected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: `Change dataset: ${datasetId}` })).toBeInTheDocument();
+    expect(await screen.findByRole("status", { name: "1 routes selected" })).toBeInTheDocument();
+    openQueryMenu();
+    expect(screen.getByRole("button", { name: `◫ Change dataset · ${datasetId}` })).toBeInTheDocument();
   });
 
   it("opens a synthetic developer dataset and renders its summary", async () => {
     window.history.replaceState({}, "", "/?dataset=synthetic");
     render(<App />);
-    expect(await screen.findByText("1 routes selected")).toBeInTheDocument();
+    expect(await screen.findByRole("status", { name: "1 routes selected" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Rendering" }));
     expect(screen.getByRole("region", { name: "Rendering diagnostics" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("slider", { name: "Panel size" }), { target: { value: "44" } });
+    expect(JSON.parse(localStorage.getItem("squiggles-panel-rendering") ?? "{}")).toMatchObject({ height: 44 });
     expect(screen.getByText("LOD 1 · simplified overview")).toBeInTheDocument();
     expect(screen.getByText("Fragments read")).toBeInTheDocument();
     expect(screen.getByText("Row groups expected read")).toBeInTheDocument();
@@ -107,13 +119,13 @@ describe("App", () => {
     expect(screen.queryByText("3 mi")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Statistics" }));
     expect(screen.getByRole("region", { name: "Detailed selection statistics" })).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Panel size" })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Limit to activities contained in viewport" })).not.toBeChecked();
     fireEvent.click(screen.getByRole("checkbox", { name: "Limit to activities contained in viewport" }));
     await waitFor(() => expect(screen.getByText("CONTAINED IN VIEWPORT")).toBeInTheDocument());
     expect(screen.getAllByText("3 mi")).toHaveLength(3);
     expect(screen.getByText((_, node) => node?.tagName === "SPAN" && node.textContent === "1 ride")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "All Activities" }));
-    expect(screen.getByRole("button", { name: "Change dataset: synthetic" })).toBeInTheDocument();
+    openQuerySettings();
     expect(screen.getByRole("checkbox", { name: "Clean" })).not.toBeChecked();
     expect(engineCalls.execute).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("checkbox", { name: "Clean" }));
@@ -121,6 +133,7 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Table" })).not.toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "Table" }));
     expect(await screen.findByRole("region", { name: "Activity table" })).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Panel size" })).toBeInTheDocument();
     expect(await screen.findByText("Synthetic route")).toBeInTheDocument();
     const activityRow = screen.getByText("Synthetic route").closest("tr")!;
     fireEvent.mouseEnter(activityRow);
@@ -149,10 +162,11 @@ describe("App", () => {
   it("restores map settings from the URL and keeps changes shareable", async () => {
     window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=9.25&basemap=imagery&heat=0&palette=ice&temperature=2.4&thickness=1.6&clean=1&color=%23abcdef&units=imperial");
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "System settings" }));
+    openQueryMenu();
+    fireEvent.click(screen.getByRole("button", { name: "⚙ System settings" }));
     expect(screen.getByRole("button", { name: "Use imperial units" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Close system settings" }));
-    fireEvent.click(screen.getByRole("button", { name: "All Activities" }));
+    openQuerySettings();
     expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("imagery");
     expect(screen.getByRole("checkbox", { name: "Clean" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Heat" })).not.toBeChecked();
@@ -166,8 +180,9 @@ describe("App", () => {
   it("creates a query tab at the current camera instead of the default location", async () => {
     window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=11.25&basemap=imagery");
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "New query" }));
-    expect(screen.getByRole("button", { name: "New Query" })).toHaveClass("active");
+    openQueryMenu();
+    fireEvent.click(screen.getByRole("button", { name: "＋ New query" }));
+    expect(screen.getByRole("button", { name: "Open query menu" })).toHaveTextContent("New Query");
     await waitFor(() => expect(new URL(window.location.href).searchParams.get("lng")).toBe("-106.25000"));
     expect(new URL(window.location.href).searchParams.get("zoom")).toBe("11.25");
     const stored = JSON.parse(localStorage.getItem("activity-map.tabs.v1") ?? "[]") as { title: string; mapState: { longitude: number; latitude: number; zoom: number }; style: { basemap: string } }[];
