@@ -1,0 +1,7 @@
+packages:
+  - apps/*
+  - infra/*
+  - packages/*
+allowBuilds:
+  esbuild: true
+  protobufjs: true

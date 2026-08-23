@@ -1,0 +1,22 @@
+{
+  "editor.defaultFormatter": "charliermarsh.ruff",
+  "python.testing.pytestArgs": ["packages"],
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestEnabled": true,
+  "mypy-type-checker.args": [
+    "--config-file=./pyproject.toml"
+  ],
+  "python.analysis.typeCheckingMode": "off",
+  "editor.formatOnSave": true,
+  "ruff.configuration": "./pyproject.toml",
+  "[shellscript]": {
+    "editor.defaultFormatter": "foxundermoon.shell-format"
+  },
+  "files.exclude": {
+    ".mypy_cache": true,
+    ".pnpm-store": true,
+    ".pytest_cache": true,
+    ".ruff_cache": true,
+    ".venv": true
+  }
+}

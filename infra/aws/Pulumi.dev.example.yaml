@@ -1,0 +1,6 @@
+config:
+  aws:region: us-west-2
+  activity-map-aws:domainName: squiggles.io
+  activity-map-aws:protectData: "true"
+  activity-map-aws:monthlyBudgetUsd: "10"
+  # activity-map-aws:budgetEmail: you@example.com

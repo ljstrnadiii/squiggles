@@ -1,0 +1,6 @@
+name: activity-map-aws
+runtime:
+  name: nodejs
+  options:
+    packagemanager: pnpm
+description: Low-cost static and GeoParquet delivery infrastructure for Squiggles

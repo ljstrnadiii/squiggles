@@ -1,0 +1,19 @@
+{
+  "name": "@squiggles/aws",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "preview": "pnpm build && pulumi preview",
+    "up": "pnpm build && pulumi up"
+  },
+  "dependencies": {
+    "@pulumi/aws": "7.43.0",
+    "@pulumi/pulumi": "3.259.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.5.2",
+    "typescript": "5.9.2"
+  }
+}

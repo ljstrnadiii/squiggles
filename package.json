@@ -1,0 +1,21 @@
+{
+  "name": "squiggles",
+  "private": true,
+  "packageManager": "pnpm@11.22.0",
+  "scripts": {
+    "build": "pnpm --filter @squiggles/web build",
+    "dev": "pnpm --filter @squiggles/web dev",
+    "lint": "pnpm --filter @squiggles/web lint",
+    "python:lint": "uv run ruff check .",
+    "python:typecheck": "uv run mypy",
+    "test": "pnpm --filter @squiggles/web test",
+    "typecheck": "pnpm --filter @squiggles/web typecheck",
+    "release": "semantic-release"
+  },
+  "devDependencies": {
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/github": "^12.0.9",
+    "@semantic-release/release-notes-generator": "^14.1.1",
+    "semantic-release": "^25.0.9"
+  }
+}

@@ -1,0 +1,60 @@
+[project]
+name = "squiggles"
+version = "0.1.0"
+description = "Local-first activity archive map"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "duckdb>=1.4,<2",
+    "fitdecode>=0.11,<1",
+    "gpxpy>=1.6,<2",
+    "lxml>=5,<7",
+    "pandera[pyarrow]",
+    "pyarrow>=20,<24",
+    "ray[data]>=2.50,<3",
+    "shapely>=2.1,<3",
+]
+
+[project.scripts]
+activity-map = "activity_map_ingest.cli:main"
+squiggles = "activity_map_ingest.cli:main"
+
+[dependency-groups]
+dev = [
+  "mypy>=1.15,<2",
+  "pre-commit>=4.2,<5",
+  "pytest>=8.3,<9",
+  "ruff>=0.11,<1",
+]
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["packages/ingest/src/activity_map_ingest", "packages/schemas/src/activity_map_schemas"]
+
+[tool.uv.sources]
+pandera = { git = "https://github.com/unionai-oss/pandera.git", rev = "8de6a445d3f89e752bb0b2234917946bac7010b0" }
+
+[tool.pytest.ini_options]
+testpaths = ["packages"]
+pythonpath = ["packages/schemas/src", "packages/ingest/src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["packages"]
+
+[[tool.mypy.overrides]]
+module = ["fitdecode", "lxml", "lxml.*", "pyarrow", "pyarrow.*", "shapely", "shapely.*"]
+ignore_missing_imports = true
