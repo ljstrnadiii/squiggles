@@ -5,7 +5,8 @@ const STORAGE_KEY = "activity-map-units";
 export function loadUnits(): UnitSystem {
   const parameter = new URLSearchParams(window.location.search).get("units");
   if (parameter === "metric" || parameter === "imperial") return parameter;
-  return localStorage.getItem(STORAGE_KEY) === "imperial" ? "imperial" : "metric";
+  const stored = localStorage.getItem(STORAGE_KEY);
+  return stored === "metric" ? "metric" : "imperial";
 }
 
 export function saveUnits(units: UnitSystem) {

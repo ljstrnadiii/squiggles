@@ -207,6 +207,8 @@ export function App() {
   const [tableOpen, setTableOpen] = useState(false);
   const [renderingOpen, setRenderingOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [systemSettingsOpen, setSystemSettingsOpen] = useState(false);
   const [tableLoading, setTableLoading] = useState(false);
   const [viewportScope, setViewportScope] = useState(false);
   const [scopedSummary, setScopedSummary] = useState(empty);
@@ -416,6 +418,9 @@ export function App() {
   }
   function changeTheme(theme: ThemeMode) { setThemeMode(theme); saveTheme(theme); }
   function changeUnits(next: UnitSystem) { setUnits(next); saveUnits(next); }
+  function openSystemSettings() {
+    setSystemSettingsOpen(true); setMenuOpen(false); setSchemaOpen(false); setToolbarOpen(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false);
+  }
   const openActivity = useCallback(async (activity: RouteMetadata) => {
     setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false); setToolbarOpen(false);
     setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false);
@@ -537,22 +542,23 @@ export function App() {
     <header className="topbar">
       <div className="brand"><button className={`brand-button ${aboutOpen ? "active" : ""}`} aria-label="About this project" data-tooltip="About this project" onClick={() => { setAboutOpen(open => !open); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setToolbarOpen(false); setSelected(null); setProfileHover(null); setIsolateSelected(false); }}><img src={logoUrl} alt="Squiggles" /></button></div>
       <nav className="tabs" aria-label="Saved queries">{tabs.map(item => <button className={`tab ${item.id === tab.id ? "active" : ""}`} key={item.id} title={item.id === tab.id ? "Show or hide this query's settings" : "Open and run this saved query"} onClick={() => choose(item)}>{item.title}</button>)}<button className="icon-button" aria-label="New query" title="Create and run a saved SQL query" onClick={add}>＋</button></nav>
+      <button className="mobile-query-title" aria-label="Open saved queries" aria-expanded={menuOpen} onClick={() => { setMenuOpen(open => !open); setSystemSettingsOpen(false); }}>{tab.title}<span aria-hidden="true">⌄</span></button>
       <div className={`status ${busy ? "working" : ""}`}><span />{status}</div>
       <button className={`utility-button view-button ${statsOpen ? "active" : ""}`} title="Open detailed statistics for the current SQL selection" disabled={!selectionReady.current} onClick={toggleStats}><span aria-hidden="true">▥</span> Statistics</button>
       <button className={`utility-button view-button ${tableOpen ? "active" : ""}`} title="Browse, sort, and navigate every activity in the current SQL selection" disabled={!selectionReady.current || tableLoading} onClick={() => void toggleTable()}><span aria-hidden="true">▤</span> Table</button>
       <button className={`utility-button view-button ${renderingOpen ? "active" : ""}`} title="Inspect geometry fidelity and browser rendering work" disabled={!selectionReady.current} onClick={() => { setRenderingOpen(open => !open); setStatsOpen(false); setTableOpen(false); setAboutOpen(false); setToolbarOpen(false); setSelected(null); setProfileHover(null); setIsolateSelected(false); }}><span aria-hidden="true">≋</span> Rendering</button>
-      <button className="utility-button" title="Open another compiled local dataset" disabled={busy} onClick={() => void openDirectory()}>{datasetName ? datasetName : "Dataset"}</button>
-      <button className={`utility-button ${schemaOpen ? "active" : ""}`} title="Copy the activity schema and SQL guidance into an AI assistant" onClick={() => setSchemaOpen(open => !open)}>AI Skills</button>
-      <div className="theme-control" role="group" aria-label="Theme">
-        <button aria-label="Use light theme" aria-pressed={themeMode === "light"} title="Light theme" onClick={() => changeTheme("light")}>☀︎</button>
-        <button aria-label="Use system theme" aria-pressed={themeMode === "system"} title="Follow system theme" onClick={() => changeTheme("system")}>◐</button>
-        <button aria-label="Use dark theme" aria-pressed={themeMode === "dark"} title="Dark theme" onClick={() => changeTheme("dark")}>☾</button>
-      </div>
-      <div className="unit-control" role="group" aria-label="Units">
-        <button aria-label="Use metric units" aria-pressed={units === "metric"} title="Show kilometres and metres" onClick={() => changeUnits("metric")}>km</button>
-        <button aria-label="Use imperial units" aria-pressed={units === "imperial"} title="Show miles and feet" onClick={() => changeUnits("imperial")}>mi</button>
-      </div>
+      <button className="utility-button dataset-button" aria-label={datasetName ? `Change dataset: ${datasetName}` : "Open dataset"} title={datasetName ? `Current dataset: ${datasetName}` : "Open a compiled local dataset"} disabled={busy} onClick={() => void openDirectory()}><span aria-hidden="true">◫</span><span className="dataset-label">{datasetName ? datasetName : "Dataset"}</span></button>
+      <button className={`utility-button ai-skills-button ${schemaOpen ? "active" : ""}`} title="Copy the activity schema and SQL guidance into an AI assistant" onClick={() => setSchemaOpen(open => !open)}>AI Skills</button>
+      <button className={`utility-button system-settings-button ${systemSettingsOpen ? "active" : ""}`} aria-label="System settings" title="Theme and units" onClick={() => systemSettingsOpen ? setSystemSettingsOpen(false) : openSystemSettings()}><span aria-hidden="true">⚙</span><span>Settings</span></button>
+      <button className={`mobile-menu-button ${menuOpen ? "active" : ""}`} aria-label={menuOpen ? "Close navigation menu" : "Open navigation menu"} aria-expanded={menuOpen} onClick={() => { setMenuOpen(open => !open); setSystemSettingsOpen(false); }}><span aria-hidden="true">☰</span></button>
     </header>
+
+    {menuOpen && <nav className="mobile-menu utility-panel" aria-label="Mobile navigation">
+      <section><span className="eyebrow">SAVED QUERIES</span>{tabs.map(item => <button className={item.id === tab.id ? "active" : ""} key={item.id} onClick={() => { choose(item); setMenuOpen(false); }}>{item.title}</button>)}<button onClick={() => { add(); setMenuOpen(false); }}>＋ New query</button></section>
+      <section><button onClick={() => { choose(tab, true); setMenuOpen(false); }}>⌘ Query settings</button><button onClick={openSystemSettings}>⚙ System settings</button><button disabled={!selectionReady.current} onClick={() => { toggleStats(); setMenuOpen(false); }}>▥ Summary statistics</button><button disabled={!selectionReady.current || tableLoading} onClick={() => { void toggleTable(); setMenuOpen(false); }}>▤ Activity table</button><button disabled={!selectionReady.current} onClick={() => { setRenderingOpen(true); setStatsOpen(false); setTableOpen(false); setAboutOpen(false); setToolbarOpen(false); setSchemaOpen(false); setMenuOpen(false); setSelected(null); }}>≋ Rendering</button><button disabled={busy} onClick={() => { void openDirectory(); setMenuOpen(false); }}>◫ {datasetName ? "Change dataset" : "Open dataset"}</button><button onClick={() => { setSchemaOpen(true); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false); setToolbarOpen(false); setMenuOpen(false); setSelected(null); }}>AI Skills</button></section>
+    </nav>}
+
+    {systemSettingsOpen && <section className="system-settings utility-panel" aria-label="System settings"><header><div><span className="eyebrow">SYSTEM</span><strong>Appearance and units</strong></div><button aria-label="Close system settings" onClick={() => setSystemSettingsOpen(false)}>×</button></header><div><label>Theme</label><div className="theme-control" role="group" aria-label="Theme"><button aria-label="Use light theme" aria-pressed={themeMode === "light"} title="Light theme" onClick={() => changeTheme("light")}>☀︎</button><button aria-label="Use system theme" aria-pressed={themeMode === "system"} title="Follow system theme" onClick={() => changeTheme("system")}>◐</button><button aria-label="Use dark theme" aria-pressed={themeMode === "dark"} title="Dark theme" onClick={() => changeTheme("dark")}>☾</button></div></div><div><label>Distance and elevation</label><div className="unit-control" role="group" aria-label="Units"><button aria-label="Use imperial units" aria-pressed={units === "imperial"} title="Show miles and feet" onClick={() => changeUnits("imperial")}>mi</button><button aria-label="Use metric units" aria-pressed={units === "metric"} title="Show kilometres and metres" onClick={() => changeUnits("metric")}>km</button></div></div></section>}
 
     {schemaOpen && <section className="schema-panel utility-panel"><div><strong>AI Skills · Squiggles SQL</strong><button onClick={() => void copySchema()}>{schemaCopied ? "Copied" : "Copy for your AI"}</button></div><p>Paste this into the AI assistant of your choice, then describe the activities you want to select.</p><pre>{QUERY_SCHEMA}</pre></section>}
 

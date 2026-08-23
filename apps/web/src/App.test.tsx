@@ -36,16 +36,19 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close about this project" }));
     expect(screen.queryByRole("textbox", { name: "SQL query" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Toggle query toolbar" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "System settings" }));
+    expect(screen.getByRole("region", { name: "System settings" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use imperial units" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Use system theme" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Use light theme" }));
+    expect(screen.getByRole("button", { name: "Use light theme" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("img", { name: "Squiggles" })).toHaveAttribute("src", "/logo-light.png");
+    fireEvent.click(screen.getByRole("button", { name: "Close system settings" }));
     fireEvent.click(screen.getByRole("button", { name: "All Activities" }));
     expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("streets");
     expect(screen.getByRole("option", { name: "Imagery" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Heat colormap" })).toHaveValue("sunset");
     expect(screen.getByLabelText("Route color")).toHaveValue("#476bcc");
-    expect(screen.getByRole("img", { name: "Squiggles" })).toHaveAttribute("src", "/logo-dark.png");
-    expect(screen.getByRole("button", { name: "Use system theme" })).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(screen.getByRole("button", { name: "Use light theme" }));
-    expect(screen.getByRole("button", { name: "Use light theme" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("img", { name: "Squiggles" })).toHaveAttribute("src", "/logo-light.png");
     const temperature = screen.getByRole("slider", { name: "Heat temperature" });
     expect(temperature).toHaveValue("1.7");
     fireEvent.change(temperature, { target: { value: "2.4" } });
@@ -58,7 +61,6 @@ describe("App", () => {
     const editor = await screen.findByRole("textbox", { name: "SQL query" });
     await waitFor(() => expect(editor).toHaveTextContent("activity_family = 'ride'"));
     expect(screen.getByRole("checkbox", { name: "Clean" }).closest("label")).toHaveAttribute("data-tooltip", expect.stringContaining("GPS jumps"));
-    expect(screen.getByRole("button", { name: "Use metric units" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("opens a directly linked local tab with query controls closed", () => {
@@ -70,12 +72,23 @@ describe("App", () => {
     expect(screen.getByLabelText("Route color")).toHaveValue("#476bcc");
   });
 
+  it("offers query and system navigation from the compact menu", () => {
+    window.history.replaceState({}, "", "/");
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation menu" }));
+    expect(screen.getByRole("navigation", { name: "Mobile navigation" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "⌘ Query settings" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "⚙ System settings" }));
+    expect(screen.getByRole("region", { name: "System settings" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Mobile navigation" })).not.toBeInTheDocument();
+  });
+
   it("opens an unlisted hosted dataset from its share route", async () => {
     const datasetId = "31ea1577-b6f1-423a-8bda-ea7712345678";
     window.history.replaceState({}, "", `/m/${datasetId}`);
     render(<App />);
     expect(await screen.findByText("1 routes selected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: datasetId })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `Change dataset: ${datasetId}` })).toBeInTheDocument();
   });
 
   it("opens a synthetic developer dataset and renders its summary", async () => {
@@ -91,16 +104,16 @@ describe("App", () => {
     expect(screen.getByText("Coordinate objects created")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close rendering diagnostics" }));
     expect(screen.queryByRole("region", { name: "Selection summary" })).not.toBeInTheDocument();
-    expect(screen.queryByText("5 km")).not.toBeInTheDocument();
+    expect(screen.queryByText("3 mi")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Statistics" }));
     expect(screen.getByRole("region", { name: "Detailed selection statistics" })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Limit to activities contained in viewport" })).not.toBeChecked();
     fireEvent.click(screen.getByRole("checkbox", { name: "Limit to activities contained in viewport" }));
     await waitFor(() => expect(screen.getByText("CONTAINED IN VIEWPORT")).toBeInTheDocument());
-    expect(screen.getAllByText("5 km")).toHaveLength(3);
+    expect(screen.getAllByText("3 mi")).toHaveLength(3);
     expect(screen.getByText((_, node) => node?.tagName === "SPAN" && node.textContent === "1 ride")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "All Activities" }));
-    expect(screen.getByRole("button", { name: "synthetic" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Change dataset: synthetic" })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Clean" })).not.toBeChecked();
     expect(engineCalls.execute).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("checkbox", { name: "Clean" }));
@@ -126,7 +139,6 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Show all routes" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("img", { name: "Elevation profile chart" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Zoom to route" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Use imperial units" }));
     expect(screen.getByText("3 mi")).toBeInTheDocument();
     await waitFor(() => expect(new URL(window.location.href).searchParams.get("units")).toBe("imperial"));
     fireEvent.click(screen.getByRole("button", { name: "Rendering" }));
@@ -137,13 +149,15 @@ describe("App", () => {
   it("restores map settings from the URL and keeps changes shareable", async () => {
     window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=9.25&basemap=imagery&heat=0&palette=ice&temperature=2.4&thickness=1.6&clean=1&color=%23abcdef&units=imperial");
     render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "System settings" }));
+    expect(screen.getByRole("button", { name: "Use imperial units" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Close system settings" }));
     fireEvent.click(screen.getByRole("button", { name: "All Activities" }));
     expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("imagery");
     expect(screen.getByRole("checkbox", { name: "Clean" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Heat" })).not.toBeChecked();
     expect(screen.getByRole("slider", { name: "Heat temperature" })).toHaveValue("2.4");
     expect(screen.getByRole("slider", { name: "Route thickness" })).toHaveValue("1.6");
-    expect(screen.getByRole("button", { name: "Use imperial units" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.change(screen.getByRole("combobox", { name: "Basemap" }), { target: { value: "topo" } });
     await waitFor(() => expect(new URL(window.location.href).searchParams.get("basemap")).toBe("topo"));
     expect(new URL(window.location.href).searchParams.get("lng")).toBe("-106.25000");
