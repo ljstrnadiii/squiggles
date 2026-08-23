@@ -59,8 +59,8 @@ describe("App", () => {
     expect(temperature).toHaveValue("2.4");
     const starter = await screen.findByRole("combobox", { name: "SQL starter query" });
     fireEvent.change(starter, { target: { value: "rides" } });
-    expect(screen.getByRole("button", { name: "Rendering" })).toBeInTheDocument();
     openQueryMenu();
+    expect(screen.getByRole("button", { name: "≋ Rendering" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Runs above 12k ft" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "AI Skills" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close query menu" }));
@@ -105,7 +105,8 @@ describe("App", () => {
     window.history.replaceState({}, "", "/?dataset=synthetic");
     render(<App />);
     expect(await screen.findByRole("status", { name: "1 routes selected" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Rendering" }));
+    openQueryMenu();
+    fireEvent.click(screen.getByRole("button", { name: "≋ Rendering" }));
     expect(screen.getByRole("region", { name: "Rendering diagnostics" })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("slider", { name: "Panel size" }), { target: { value: "44" } });
     expect(JSON.parse(localStorage.getItem("squiggles-panel-rendering") ?? "{}")).toMatchObject({ height: 44 });
@@ -117,7 +118,8 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close rendering diagnostics" }));
     expect(screen.queryByRole("region", { name: "Selection summary" })).not.toBeInTheDocument();
     expect(screen.queryByText("3 mi")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Statistics" }));
+    openQueryMenu();
+    fireEvent.click(screen.getByRole("button", { name: "▥ Statistics" }));
     expect(screen.getByRole("region", { name: "Detailed selection statistics" })).toBeInTheDocument();
     expect(screen.getByRole("slider", { name: "Panel size" })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Limit to activities contained in viewport" })).not.toBeChecked();
@@ -130,8 +132,9 @@ describe("App", () => {
     expect(engineCalls.execute).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("checkbox", { name: "Clean" }));
     await waitFor(() => expect(engineCalls.execute).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Table" })).not.toBeDisabled());
-    fireEvent.click(screen.getByRole("button", { name: "Table" }));
+    openQueryMenu();
+    await waitFor(() => expect(screen.getByRole("button", { name: "▤ Table" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "▤ Table" }));
     expect(await screen.findByRole("region", { name: "Activity table" })).toBeInTheDocument();
     expect(screen.getByRole("slider", { name: "Panel size" })).toBeInTheDocument();
     expect(await screen.findByText("Synthetic route")).toBeInTheDocument();
@@ -154,7 +157,8 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Zoom to route" })).toBeInTheDocument();
     expect(screen.getByText("3 mi")).toBeInTheDocument();
     await waitFor(() => expect(new URL(window.location.href).searchParams.get("units")).toBe("imperial"));
-    fireEvent.click(screen.getByRole("button", { name: "Rendering" }));
+    openQueryMenu();
+    fireEvent.click(screen.getByRole("button", { name: "≋ Rendering" }));
     expect(screen.queryByRole("complementary", { name: "Activity detail" })).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Rendering diagnostics" })).toBeInTheDocument();
   });
