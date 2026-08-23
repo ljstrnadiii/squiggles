@@ -220,3 +220,9 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
     ]
     with pytest.raises(FileExistsError):
         compile_strava(CompileOptions(source, output))
+
+
+def test_compile_rejects_a_row_group_larger_than_its_shard(tmp_path: Path) -> None:
+    source, output = _fixture(tmp_path / "source"), tmp_path / "dataset"
+    with pytest.raises(ValueError, match="row group rows"):
+        compile_strava(CompileOptions(source, output, target_shard_rows=16, row_group_rows=17))

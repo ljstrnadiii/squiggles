@@ -135,7 +135,7 @@ Unresolved at the Stage 1–3 boundary:
 - Exact browser memory, query latency, rendering FPS, and measured LOD/MVT planner thresholds remain Stage 4 benchmark work. Stage 2 now applies simple zoom-based LOD thresholds and bbox viewport pruning as its provisional direct-Arrow path; the requested heat slice does not prematurely add MVT.
 - Directory-picker sources still require browser buffers because the File System Access API cannot be registered as DuckDB HTTP range files; the Vite developer source uses range reads.
 - Production bundles are large because DuckDB-Wasm and MapLibre are local dependencies; code splitting is a later delivery optimization, not a blocker for local acceptance.
-- `--target-shard-rows=128` is a measured range-read/file-open heuristic, not a byte guarantee; long, telemetry-heavy activities make row sizes variable. Schema 1.3's measured maximum is 56.8 MB. Byte-aware splitting remains pending a substantially larger archive benchmark.
+- The measured broad-view defaults are `--target-shard-rows=512 --row-group-rows=128`. On the private archive they produce 11 files/30 groups instead of 30/202, reduce compressed bytes by 20.1%, and improve the warm full-archive LOD0 aggregate by about 42%. The largest file is 128.5 MiB. Long, telemetry-heavy activities still make row sizes variable; byte-aware splitting remains pending a substantially larger archive benchmark.
 - Ray's grouped hash shuffle needs at least two local CPU scheduling slots. Explicit `--num-cpus 1` uses the deterministic sort/repartition fallback so constrained development and synthetic tests cannot deadlock.
 
 ## Summary

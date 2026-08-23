@@ -55,7 +55,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   getActivity(activityId:string):Promise<RouteActivity|null>{return this.request({type:"activity",activityId,clean:this.clean});}
 }
 
-function lodForZoom(zoom:number):0|1|2|3|4{return zoom<6?0:zoom<10?1:zoom<13?2:zoom<14?3:4;}
+export function lodForZoom(zoom:number):0|1|2|3|4{return zoom<8?0:zoom<12?1:zoom<14?2:zoom<16?3:4;}
 
 function binaryBytes(batches:BinaryRouteBatch[]):number{
   const buffers=new Set<ArrayBufferLike>();

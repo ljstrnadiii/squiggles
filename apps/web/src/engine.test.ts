@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { QueryTab, ViewportResult } from "./contracts";
-import { BrowserDuckDBEngine } from "./engine";
+import { BrowserDuckDBEngine, lodForZoom } from "./engine";
 import { defaultTab } from "./storage";
 
 const viewport = (): Omit<ViewportResult, "cache"> => ({
@@ -22,6 +22,10 @@ const viewport = (): Omit<ViewportResult, "cache"> => ({
 });
 
 describe("BrowserDuckDBEngine viewport cache", () => {
+  it("holds coarse overviews until the map is close enough to benefit from detail", () => {
+    expect([7.99, 8, 11.99, 12, 13.99, 14, 15.99, 16].map(lodForZoom)).toEqual([0, 1, 1, 2, 2, 3, 3, 4]);
+  });
+
   it("reuses the same transferred GeoArrow buffers for an identical viewport", async () => {
     const posted: unknown[] = [];
     class WorkerMock {
