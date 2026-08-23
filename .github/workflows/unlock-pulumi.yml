@@ -1,0 +1,28 @@
+name: Unlock Pulumi
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  unlock:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-region: us-west-2
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          mask-aws-account-id: true
+      - uses: pulumi/actions@v7
+        with:
+          command: cancel
+          stack-name: dev
+          work-dir: infra/aws
+          cloud-url: s3://squiggle-pulumi-state-${{ vars.AWS_ACCOUNT_ID }}-us-west-2?region=us-west-2
+        env:
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
