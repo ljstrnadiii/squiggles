@@ -61,6 +61,70 @@ function privateBucket(name: string, protect = false) {
 const webBucket = privateBucket("web");
 const dataBucket = privateBucket("data", protectData);
 
+// Identity and control-plane metadata are intentionally separate from canonical
+// activity data. Cognito owns authentication; DynamoDB contains only ownership,
+// approval, dataset, and saved-query records.
+const userPool = new aws.cognito.UserPool("users", {
+  deletionProtection: "ACTIVE",
+  autoVerifiedAttributes: ["email"],
+  usernameAttributes: ["email"],
+  mfaConfiguration: "OFF",
+  adminCreateUserConfig: { allowAdminCreateUserOnly: false },
+  userAttributeUpdateSettings: { attributesRequireVerificationBeforeUpdates: ["email"] },
+  schemas: [
+    { name: "email", attributeDataType: "String", mutable: true, required: true },
+    { name: "name", attributeDataType: "String", mutable: true, required: false },
+    { name: "picture", attributeDataType: "String", mutable: true, required: false },
+  ],
+  tags,
+}, { protect: protectData });
+
+const userPoolDomain = new aws.cognito.UserPoolDomain("login", {
+  domain: pulumi.interpolate`squiggles-${pulumi.getStack()}-${aws.getCallerIdentityOutput().accountId}`,
+  userPoolId: userPool.id,
+  managedLoginVersion: 2,
+}, { protect: protectData });
+
+const userPoolClient = new aws.cognito.UserPoolClient("browser", {
+  userPoolId: userPool.id,
+  generateSecret: false,
+  allowedOauthFlowsUserPoolClient: true,
+  allowedOauthFlows: ["code"],
+  allowedOauthScopes: ["openid", "email", "profile"],
+  callbackUrls: [`https://${domainName}/auth/callback`, "http://localhost:5173/auth/callback"],
+  logoutUrls: [`https://${domainName}/`, "http://localhost:5173/"],
+  supportedIdentityProviders: ["COGNITO"],
+  preventUserExistenceErrors: "ENABLED",
+  accessTokenValidity: 1,
+  idTokenValidity: 1,
+  refreshTokenValidity: 30,
+  tokenValidityUnits: { accessToken: "hours", idToken: "hours", refreshToken: "days" },
+});
+
+const metadataTable = new aws.dynamodb.Table("control-plane", {
+  billingMode: "PAY_PER_REQUEST",
+  hashKey: "PK",
+  rangeKey: "SK",
+  attributes: [
+    { name: "PK", type: "S" },
+    { name: "SK", type: "S" },
+    { name: "GSI1PK", type: "S" },
+    { name: "GSI1SK", type: "S" },
+  ],
+  globalSecondaryIndexes: [{
+    name: "GSI1",
+    keySchemas: [
+      { attributeName: "GSI1PK", keyType: "HASH" },
+      { attributeName: "GSI1SK", keyType: "RANGE" },
+    ],
+    projectionType: "ALL",
+  }],
+  pointInTimeRecovery: { enabled: true },
+  serverSideEncryption: { enabled: true },
+  deletionProtectionEnabled: true,
+  tags,
+}, { protect: protectData });
+
 new aws.s3.BucketVersioning("web-versioning", {
   bucket: webBucket.id,
   versioningConfiguration: { status: "Enabled" },
@@ -301,6 +365,12 @@ const deployPolicy = aws.iam.getPolicyDocumentOutput({ statements: [
     actions: ["acm:AddTagsToCertificate", "acm:DescribeCertificate", "acm:GetCertificate", "acm:ListCertificates", "acm:RemoveTagsFromCertificate", "budgets:ListTagsForResource", "budgets:ModifyBudget", "budgets:ViewBudget", "iam:Get*", "iam:List*"],
     resources: ["*"],
   },
+  {
+    sid: "ControlPlaneInfrastructure",
+    effect: "Allow",
+    actions: ["cognito-idp:*", "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:Describe*", "dynamodb:List*", "dynamodb:TagResource", "dynamodb:UntagResource", "dynamodb:Update*"],
+    resources: ["*"],
+  },
 ] });
 new aws.iam.RolePolicy("github-deploy", { role: deployRole.id, policy: deployPolicy.json });
 
@@ -312,3 +382,8 @@ export const dataBucketName = dataBucket.bucket;
 export const distributionId = distribution.id;
 export const budgetName = budget.name;
 export const githubDeployRoleArn = deployRole.arn;
+export const userPoolId = userPool.id;
+export const userPoolClientId = userPoolClient.id;
+export const loginDomain = pulumi.interpolate`https://${userPoolDomain.domain}.auth.${aws.getRegionOutput().name}.amazoncognito.com`;
+export const googleOauthRedirectUrl = pulumi.interpolate`https://${userPoolDomain.domain}.auth.${aws.getRegionOutput().name}.amazoncognito.com/oauth2/idpresponse`;
+export const metadataTableName = metadataTable.name;

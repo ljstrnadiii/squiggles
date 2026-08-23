@@ -122,6 +122,8 @@ Immediate hosted sequence (do not skip gates):
 3. Complete hands-on hosted browser acceptance and the outstanding synthetic planner benchmarks.
 4. Add Cognito/Google approval and private delivery before enabling managed upload.
 
+The authentication foundation is deployed as of 2026-08-23: a deletion-protected Cognito pool/domain and PKCE browser client plus a deletion-protected, encrypted, on-demand DynamoDB metadata table with PITR. Google OAuth registration and federation are the next gate; API authorization, approval administration, signed-cookie private delivery, query synchronization, and managed Parquet upload remain subsequent acceptance slices.
+
 Unresolved for full Stage 4 completion:
 
 - The cardinality/vertex/zoom RenderPlan thresholds still need the committed 1M, 10M, 50M, and 100M synthetic benchmark tiers before replacing the provisional LOD thresholds.
