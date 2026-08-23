@@ -7,7 +7,7 @@ import * as pulumi from "@pulumi/pulumi";
 
 const config = new pulumi.Config();
 const protectData = config.getBoolean("protectData") ?? true;
-const budgetEmail = config.get("budgetEmail");
+const budgetEmail = config.get("budgetEmail") ?? process.env.SQUIGGLES_BUDGET_EMAIL;
 const monthlyBudgetUsd = config.getNumber("monthlyBudgetUsd") ?? 10;
 const domainName = config.get("domainName") ?? "squiggles.io";
 if (monthlyBudgetUsd <= 0 || monthlyBudgetUsd > 50) throw new Error("monthlyBudgetUsd must be greater than 0 and no more than 50");
@@ -298,7 +298,7 @@ const deployPolicy = aws.iam.getPolicyDocumentOutput({ statements: [
   {
     sid: "ReadCertificateBudgetAndBootstrapIdentity",
     effect: "Allow",
-    actions: ["acm:AddTagsToCertificate", "acm:DescribeCertificate", "acm:GetCertificate", "acm:ListCertificates", "acm:RemoveTagsFromCertificate", "budgets:ModifyBudget", "budgets:ViewBudget", "iam:Get*", "iam:List*"],
+    actions: ["acm:AddTagsToCertificate", "acm:DescribeCertificate", "acm:GetCertificate", "acm:ListCertificates", "acm:RemoveTagsFromCertificate", "budgets:ListTagsForResource", "budgets:ModifyBudget", "budgets:ViewBudget", "iam:Get*", "iam:List*"],
     resources: ["*"],
   },
 ] });

@@ -138,7 +138,7 @@ CloudFront commonly takes several minutes to deploy. Outputs include `datasetBas
 
 ## GitHub deployment
 
-The `production` GitHub environment stores the Pulumi passphrase as an encrypted secret and the AWS account/deployment-role identifiers as environment variables. It does not store AWS access keys. GitHub exchanges its environment-bound OIDC token for a one-hour AWS session, logs into the private S3 Pulumi backend, and runs the checked-in stack after CI succeeds on `main`.
+The `production` GitHub environment stores the Pulumi passphrase and budget-notification email as encrypted secrets and the AWS account/deployment-role identifiers as environment variables. It does not store AWS access keys. GitHub exchanges its environment-bound OIDC token for a one-hour AWS session, logs into the private S3 Pulumi backend, and runs the checked-in stack after CI succeeds on `main`. The `SQUIGGLES_BUDGET_EMAIL` environment fallback preserves the locally configured budget notifications because DIY Pulumi backends do not carry the ignored local stack-config file into a fresh CI checkout.
 
 The IAM trust is restricted to GitHub's immutable-ID subject for this repository and its `production` environment. Repositories created after July 15, 2026 include owner and repository IDs in OIDC subjects, so a name-only subject will not authenticate. The role can update the current S3/CloudFront/Route 53 delivery resources and read certificate, budget, and IAM state, but it cannot modify IAM. Bootstrap identity changes therefore require the local Identity Center workflow above. Dependabot maintains action, pnpm, and uv dependencies; semantic-release publishes GitHub releases after a successful deployment and does not publish npm or PyPI packages.
 
