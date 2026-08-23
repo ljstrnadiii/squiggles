@@ -18,11 +18,11 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
           mask-aws-account-id: true
-      - uses: pulumi/actions@v7
-        with:
-          command: cancel
-          stack-name: dev
-          work-dir: infra/aws
-          cloud-url: s3://squiggle-pulumi-state-${{ vars.AWS_ACCOUNT_ID }}-us-west-2?region=us-west-2
+      - uses: pulumi/setup-pulumi@v2
+      - name: Remove the stale stack lock
+        working-directory: infra/aws
+        run: |
+          pulumi login "s3://squiggle-pulumi-state-${{ vars.AWS_ACCOUNT_ID }}-us-west-2?region=us-west-2"
+          pulumi cancel --stack dev --yes
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
