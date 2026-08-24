@@ -26,7 +26,7 @@ import { App } from "./App";
 describe("App", () => {
   function openQueryMenu() { fireEvent.click(screen.getByRole("button", { name: "Open query menu" })); }
   function openLogoMenu() { fireEvent.click(screen.getByRole("button", { name: "Open Squiggles menu" })); }
-  function openQuerySettings() { openQueryMenu(); fireEvent.click(screen.getByRole("button", { name: "⌘ Query settings" })); }
+  function openQuerySettings() { openQueryMenu(); fireEvent.click(screen.getByRole("button", { name: "Query settings" })); }
 
   it("renders the product name", async () => {
     window.history.replaceState({}, "", "/");
@@ -43,7 +43,7 @@ describe("App", () => {
     expect(screen.queryByRole("textbox", { name: "SQL query" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Toggle query toolbar" })).not.toBeInTheDocument();
     openLogoMenu();
-    fireEvent.click(screen.getByRole("button", { name: "⚙ System settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "System settings" }));
     expect(screen.getByRole("region", { name: "System settings" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Use imperial units" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Use system theme" })).toHaveAttribute("aria-pressed", "true");
@@ -63,7 +63,7 @@ describe("App", () => {
     const starter = await screen.findByRole("combobox", { name: "SQL starter query" });
     fireEvent.change(starter, { target: { value: "rides" } });
     openQueryMenu();
-    expect(screen.getByRole("button", { name: "≋ Rendering" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rendering" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Runs above 12k ft" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "AI Skills" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close query menu" }));
@@ -89,7 +89,7 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: "Open navigation menu" })).not.toBeInTheDocument();
     openLogoMenu();
     expect(screen.getByRole("navigation", { name: "Squiggles navigation" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "⚙ System settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "System settings" }));
     expect(screen.getByRole("region", { name: "System settings" })).toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Query navigation" })).not.toBeInTheDocument();
   });
@@ -100,7 +100,7 @@ describe("App", () => {
     render(<App />);
     expect(await screen.findByRole("status", { name: "1 routes selected" })).toBeInTheDocument();
     openLogoMenu();
-    expect(screen.getByRole("button", { name: `◫ Change dataset · ${datasetId}` })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `Change dataset · ${datasetId}` })).toBeInTheDocument();
   });
 
   it("opens a synthetic developer dataset and renders its summary", async () => {
@@ -108,7 +108,7 @@ describe("App", () => {
     render(<App />);
     expect(await screen.findByRole("status", { name: "1 routes selected" })).toBeInTheDocument();
     openQueryMenu();
-    fireEvent.click(screen.getByRole("button", { name: "≋ Rendering" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rendering" }));
     expect(screen.getByRole("region", { name: "Rendering diagnostics" })).toBeInTheDocument();
     expect(screen.queryByRole("slider", { name: "Panel size" })).not.toBeInTheDocument();
     expect(screen.getByText("LOD 1 · simplified overview")).toBeInTheDocument();
@@ -120,7 +120,7 @@ describe("App", () => {
     expect(screen.queryByRole("region", { name: "Selection summary" })).not.toBeInTheDocument();
     expect(screen.queryByText("3 mi")).not.toBeInTheDocument();
     openQueryMenu();
-    fireEvent.click(screen.getByRole("button", { name: "▥ Statistics" }));
+    fireEvent.click(screen.getByRole("button", { name: "Statistics" }));
     expect(screen.getByRole("region", { name: "Detailed selection statistics" })).toBeInTheDocument();
     expect(screen.queryByRole("slider", { name: "Panel size" })).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Limit to activities contained in viewport" })).not.toBeChecked();
@@ -134,8 +134,8 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Clean" }));
     await waitFor(() => expect(engineCalls.execute).toHaveBeenCalledTimes(2));
     openQueryMenu();
-    await waitFor(() => expect(screen.getByRole("button", { name: "▤ Table" })).not.toBeDisabled());
-    fireEvent.click(screen.getByRole("button", { name: "▤ Table" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Table" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "Table" }));
     expect(await screen.findByRole("region", { name: "Activity table" })).toBeInTheDocument();
     expect(screen.queryByRole("slider", { name: "Panel size" })).not.toBeInTheDocument();
     expect(await screen.findByText("Synthetic route")).toBeInTheDocument();
@@ -159,7 +159,7 @@ describe("App", () => {
     expect(screen.getByText("3 mi")).toBeInTheDocument();
     await waitFor(() => expect(new URL(window.location.href).searchParams.get("units")).toBe("imperial"));
     openQueryMenu();
-    fireEvent.click(screen.getByRole("button", { name: "≋ Rendering" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rendering" }));
     expect(screen.queryByRole("complementary", { name: "Activity detail" })).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Rendering diagnostics" })).toBeInTheDocument();
   });
@@ -168,7 +168,7 @@ describe("App", () => {
     window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=9.25&basemap=imagery&heat=0&palette=ice&temperature=2.4&thickness=1.6&clean=1&color=%23abcdef&units=imperial");
     render(<App />);
     openLogoMenu();
-    fireEvent.click(screen.getByRole("button", { name: "⚙ System settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "System settings" }));
     expect(screen.getByRole("button", { name: "Use imperial units" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Close system settings" }));
     openQuerySettings();
@@ -186,7 +186,7 @@ describe("App", () => {
     window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=11.25&basemap=imagery");
     render(<App />);
     openQueryMenu();
-    fireEvent.click(screen.getByRole("button", { name: "＋ New query" }));
+    fireEvent.click(screen.getByRole("button", { name: "New query" }));
     expect(screen.getByRole("button", { name: "Open query menu" })).toHaveTextContent("New Query");
     await waitFor(() => expect(new URL(window.location.href).searchParams.get("lng")).toBe("-106.25000"));
     expect(new URL(window.location.href).searchParams.get("zoom")).toBe("11.25");

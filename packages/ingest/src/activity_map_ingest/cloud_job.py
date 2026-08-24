@@ -50,8 +50,10 @@ def main() -> None:
             manifest = compile_strava(CompileOptions(archive, output))
             status("publishing")
             prefix = f"datasets/{upload_id}/"
+            curated_bytes = 0
             for file in output.rglob("*"):
                 if file.is_file():
+                    curated_bytes += file.stat().st_size
                     s3.upload_file(
                         str(file),
                         data_bucket,
@@ -70,6 +72,7 @@ def main() -> None:
                     "status": {"S": "ready"},
                     "datasetId": {"S": upload_id},
                     "activityCount": {"N": str(manifest["activity_count"])},
+                    "byteSize": {"N": str(curated_bytes)},
                 },
             )
             status("ready")

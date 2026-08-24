@@ -1,0 +1,16 @@
+import type { QueryTab } from "./contracts";
+import { authFetch, type AuthSession, type RuntimeConfig } from "./auth";
+
+export type PublishedView = { slug: string; tabs: QueryTab[]; active: string; datasetId: string | null; updatedAt: string };
+
+export async function publishView(config: RuntimeConfig, session: AuthSession, tabs: QueryTab[], active: string, datasetId: string | null) {
+  const response = await authFetch(config, session, `${config.apiUrl}/api/published`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tabs, active, datasetId }) });
+  if (!response.ok) throw new Error(response.status === 403 ? "Your account must be approved before publishing." : "Could not publish this map.");
+  return response.json() as Promise<{ slug: string; url: string }>;
+}
+
+export async function loadPublishedView(config: RuntimeConfig, slug: string): Promise<PublishedView> {
+  const response = await fetch(`${config.apiUrl}/api/published/${slug}`, { cache: "no-store" });
+  if (!response.ok) throw new Error("This published map could not be found.");
+  return response.json() as Promise<PublishedView>;
+}

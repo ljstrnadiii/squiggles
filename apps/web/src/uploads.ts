@@ -1,8 +1,7 @@
 import { BlobReader, BlobWriter, ZipReader, ZipWriter } from "@zip.js/zip.js";
-import type { AuthSession, RuntimeConfig } from "./auth";
+import { authFetch, type AuthSession, type RuntimeConfig } from "./auth";
 
 export type UploadRecord = { id: string; filename: string; byteSize: number; status: string; statusDetail: string; createdAt: string };
-const auth = (session: AuthSession) => ({ authorization: `Bearer ${session.accessToken}` });
 
 export function selectStravaEntries(names: string[]) {
   const selected = names.filter(name => name === "activities.csv" || name.startsWith("activities/"));
@@ -34,11 +33,11 @@ export async function filterStravaArchive(file: Blob): Promise<Blob> {
 export async function uploadArchive(config: RuntimeConfig, session: AuthSession, filename: string, archive: Blob, progress: (value: number) => void, resumeId?: string) {
   let id = resumeId;
   if (!id) {
-    const created = await fetch(`${config.apiUrl}/api/uploads`, { method: "POST", headers: { ...auth(session), "content-type": "application/json" }, body: JSON.stringify({ filename, size: archive.size }) });
+    const created = await authFetch(config, session, `${config.apiUrl}/api/uploads`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ filename, size: archive.size }) });
     if (!created.ok) throw new Error(`Could not authorize upload (${created.status}).`);
     id = (await created.json() as { id: string }).id;
   }
-  const existingResponse = await fetch(`${config.apiUrl}/api/uploads/${id}/parts`, { headers: auth(session), cache: "no-store" });
+  const existingResponse = await authFetch(config, session, `${config.apiUrl}/api/uploads/${id}/parts`, { cache: "no-store" });
   const existing = new Map((existingResponse.ok ? (await existingResponse.json() as { parts: Array<{ partNumber: number; checksumSha256: string }> }).parts : []).map(part => [part.partNumber, part.checksumSha256]));
   const partSize = 8 * 1024 * 1024;
   let uploaded = 0;
@@ -47,7 +46,7 @@ export async function uploadArchive(config: RuntimeConfig, session: AuthSession,
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await part.arrayBuffer()));
     const checksumSha256 = btoa(String.fromCharCode(...digest));
     if (existing.get(partNumber) !== checksumSha256) {
-      const signed = await fetch(`${config.apiUrl}/api/uploads/${id}/parts`, { method: "POST", headers: { ...auth(session), "content-type": "application/json" }, body: JSON.stringify({ partNumber, checksumSha256 }) });
+      const signed = await authFetch(config, session, `${config.apiUrl}/api/uploads/${id}/parts`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ partNumber, checksumSha256 }) });
       if (!signed.ok) throw new Error(`Could not authorize upload part ${partNumber}.`);
       const uploadUrl = (await signed.json() as { uploadUrl: string }).uploadUrl;
       let succeeded = false;
@@ -59,13 +58,13 @@ export async function uploadArchive(config: RuntimeConfig, session: AuthSession,
     }
     uploaded += part.size; progress(uploaded / archive.size);
   }
-  const completed = await fetch(`${config.apiUrl}/api/uploads/${id}/complete`, { method: "POST", headers: auth(session) });
+  const completed = await authFetch(config, session, `${config.apiUrl}/api/uploads/${id}/complete`, { method: "POST" });
   if (!completed.ok) throw new Error(`Upload verification failed (${completed.status}).`);
   return completed.json() as Promise<{ id: string; status: string }>;
 }
 
 export async function listUploads(config: RuntimeConfig, session: AuthSession): Promise<UploadRecord[]> {
-  const response = await fetch(`${config.apiUrl}/api/uploads`, { headers: auth(session), cache: "no-store" });
+  const response = await authFetch(config, session, `${config.apiUrl}/api/uploads`, { cache: "no-store" });
   if (!response.ok) throw new Error("Could not load uploads.");
   return (await response.json() as { uploads: UploadRecord[] }).uploads;
 }

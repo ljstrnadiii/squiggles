@@ -14,7 +14,9 @@ import { defaultTab, ELECTRIC_BLUE, loadTabs, normalizeRouteColor, saveTabs } fr
 import { loadTheme, saveTheme } from "./theme";
 import { distanceUnit, distanceValue, elevationUnit, elevationValue, loadUnits, saveUnits } from "./units";
 import { AccountPanel } from "./AccountPanel";
-import { identityFromSession, loadSession } from "./auth";
+import { clearSession, identityFromSession, loadSession } from "./auth";
+import { loadRuntimeConfig } from "./auth";
+import { loadPublishedView, publishView } from "./publishing";
 
 const blankStyle: maplibregl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
 const rasterStyles: Record<Exclude<Basemap, "blank">, { tiles: string[]; attribution: string; maxzoom: number }> = {
@@ -78,6 +80,10 @@ function hasUrlCamera() {
 function sharedDatasetId(pathname = window.location.pathname) {
   const match = /^\/m\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/?$/i.exec(pathname);
   return match?.[1];
+}
+
+function publishedSlug(pathname = window.location.pathname) {
+  return /^\/p\/([a-z0-9]{8})\/?$/.exec(pathname)?.[1];
 }
 
 function replaceUrlSettings(tab: QueryTab, view: MapState, units: UnitSystem) {
@@ -316,14 +322,14 @@ export function App() {
     } finally { setBusy(false); }
   }
 
-  async function openSource(source: DatasetSource, preserveUrlCamera = false) {
+  async function openSource(source: DatasetSource, preserveUrlCamera = false, initialTab = tab) {
     try {
       setBusy(true); setError(""); setStatus("Reading dataset manifest…");
       const dataset = await engine.openDataset(source, (completed, total) => setStatus(`Opening dataset · ${completed.toLocaleString()} / ${total.toLocaleString()} shards`));
       ready.current = true; setDatasetName(dataset.name);
       const initialView = preserveUrlCamera && initialUrlCamera.current ? view : fitBounds(dataset.manifest.bbox);
       setView(initialView);
-      setStatus("Running initial query…"); await run(tab, initialView);
+      setStatus("Running initial query…"); await run(initialTab, initialView, initialTab.sql);
     } catch (reason) {
       ready.current = false; setError(reason instanceof Error ? reason.message : String(reason));
       setStatus("Dataset could not be opened");
@@ -338,10 +344,27 @@ export function App() {
 
   useEffect(() => {
     if (autoOpened.current) return;
+    const published = publishedSlug();
     const shared = sharedDatasetId();
     const local = new URLSearchParams(window.location.search).get("dataset");
-    if (!shared && (!local || !/^[a-zA-Z0-9_-]+$/.test(local))) return;
+    if (!published && !shared && (!local || !/^[a-zA-Z0-9_-]+$/.test(local))) return;
     autoOpened.current = true;
+    if (published) {
+      void (async () => {
+        try {
+          const config = await loadRuntimeConfig();
+          if (!config) throw new Error("Published maps are unavailable.");
+          const saved = await loadPublishedView(config, published);
+          const selected = saved.tabs.find(item => item.id === saved.active) ?? saved.tabs[0];
+          setTabs(saved.tabs); setActive(selected.id); setDraft(selected.sql); setView(selected.mapState);
+          if (saved.datasetId) {
+            const hostedDatasetRoot = (import.meta.env.VITE_DATASET_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/datasets";
+            await openSource({ kind: "url", baseUrl: `${hostedDatasetRoot}/${saved.datasetId}`, name: saved.datasetId }, true, selected);
+          } else setStatus("Published map settings loaded");
+        } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+      })();
+      return;
+    }
     const hostedDatasetRoot = (import.meta.env.VITE_DATASET_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/datasets";
     const source = shared
       ? { kind: "url" as const, baseUrl: `${hostedDatasetRoot}/${shared}`, name: shared }
@@ -460,6 +483,19 @@ export function App() {
     await navigator.clipboard.writeText(url.toString());
     setLinkCopied(true); window.setTimeout(() => setLinkCopied(false), 1500);
   }
+  async function publishTabs() {
+    const session = loadSession();
+    if (!session) { setAccountView("login"); setAccountOpen(true); return; }
+    try {
+      const config = await loadRuntimeConfig();
+      if (!config) throw new Error("Publishing is unavailable.");
+      const currentTabs = tabs.map(item => item.id === tab.id ? { ...item, mapState: view, sql: draft } : item);
+      const datasetId = datasetName && /^[0-9a-f-]{36}$/i.test(datasetName) ? datasetName : null;
+      const published = await publishView(config, session, currentTabs, tab.id, datasetId);
+      await navigator.clipboard.writeText(`${window.location.origin}${published.url}`);
+      setStatus("Published link copied"); setLinkCopied(true); window.setTimeout(() => setLinkCopied(false), 1500);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); refreshIdentity(); }
+  }
 
   function toggleStats() {
     setSelected(null); setProfileHover(null); setIsolateSelected(false);
@@ -553,14 +589,14 @@ export function App() {
       {sessionIdentity.email ? <button className="avatar-button" aria-label="Open account menu" aria-expanded={accountMenuOpen} onClick={() => { setAccountMenuOpen(open => !open); setMenuOpen(false); setLogoMenuOpen(false); }}>{sessionIdentity.picture ? <img src={sessionIdentity.picture} alt="" referrerPolicy="no-referrer" /> : <span>{(sessionIdentity.name || sessionIdentity.email).slice(0, 1).toUpperCase()}</span>}</button> : <button className="login-button" onClick={() => { setAccountView("login"); setAccountOpen(true); setLogoMenuOpen(false); setMenuOpen(false); }}>Log in</button>}
     </header>
 
-    {logoMenuOpen && <nav className="logo-menu utility-panel" aria-label="Squiggles navigation"><button onClick={() => { setAboutOpen(true); setLogoMenuOpen(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setToolbarOpen(false); }}>About</button><button disabled={busy} onClick={() => { void openDirectory(); setLogoMenuOpen(false); }}>◫ {datasetName ? `Change dataset · ${datasetName}` : "Open dataset"}</button><button onClick={() => { setSchemaOpen(true); setLogoMenuOpen(false); }}>AI Skills</button><button onClick={() => { openSystemSettings(); setLogoMenuOpen(false); }}>⚙ System settings</button></nav>}
+    {logoMenuOpen && <nav className="logo-menu utility-panel" aria-label="Squiggles navigation"><button onClick={() => { setAboutOpen(true); setLogoMenuOpen(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setToolbarOpen(false); }}>About</button><button disabled={busy} onClick={() => { void openDirectory(); setLogoMenuOpen(false); }}>{datasetName ? `Change dataset · ${datasetName}` : "Open dataset"}</button><button onClick={() => { setSchemaOpen(true); setLogoMenuOpen(false); }}>AI Skills</button><button onClick={() => { openSystemSettings(); setLogoMenuOpen(false); }}>System settings</button></nav>}
 
     {menuOpen && <nav className="mobile-menu utility-panel" aria-label="Query navigation">
-      <section><span className="eyebrow">SAVED QUERIES</span>{tabs.map(item => <button className={item.id === tab.id ? "active" : ""} key={item.id} onClick={() => { choose(item); setMenuOpen(false); }}>{item.title}</button>)}<button onClick={() => { add(); setMenuOpen(false); }}>＋ New query</button></section>
-      <section><button onClick={() => { choose(tab, true); setMenuOpen(false); }}>⌘ Query settings</button><button disabled={!selectionReady.current} onClick={() => { toggleStats(); setMenuOpen(false); }}>▥ Statistics</button><button disabled={!selectionReady.current || tableLoading} onClick={() => { void toggleTable(); setMenuOpen(false); }}>▤ Table</button><button disabled={!selectionReady.current} onClick={() => { setRenderingOpen(true); setStatsOpen(false); setTableOpen(false); setAboutOpen(false); setToolbarOpen(false); setSchemaOpen(false); setMenuOpen(false); setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>≋ Rendering</button></section>
+      <section><span className="eyebrow">SAVED QUERIES</span>{tabs.map(item => <button className={item.id === tab.id ? "active" : ""} key={item.id} onClick={() => { choose(item); setMenuOpen(false); }}>{item.title}</button>)}<button onClick={() => { add(); setMenuOpen(false); }}>New query</button></section>
+      <section><button onClick={() => { choose(tab, true); setMenuOpen(false); }}>Query settings</button><button disabled={!selectionReady.current} onClick={() => { toggleStats(); setMenuOpen(false); }}>Statistics</button><button disabled={!selectionReady.current || tableLoading} onClick={() => { void toggleTable(); setMenuOpen(false); }}>Table</button><button disabled={!selectionReady.current} onClick={() => { setRenderingOpen(true); setStatsOpen(false); setTableOpen(false); setAboutOpen(false); setToolbarOpen(false); setSchemaOpen(false); setMenuOpen(false); setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>Rendering</button></section>
     </nav>}
 
-    {accountMenuOpen && <nav className="account-menu utility-panel" aria-label="Account navigation"><button onClick={() => { setAccountView("account"); setAccountOpen(true); setAccountMenuOpen(false); }}>Account</button><button onClick={() => { setAccountView("upload"); setAccountOpen(true); setAccountMenuOpen(false); }}>Upload Archive</button><button onClick={() => { void copyTabLink(); setAccountMenuOpen(false); }}>↗ Publish link</button></nav>}
+    {accountMenuOpen && <nav className="account-menu utility-panel" aria-label="Account navigation"><button onClick={() => { setAccountView("account"); setAccountOpen(true); setAccountMenuOpen(false); }}>Account</button><button onClick={() => { setAccountView("upload"); setAccountOpen(true); setAccountMenuOpen(false); }}>Upload Archive</button><button onClick={() => { void publishTabs(); setAccountMenuOpen(false); }}>Publish link</button><button onClick={() => { clearSession(); refreshIdentity(); setAccountMenuOpen(false); }}>Log out</button></nav>}
 
     {systemSettingsOpen && <section className="system-settings utility-panel" aria-label="System settings"><header><div><span className="eyebrow">SYSTEM</span><strong>Appearance and units</strong></div><button aria-label="Close system settings" onClick={() => setSystemSettingsOpen(false)}>×</button></header><div><label>Theme</label><div className="theme-control" role="group" aria-label="Theme"><button aria-label="Use light theme" aria-pressed={themeMode === "light"} title="Light theme" onClick={() => changeTheme("light")}>☀︎</button><button aria-label="Use system theme" aria-pressed={themeMode === "system"} title="Follow system theme" onClick={() => changeTheme("system")}>◐</button><button aria-label="Use dark theme" aria-pressed={themeMode === "dark"} title="Dark theme" onClick={() => changeTheme("dark")}>☾</button></div></div><div><label>Distance and elevation</label><div className="unit-control" role="group" aria-label="Units"><button aria-label="Use imperial units" aria-pressed={units === "imperial"} title="Show miles and feet" onClick={() => changeUnits("imperial")}>mi</button><button aria-label="Use metric units" aria-pressed={units === "metric"} title="Show kilometres and metres" onClick={() => changeUnits("metric")}>km</button></div></div></section>}
     {accountOpen && <AccountPanel view={accountView} onClose={() => setAccountOpen(false)} onIdentityChange={refreshIdentity} />}

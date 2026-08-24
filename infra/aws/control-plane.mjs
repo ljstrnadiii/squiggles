@@ -34,6 +34,16 @@ async function deletePrefix(bucket, prefix) {
 }
 
 export async function handler(event) {
+  const route = event.routeKey;
+  if (route === "GET /api/published/{slug}") {
+    const slug = event.pathParameters?.slug;
+    if (!tableName || !/^[a-z0-9]{8}$/.test(slug ?? "")) return response(404, { error: "published_view_not_found" });
+    const found = await dynamo.send(new QueryCommand({ TableName: tableName, IndexName: "GSI1", KeyConditionExpression: "GSI1PK = :pk", ExpressionAttributeValues: { ":pk": { S: `PUBLISHED#${slug}` } }, Limit: 1 }));
+    const published = found.Items?.[0];
+    if (!published) return response(404, { error: "published_view_not_found" });
+    await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: { PK: published.PK, SK: published.SK }, UpdateExpression: "ADD viewCount :one", ExpressionAttributeValues: { ":one": { N: "1" } } }));
+    return response(200, { slug, tabs: JSON.parse(published.tabsJson.S), active: published.activeTab.S, datasetId: published.datasetId?.S ?? null, updatedAt: published.updatedAt.S });
+  }
   const claims = event.requestContext?.authorizer?.jwt?.claims;
   const subject = claims?.sub;
   const username = claims?.username;
@@ -84,7 +94,18 @@ export async function handler(event) {
   }
 
   const current = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: key, ConsistentRead: true }))).Item;
-  const route = event.routeKey;
+  if (route === "POST /api/published") {
+    if (current?.status?.S !== "approved") return response(403, { error: "approval_required" });
+    const body = JSON.parse(event.body ?? "{}");
+    const tabsJson = JSON.stringify(body.tabs ?? []);
+    if (!Array.isArray(body.tabs) || body.tabs.length < 1 || body.tabs.length > 50 || tabsJson.length > 100_000 || !body.tabs.every(tab => typeof tab?.id === "string" && typeof tab?.title === "string" && typeof tab?.sql === "string") || typeof body.active !== "string") return response(400, { error: "invalid_published_view" });
+    const shareKey = { PK: key.PK, SK: { S: "SHARE#primary" } };
+    const prior = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: shareKey, ConsistentRead: true }))).Item;
+    const slug = prior?.slug?.S ?? randomUUID().replaceAll("-", "").slice(0, 8);
+    const now = new Date().toISOString();
+    await dynamo.send(new PutItemCommand({ TableName: tableName, Item: { ...shareKey, entityType: { S: "share" }, slug: { S: slug }, tabsJson: { S: tabsJson }, activeTab: { S: body.active }, ...(typeof body.datasetId === "string" && /^[0-9a-f-]{36}$/i.test(body.datasetId) ? { datasetId: { S: body.datasetId } } : {}), viewCount: prior?.viewCount ?? { N: "0" }, createdAt: prior?.createdAt ?? { S: now }, updatedAt: { S: now }, GSI1PK: { S: `PUBLISHED#${slug}` }, GSI1SK: { S: "VIEW" } } }));
+    return response(200, { slug, url: `/p/${slug}` });
+  }
   if (route === "DELETE /api/me") {
     const records = [];
     let cursor;
@@ -172,6 +193,8 @@ export async function handler(event) {
     stats: {
       uploadedBytes: records.filter(item => item.entityType?.S === "upload").reduce((total, item) => total + Number(item.byteSize?.N ?? 0), 0),
       activityCount: records.filter(item => item.entityType?.S === "dataset").reduce((total, item) => total + Number(item.activityCount?.N ?? 0), 0),
+      curatedBytes: records.filter(item => item.entityType?.S === "dataset").reduce((total, item) => total + Number(item.byteSize?.N ?? 0), 0),
+      datasetCount: records.filter(item => item.entityType?.S === "dataset").length,
       publishedViews: records.filter(item => item.entityType?.S === "share").reduce((total, item) => total + Number(item.viewCount?.N ?? 0), 0),
       publishedMaps: records.filter(item => item.entityType?.S === "share").length,
     },
