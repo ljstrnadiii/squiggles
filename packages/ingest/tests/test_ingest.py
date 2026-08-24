@@ -193,7 +193,17 @@ def test_zip_traversal_is_rejected(tmp_path: Path) -> None:
 def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
     # Use Ray's local-compatible pipeline while keeping the fixture deliberately tiny.
     source, output = _fixture(tmp_path / "source"), tmp_path / "dataset"
-    manifest = compile_strava(CompileOptions(source, output, batch_size=1, num_cpus=1))
+    progress: list[tuple[int, int]] = []
+    manifest = compile_strava(
+        CompileOptions(
+            source,
+            output,
+            batch_size=1,
+            num_cpus=1,
+            progress_callback=lambda completed, total: progress.append((completed, total)),
+        )
+    )
+    assert progress[-1] == (2, 2)
     assert manifest["activity_count"] == 2
     assert manifest["rejection_count"] == 1
     assert manifest["schema_version"] == "1.3.0"
