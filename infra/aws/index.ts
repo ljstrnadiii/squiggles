@@ -10,6 +10,9 @@ const protectData = config.getBoolean("protectData") ?? true;
 const budgetEmail = config.get("budgetEmail") ?? process.env.SQUIGGLES_BUDGET_EMAIL;
 const monthlyBudgetUsd = config.getNumber("monthlyBudgetUsd") ?? 10;
 const domainName = config.get("domainName") ?? "squiggles.io";
+const googleClientId = config.get("googleClientId") ?? process.env.GOOGLE_CLIENT_ID;
+const googleClientSecret = config.getSecret("googleClientSecret") ?? (process.env.GOOGLE_CLIENT_SECRET ? pulumi.secret(process.env.GOOGLE_CLIENT_SECRET) : undefined);
+if (Boolean(googleClientId) !== Boolean(googleClientSecret)) throw new Error("Google federation requires both GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET");
 if (monthlyBudgetUsd <= 0 || monthlyBudgetUsd > 50) throw new Error("monthlyBudgetUsd must be greater than 0 and no more than 50");
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const webDist = path.join(projectRoot, "apps/web/dist");
@@ -85,6 +88,23 @@ const userPoolDomain = new aws.cognito.UserPoolDomain("login", {
   managedLoginVersion: 2,
 }, { protect: protectData });
 
+const googleProvider = googleClientId && googleClientSecret ? new aws.cognito.IdentityProvider("google", {
+  userPoolId: userPool.id,
+  providerName: "Google",
+  providerType: "Google",
+  providerDetails: {
+    client_id: googleClientId,
+    client_secret: googleClientSecret,
+    authorize_scopes: "profile email openid",
+  },
+  attributeMapping: {
+    email: "email",
+    name: "name",
+    picture: "picture",
+    username: "sub",
+  },
+}) : undefined;
+
 const userPoolClient = new aws.cognito.UserPoolClient("browser", {
   userPoolId: userPool.id,
   generateSecret: false,
@@ -93,13 +113,13 @@ const userPoolClient = new aws.cognito.UserPoolClient("browser", {
   allowedOauthScopes: ["openid", "email", "profile"],
   callbackUrls: [`https://${domainName}/auth/callback`, "http://localhost:5173/auth/callback"],
   logoutUrls: [`https://${domainName}/`, "http://localhost:5173/"],
-  supportedIdentityProviders: ["COGNITO"],
+  supportedIdentityProviders: googleProvider ? [googleProvider.providerName] : ["COGNITO"],
   preventUserExistenceErrors: "ENABLED",
   accessTokenValidity: 1,
   idTokenValidity: 1,
   refreshTokenValidity: 30,
   tokenValidityUnits: { accessToken: "hours", idToken: "hours", refreshToken: "days" },
-});
+}, googleProvider ? { dependsOn: [googleProvider] } : undefined);
 
 const metadataTable = new aws.dynamodb.Table("control-plane", {
   billingMode: "PAY_PER_REQUEST",
