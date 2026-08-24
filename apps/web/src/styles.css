@@ -1348,3 +1348,10 @@ button:disabled {
 @keyframes drawer-bottom {
   from { transform: translateY(24px); opacity: 0; }
 }
+.account-panel p { margin: 0; line-height: 1.5; color: var(--muted); }
+.account-panel .account-primary { width: 100%; font-weight: 700; }
+.account-panel .account-error { color: #d95c5c; }
+.approval-status { display: flex; align-items: center; gap: .55rem; font-weight: 700; text-transform: capitalize; }
+.approval-status span { width: .65rem; height: .65rem; border-radius: 50%; background: #d5a33b; }
+.approval-status.approved span { background: #39b87f; }
+.approval-status.rejected span { background: #d95c5c; }
