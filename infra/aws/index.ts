@@ -167,7 +167,7 @@ const controlPlaneFunction = new aws.lambda.Function("control-plane-api", {
   role: controlPlaneRole.arn,
   runtime: aws.lambda.Runtime.NodeJS22dX,
   handler: "control-plane.handler",
-  code: new pulumi.asset.AssetArchive({ "control-plane.mjs": new pulumi.asset.FileAsset(path.join(path.dirname(fileURLToPath(import.meta.url)), "dist/control-plane.mjs")) }),
+  code: new pulumi.asset.AssetArchive({ "control-plane.cjs": new pulumi.asset.FileAsset(path.join(path.dirname(fileURLToPath(import.meta.url)), "dist/control-plane.cjs")) }),
   environment: { variables: { METADATA_TABLE_NAME: metadataTable.name, USER_POOL_ID: userPool.id, UPLOAD_BUCKET_NAME: uploadBucket.bucket } },
   memorySize: 256,
   timeout: 10,
