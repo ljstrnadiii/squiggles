@@ -4,13 +4,19 @@ import type { AuthSession, RuntimeConfig } from "./auth";
 export type UploadRecord = { id: string; filename: string; byteSize: number; status: string; createdAt: string };
 const auth = (session: AuthSession) => ({ authorization: `Bearer ${session.accessToken}` });
 
+export function selectStravaEntries(names: string[]) {
+  const selected = names.filter(name => name === "activities.csv" || name.startsWith("activities/"));
+  if (!selected.includes("activities.csv") || !selected.some(name => name.startsWith("activities/") && !name.endsWith("/"))) throw new Error("This archive must contain activities.csv and the activities directory.");
+  if (selected.length > 100_000) throw new Error("This archive contains too many activity files.");
+  for (const name of selected) if (name.startsWith("/") || name.split("/").includes("..")) throw new Error("The archive contains an unsafe path.");
+  return selected;
+}
+
 export async function filterStravaArchive(file: Blob): Promise<Blob> {
   const reader = new ZipReader(new BlobReader(file));
   const entries = await reader.getEntries();
-  const selected = entries.filter(entry => entry.filename === "activities.csv" || entry.filename.startsWith("activities/"));
-  if (!selected.some(entry => entry.filename === "activities.csv") || !selected.some(entry => entry.filename.startsWith("activities/") && !entry.directory)) throw new Error("This archive must contain activities.csv and the activities directory.");
-  if (selected.length > 100_000) throw new Error("This archive contains too many activity files.");
-  for (const entry of selected) if (entry.filename.startsWith("/") || entry.filename.split("/").includes("..")) throw new Error("The archive contains an unsafe path.");
+  const names = new Set(selectStravaEntries(entries.map(entry => entry.filename)));
+  const selected = entries.filter(entry => names.has(entry.filename));
   const output = new BlobWriter("application/zip");
   const writer = new ZipWriter(output);
   for (const entry of selected) {
