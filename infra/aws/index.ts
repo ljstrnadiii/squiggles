@@ -180,7 +180,7 @@ new aws.iam.RolePolicyAttachment("control-plane-api-logs", {
 new aws.iam.RolePolicy("control-plane-api-data", {
   role: controlPlaneRole.id,
   policy: aws.iam.getPolicyDocumentOutput({ statements: [
-    { effect: "Allow", actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query", "dynamodb:BatchWriteItem"], resources: [metadataTable.arn] },
+    { effect: "Allow", actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query", "dynamodb:BatchWriteItem"], resources: [metadataTable.arn, pulumi.interpolate`${metadataTable.arn}/index/*`] },
     { effect: "Allow", actions: ["cognito-idp:AdminGetUser", "cognito-idp:AdminDeleteUser"], resources: [userPool.arn] },
     { effect: "Allow", actions: ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListMultipartUploadParts", "s3:AbortMultipartUpload"], resources: [pulumi.interpolate`${uploadBucket.arn}/users/*`, pulumi.interpolate`${ingestedBucket.arn}/users/*`] },
     { effect: "Allow", actions: ["s3:ListBucket"], resources: [uploadBucket.arn, ingestedBucket.arn] },
@@ -237,6 +237,8 @@ new aws.apigatewayv2.Route("me-delete", {
 for (const [name, routeKey] of [["uploads-create", "POST /api/uploads"], ["uploads-part", "POST /api/uploads/{id}/parts"], ["uploads-parts", "GET /api/uploads/{id}/parts"], ["uploads-complete", "POST /api/uploads/{id}/complete"], ["uploads-list", "GET /api/uploads"]] as const) {
   new aws.apigatewayv2.Route(name, { apiId: controlPlaneApi.id, routeKey, target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}`, authorizationType: "JWT", authorizerId: controlPlaneAuthorizer.id, authorizationScopes: ["openid"] });
 }
+new aws.apigatewayv2.Route("published-save", { apiId: controlPlaneApi.id, routeKey: "POST /api/published", target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}`, authorizationType: "JWT", authorizerId: controlPlaneAuthorizer.id, authorizationScopes: ["openid"] });
+new aws.apigatewayv2.Route("published-get", { apiId: controlPlaneApi.id, routeKey: "GET /api/published/{slug}", target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}` });
 new aws.apigatewayv2.Stage("control-plane", {
   apiId: controlPlaneApi.id,
   name: "$default",

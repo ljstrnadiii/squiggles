@@ -1,7 +1,7 @@
 export type RuntimeConfig = { apiUrl: string; cognitoDomain: string; cognitoClientId: string };
 export type AuthSession = { accessToken: string; idToken: string; refreshToken?: string };
 export type Identity = { email?: string; name?: string; picture?: string };
-export type UserProfile = Identity & { subject: string; status: "pending" | "approved" | "rejected"; role: "user" | "admin"; stats?: { uploadedBytes: number; activityCount: number; publishedViews: number; publishedMaps: number } };
+export type UserProfile = Identity & { subject: string; status: "pending" | "approved" | "rejected"; role: "user" | "admin"; stats?: { uploadedBytes: number; curatedBytes: number; datasetCount: number; activityCount: number; publishedViews: number; publishedMaps: number } };
 
 const sessionKey = "squiggles-auth-session";
 const verifierKey = "squiggles-auth-verifier";
@@ -22,6 +22,31 @@ export function loadSession(): AuthSession | null {
 }
 
 export function clearSession() { sessionStorage.removeItem(sessionKey); }
+
+async function refreshSession(config: RuntimeConfig, session: AuthSession): Promise<boolean> {
+  if (!session.refreshToken) return false;
+  const response = await fetch(new URL("/oauth2/token", config.cognitoDomain), {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "refresh_token", client_id: config.cognitoClientId, refresh_token: session.refreshToken }),
+  });
+  if (!response.ok) return false;
+  const tokens = await response.json() as { access_token: string; id_token?: string };
+  session.accessToken = tokens.access_token;
+  if (tokens.id_token) session.idToken = tokens.id_token;
+  sessionStorage.setItem(sessionKey, JSON.stringify(session));
+  return true;
+}
+
+export async function authFetch(config: RuntimeConfig, session: AuthSession, input: string, init: RequestInit = {}): Promise<Response> {
+  const send = () => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers).entries()), authorization: `Bearer ${session.accessToken}` } });
+  let response = await send();
+  if (response.status !== 401) return response;
+  if (!await refreshSession(config, session)) { clearSession(); return response; }
+  response = await send();
+  if (response.status === 401) clearSession();
+  return response;
+}
 
 export function identityFromSession(session: AuthSession | null): Identity {
   if (!session?.idToken) return {};
@@ -65,13 +90,13 @@ export async function finishLogin(config: RuntimeConfig): Promise<AuthSession | 
 }
 
 export async function getProfile(config: RuntimeConfig, session: AuthSession): Promise<UserProfile> {
-  const response = await fetch(`${config.apiUrl}/api/me`, { headers: { authorization: `Bearer ${session.accessToken}` }, cache: "no-store" });
+  const response = await authFetch(config, session, `${config.apiUrl}/api/me`, { cache: "no-store" });
   if (!response.ok) throw new Error(response.status === 401 ? "Your session expired. Please sign in again." : "Could not load your account.");
   return response.json() as Promise<UserProfile>;
 }
 
 export async function deleteAccount(config: RuntimeConfig, session: AuthSession): Promise<void> {
-  const response = await fetch(`${config.apiUrl}/api/me`, { method: "DELETE", headers: { authorization: `Bearer ${session.accessToken}` } });
+  const response = await authFetch(config, session, `${config.apiUrl}/api/me`, { method: "DELETE" });
   if (!response.ok) throw new Error("Could not delete your account and data.");
   clearSession();
 }
