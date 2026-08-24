@@ -1,7 +1,7 @@
 import type { ActivityListItem,BinaryRouteBatch,Dataset,DatasetManifest,DatasetSource,ExecutionEngine,QueryResult,QueryTab,RouteActivity,ViewportBounds,ViewportResult } from "./contracts";
 type Result<T>={id:number;ok:true;value:T}|{id:number;ok:false;error:string};
 type WorkerViewportResult=Omit<ViewportResult,"cache">;
-type CacheEntry={result:WorkerViewportResult;bytes:number};
+type CacheEntry={result:WorkerViewportResult;bytes:number;bounds?:ViewportBounds;lod:ReturnType<typeof lodForZoom>};
 const MEBIBYTE=1024**2;
 export class BrowserDuckDBEngine implements ExecutionEngine {
   private worker=new Worker(new URL("./duckdb.worker.ts",import.meta.url),{type:"module"}); private id=0; private clean=false; private pending=new Map<number,{resolve:(value:unknown)=>void;reject:(error:Error)=>void}>();
@@ -10,17 +10,19 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   constructor(){this.worker.onmessage=(event:MessageEvent<Result<unknown>>)=>{const call=this.pending.get(event.data.id);if(!call)return;this.pending.delete(event.data.id);if(event.data.ok)call.resolve(event.data.value);else call.reject(new Error(event.data.error));};}
   private request<T>(body:object,transfer:Transferable[]=[]):Promise<T>{const id=++this.id;return new Promise((resolve,reject)=>{this.pending.set(id,{resolve:resolve as (value:unknown)=>void,reject});this.worker.postMessage({id,...body},transfer);});}
   private cacheKey(zoom:number,bounds:ViewportBounds|undefined){return `${this.selectionKey}|${lodForZoom(zoom)}|${bounds?.map(value=>value.toFixed(6)).join(",")??"all"}`;}
-  private cacheResult(result:WorkerViewportResult,key:string,hit:boolean):ViewportResult{
+  private cacheResult(result:WorkerViewportResult,key:string,hit:boolean,bounds:ViewportBounds|undefined,zoom:number):ViewportResult{
     if(!hit&&!this.cache.has(key)){
       const bytes=binaryBytes(result.batches);
       if(bytes<=this.cacheBudget){
-        this.cache.set(key,{result,bytes});this.cacheBytes+=bytes;
+        const lod=lodForZoom(zoom);
+        for(const [cachedKey,entry] of this.cache)if(entry.lod===lod&&bounds&&entry.bounds&&boundsContains(bounds,entry.bounds)){this.cache.delete(cachedKey);this.cacheBytes-=entry.bytes;}
+        this.cache.set(key,{result,bytes,bounds,lod});this.cacheBytes+=bytes;
         while(this.cacheBytes>this.cacheBudget&&this.cache.size>1){const oldest=this.cache.entries().next().value as [string,CacheEntry]|undefined;if(!oldest)break;this.cache.delete(oldest[0]);this.cacheBytes-=oldest[1].bytes;this.cacheEvictions+=1;}
       }
     }
     return {...result,cache:{hit,bytes:this.cacheBytes,budgetBytes:this.cacheBudget,entries:this.cache.size,evictions:this.cacheEvictions}};
   }
-  private cached(key:string):ViewportResult|undefined{const entry=this.cache.get(key);if(!entry)return undefined;this.cache.delete(key);this.cache.set(key,entry);return this.cacheResult(entry.result,key,true);}
+  private cached(key:string,bounds:ViewportBounds,zoom:number):ViewportResult|undefined{let matchedKey=key;let entry=this.cache.get(key);if(!entry){const lod=lodForZoom(zoom);for(const [candidateKey,candidate] of this.cache)if(candidate.lod===lod&&candidate.bounds&&boundsContains(candidate.bounds,bounds)){matchedKey=candidateKey;entry=candidate;break;}}if(!entry)return undefined;this.cache.delete(matchedKey);this.cache.set(matchedKey,entry);return this.cacheResult(entry.result,matchedKey,true,bounds,zoom);}
   async openDataset(source:DatasetSource,onProgress?: (completed:number,total:number)=>void):Promise<Dataset>{
     this.datasetRevision+=1;this.selectionKey="";this.cache.clear();this.cacheBytes=0;this.cacheEvictions=0;
     const manifest=source.kind==="directory"
@@ -43,12 +45,12 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     const nextClean=tab.style.cleanEnabled;
     const result=await this.request<QueryResult&WorkerViewportResult>({type:"execute",sql:tab.sql,lod:lodForZoom(zoom),bounds,clean:nextClean});
     this.clean=nextClean;this.selectionKey=`${this.datasetRevision}|${this.clean?1:0}|${tab.sql}`;
-    return {...result,...this.cacheResult(result,this.cacheKey(zoom,bounds),false)};
+    return {...result,...this.cacheResult(result,this.cacheKey(zoom,bounds),false,bounds,zoom)};
   }
   async renderViewport(zoom:number,bounds:ViewportBounds):Promise<ViewportResult>{
-    const key=this.cacheKey(zoom,bounds);const cached=this.cached(key);if(cached)return cached;
+    const key=this.cacheKey(zoom,bounds);const cached=this.cached(key,bounds,zoom);if(cached)return cached;
     const result=await this.request<WorkerViewportResult>({type:"render",lod:lodForZoom(zoom),bounds,clean:this.clean});
-    return this.cacheResult(result,key,false);
+    return this.cacheResult(result,key,false,bounds,zoom);
   }
   getSummary(bounds?:ViewportBounds):Promise<import("./contracts").SummaryStats>{return this.request({type:"summary",bounds,clean:this.clean});}
   getActivities(bounds?:ViewportBounds):Promise<ActivityListItem[]>{return this.request({type:"table",bounds,clean:this.clean});}
@@ -63,7 +65,6 @@ function binaryBytes(batches:BinaryRouteBatch[]):number{
   return [...buffers].reduce((total,buffer)=>total+buffer.byteLength,0);
 }
 
-function cacheBudget():number{
-  const memory=(navigator as Navigator&{deviceMemory?:number}).deviceMemory;
-  return Math.min(1024*MEBIBYTE,Math.max(256*MEBIBYTE,(memory??8)*128*MEBIBYTE));
-}
+function boundsContains(outer:ViewportBounds,inner:ViewportBounds):boolean{return outer[0]<=outer[2]&&inner[0]<=inner[2]&&outer[0]<=inner[0]&&outer[1]<=inner[1]&&outer[2]>=inner[2]&&outer[3]>=inner[3];}
+
+export function cacheBudget(mobile=typeof matchMedia==="function"&&matchMedia("(pointer: coarse)").matches):number{return (mobile?128:512)*MEBIBYTE;}

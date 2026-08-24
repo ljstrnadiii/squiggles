@@ -12,11 +12,15 @@ describe("published maps", () => {
     expect(JSON.parse(String(request.body))).toMatchObject({ active: "all", datasetId: null });
     expect(String(request.body)).not.toContain("theme");
     expect(String(request.body)).not.toContain("units");
+    expect(JSON.parse(String(request.body)).tabs[0].mapState).toEqual(defaultTab.mapState);
     expect(result.url).toBe("/p/abcd1234");
   });
 
   it("loads a short published view", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ slug: "abcd1234", tabs: [defaultTab], active: "all", datasetId: null, updatedAt: "2026-08-24" }), { status: 200 }));
-    expect((await loadPublishedView({ apiUrl: "https://api.example.com", cognitoDomain: "", cognitoClientId: "" }, "abcd1234")).active).toBe("all");
+    const dirty = { ...defaultTab, mapState: { ...defaultTab.mapState, width: 1440, maxBounds: [[null, -90], [null, 90]] } };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ slug: "abcd1234", tabs: [dirty], active: "all", datasetId: null, updatedAt: "2026-08-24" }), { status: 200 }));
+    const published = await loadPublishedView({ apiUrl: "https://api.example.com", cognitoDomain: "", cognitoClientId: "" }, "abcd1234");
+    expect(published.active).toBe("all");
+    expect(published.tabs[0].mapState).toEqual(defaultTab.mapState);
   });
 });

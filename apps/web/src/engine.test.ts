@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { QueryTab, ViewportResult } from "./contracts";
-import { BrowserDuckDBEngine, lodForZoom } from "./engine";
+import { BrowserDuckDBEngine, cacheBudget, lodForZoom } from "./engine";
 import { defaultTab } from "./storage";
 
 const viewport = (): Omit<ViewportResult, "cache"> => ({
@@ -48,5 +48,31 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     expect(second.batches[0].positions).toBe(first.batches[0].positions);
     expect(second.batches[0].positions.buffer).toBe(first.batches[0].positions.buffer);
     globalThis.Worker = originalWorker;
+  });
+
+  it("reuses a cached same-LOD viewport when zooming back into a contained area", async () => {
+    const posted: unknown[] = [];
+    class WorkerMock {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      postMessage(message: { id: number }) {
+        posted.push(message);
+        const value = { queryId: "1", summary: {}, renderPlan: { type: "arrow", activityIds: ["a"] }, ...viewport() };
+        queueMicrotask(() => this.onmessage?.({ data: { id: message.id, ok: true, value } } as MessageEvent));
+      }
+    }
+    const originalWorker = globalThis.Worker;
+    globalThis.Worker = WorkerMock as unknown as typeof Worker;
+    const engine = new BrowserDuckDBEngine();
+    const tab: QueryTab = { ...defaultTab, style: { ...defaultTab.style }, sql: "SELECT activity_id FROM activities" };
+    await engine.execute(tab, 12.5, [-106, 39, -104, 41]);
+    const result = await engine.renderViewport(13.5, [-105.5, 39.5, -104.5, 40.5]);
+    expect(posted).toHaveLength(1);
+    expect(result.cache.hit).toBe(true);
+    globalThis.Worker = originalWorker;
+  });
+
+  it("uses explicit mobile and desktop geometry budgets", () => {
+    expect(cacheBudget(true)).toBe(128 * 1024 ** 2);
+    expect(cacheBudget(false)).toBe(512 * 1024 ** 2);
   });
 });
