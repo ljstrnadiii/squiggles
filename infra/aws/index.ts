@@ -26,6 +26,7 @@ new aws.ecr.LifecyclePolicy("ingest", { repository: ingestRepository.name, polic
 
 const eastRegion = new aws.Provider("us-east-1", { region: "us-east-1" });
 const hostedZone = aws.route53.getZoneOutput({ name: domainName, privateZone: false });
+// These bootstrap-created identities are imported so subsequent changes remain Pulumi-owned.
 const emailIdentity = new aws.sesv2.EmailIdentity("notifications", { emailIdentity: domainName }, { import: domainName, protect: protectData });
 for (let index = 0; index < 3; index += 1) {
   const token = emailIdentity.dkimSigningAttributes.apply(attributes => attributes.tokens[index]);
