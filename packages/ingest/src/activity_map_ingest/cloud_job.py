@@ -3,7 +3,6 @@ from __future__ import annotations
 import mimetypes
 import os
 import tempfile
-import traceback
 from pathlib import Path
 
 import boto3
@@ -29,8 +28,7 @@ def main() -> None:
         required("USER_SUB"),
         required("UPLOAD_ID"),
     )
-    from_email = os.environ.get("FROM_EMAIL", "")
-    dynamo, s3, ses = boto3.client("dynamodb"), boto3.client("s3"), boto3.client("sesv2")
+    dynamo, s3 = boto3.client("dynamodb"), boto3.client("s3")
     key = {"PK": {"S": f"USER#{subject}"}, "SK": {"S": f"UPLOAD#{upload_id}"}}
 
     def status(
@@ -104,36 +102,6 @@ def main() -> None:
                 },
             )
             status("ready")
-            profile = dynamo.get_item(
-                TableName=table_name,
-                Key={"PK": key["PK"], "SK": {"S": "PROFILE"}},
-                ConsistentRead=True,
-            ).get("Item", {})
-            email = profile.get("email", {}).get("S", "")
-            if from_email and email:
-                try:
-                    ses.send_email(
-                        FromEmailAddress=from_email,
-                        Destination={"ToAddresses": [email]},
-                        Content={
-                            "Simple": {
-                                "Subject": {"Data": "Your Squiggles dataset is ready"},
-                                "Body": {
-                                    "Text": {
-                                        "Data": (
-                                            "Your Strava archive has finished processing. "
-                                            "Open https://squiggles.io and sign in to view "
-                                            "your dataset."
-                                        )
-                                    }
-                                },
-                            }
-                        },
-                    )
-                except Exception:
-                    # A notification failure must not invalidate a curated dataset.
-                    print("Dataset is ready, but its completion email could not be sent.")
-                    traceback.print_exc()
     except Exception as error:
         status("failed", str(error))
         raise
