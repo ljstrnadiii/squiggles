@@ -9,6 +9,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   private readonly cacheBudget=cacheBudget();
   constructor(){this.worker.onmessage=(event:MessageEvent<Result<unknown>>)=>{const call=this.pending.get(event.data.id);if(!call)return;this.pending.delete(event.data.id);if(event.data.ok)call.resolve(event.data.value);else call.reject(new Error(event.data.error));};}
   private request<T>(body:object,transfer:Transferable[]=[]):Promise<T>{const id=++this.id;return new Promise((resolve,reject)=>{this.pending.set(id,{resolve:resolve as (value:unknown)=>void,reject});this.worker.postMessage({id,...body},transfer);});}
+  private async networkRequest<T>(body:object):Promise<T>{for(let attempt=0;;attempt+=1)try{return await this.request<T>(body);}catch(error){if(attempt>=2||!isTransientNetworkError(error))throw error;await new Promise(resolve=>setTimeout(resolve,250*2**attempt));}}
   private cacheKey(zoom:number,bounds:ViewportBounds|undefined){return `${this.selectionKey}|${lodForZoom(zoom)}|${bounds?.map(value=>value.toFixed(6)).join(",")??"all"}`;}
   private cacheResult(result:WorkerViewportResult,key:string,hit:boolean,bounds:ViewportBounds|undefined,zoom:number):ViewportResult{
     if(!hit&&!this.cache.has(key)){
@@ -43,18 +44,18 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   }
   async execute(tab:QueryTab,zoom:number,bounds?:ViewportBounds):Promise<QueryResult&ViewportResult>{
     const nextClean=tab.style.cleanEnabled;
-    const result=await this.request<QueryResult&WorkerViewportResult>({type:"execute",sql:tab.sql,lod:lodForZoom(zoom),bounds,clean:nextClean});
+    const result=await this.networkRequest<QueryResult&WorkerViewportResult>({type:"execute",sql:tab.sql,lod:lodForZoom(zoom),bounds,clean:nextClean});
     this.clean=nextClean;this.selectionKey=`${this.datasetRevision}|${this.clean?1:0}|${tab.sql}`;
     return {...result,...this.cacheResult(result,this.cacheKey(zoom,bounds),false,bounds,zoom)};
   }
   async renderViewport(zoom:number,bounds:ViewportBounds):Promise<ViewportResult>{
     const key=this.cacheKey(zoom,bounds);const cached=this.cached(key,bounds,zoom);if(cached)return cached;
-    const result=await this.request<WorkerViewportResult>({type:"render",lod:lodForZoom(zoom),bounds,clean:this.clean});
+    const result=await this.networkRequest<WorkerViewportResult>({type:"render",lod:lodForZoom(zoom),bounds,clean:this.clean});
     return this.cacheResult(result,key,false,bounds,zoom);
   }
-  getSummary(bounds?:ViewportBounds):Promise<import("./contracts").SummaryStats>{return this.request({type:"summary",bounds,clean:this.clean});}
-  getActivities(bounds?:ViewportBounds):Promise<ActivityListItem[]>{return this.request({type:"table",bounds,clean:this.clean});}
-  getActivity(activityId:string):Promise<RouteActivity|null>{return this.request({type:"activity",activityId,clean:this.clean});}
+  getSummary(bounds?:ViewportBounds):Promise<import("./contracts").SummaryStats>{return this.networkRequest({type:"summary",bounds,clean:this.clean});}
+  getActivities(bounds?:ViewportBounds):Promise<ActivityListItem[]>{return this.networkRequest({type:"table",bounds,clean:this.clean});}
+  getActivity(activityId:string):Promise<RouteActivity|null>{return this.networkRequest({type:"activity",activityId,clean:this.clean});}
 }
 
 export function lodForZoom(zoom:number):0|1|2|3|4{return zoom<8?0:zoom<12?1:zoom<14?2:zoom<16?3:4;}
@@ -68,3 +69,5 @@ function binaryBytes(batches:BinaryRouteBatch[]):number{
 function boundsContains(outer:ViewportBounds,inner:ViewportBounds):boolean{return outer[0]<=outer[2]&&inner[0]<=inner[2]&&outer[0]<=inner[0]&&outer[1]<=inner[1]&&outer[2]>=inner[2]&&outer[3]>=inner[3];}
 
 export function cacheBudget(mobile=typeof matchMedia==="function"&&matchMedia("(pointer: coarse)").matches):number{return (mobile?128:512)*MEBIBYTE;}
+
+function isTransientNetworkError(error:unknown):boolean{return error instanceof Error&&/(NetworkError|Failed to load|XMLHttpRequest)/i.test(error.message);}

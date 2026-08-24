@@ -75,4 +75,26 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     expect(cacheBudget(true)).toBe(128 * 1024 ** 2);
     expect(cacheBudget(false)).toBe(512 * 1024 ** 2);
   });
+
+  it("retries a transient Parquet range-request failure", async () => {
+    let attempts = 0;
+    class WorkerMock {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      postMessage(message: { id: number }) {
+        attempts += 1;
+        const data = attempts === 1
+          ? { id: message.id, ok: false, error: "NetworkError: XMLHttpRequest failed to load a Parquet range" }
+          : { id: message.id, ok: true, value: { queryId: "1", summary: {}, renderPlan: { type: "arrow", activityIds: ["a"] }, ...viewport() } };
+        queueMicrotask(() => this.onmessage?.({ data } as MessageEvent));
+      }
+    }
+    const originalWorker = globalThis.Worker;
+    globalThis.Worker = WorkerMock as unknown as typeof Worker;
+    const engine = new BrowserDuckDBEngine();
+    const tab: QueryTab = { ...defaultTab, style: { ...defaultTab.style }, sql: "SELECT activity_id FROM activities" };
+    const result = await engine.execute(tab, 12, [-106, 39, -104, 41]);
+    expect(attempts).toBe(2);
+    expect(result.activityCount).toBe(1);
+    globalThis.Worker = originalWorker;
+  });
 });
