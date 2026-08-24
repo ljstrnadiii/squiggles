@@ -568,11 +568,9 @@ export function App() {
       : routeColor(tab.style.color, 190);
   })), [heat, routeBatches, selected, tab.style.color, tab.style.heatEnabled, tab.style.heatPalette, tab.style.heatTemperature]);
   const hoverColors = useMemo(() => hover ? routeBatches.map(batch => routeColors(batch, activity => activity.activityId === hover.item.activityId ? routeColor(tab.style.color, 255) : [0, 0, 0, 0])) : [], [hover, routeBatches, tab.style.color]);
-  const hoverCasingColors = useMemo(() => hover ? routeBatches.map(batch => routeColors(batch, activity => activity.activityId === hover.item.activityId ? [5, 12, 10, 230] : [0, 0, 0, 0])) : [], [hover, routeBatches]);
   const overviewPathData = useMemo(() => routeBatches.map((batch, index) => binaryPathData(batch, overviewColors[index])), [overviewColors, routeBatches]);
   const pickingPathData = useMemo(() => routeBatches.map(batch => binaryPathData(batch)), [routeBatches]);
   const hoverPathData = useMemo(() => hover ? routeBatches.map((batch, index) => binaryPathData(batch, hoverColors[index])) : [], [hover, hoverColors, routeBatches]);
-  const hoverCasingPathData = useMemo(() => hover ? routeBatches.map((batch, index) => binaryPathData(batch, hoverCasingColors[index])) : [], [hover, hoverCasingColors, routeBatches]);
   const selectedSegments = useMemo(() => selected ? routeSegments([selected], true) : [], [selected]);
   const lineWidths = useMemo(() => lineWidthsForViewport(tab.style.lineWidthScale, mapSize.width, mapSize.height), [mapSize, tab.style.lineWidthScale]);
   const layers = useMemo(() => [
@@ -580,18 +578,16 @@ export function App() {
       new PathLayer({ id: `routes-${index}`, data: overviewPathData[index], _pathType: "open", positionFormat: "XY", getWidth: tab.style.heatEnabled ? lineWidths.heat : lineWidths.route, widthUnits: "pixels", widthMinPixels: 0.35, pickable: false }),
       new PathLayer({ id: `route-hit-targets-${index}`, data: pickingPathData[index], _pathType: "open", positionFormat: "XY", getColor: [0, 0, 0, 0], getWidth: lineWidths.route + 10, widthUnits: "pixels", widthMinPixels: 10, pickable: true, onHover: (info: PickingInfo) => { const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; setHover(item ? { x: info.x, y: info.y, item, origin: "map" } : null); }, onClick: (info: PickingInfo) => { const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (item) void openActivity(item); } }),
     ]),
-    ...(hover ? routeBatches.flatMap((batch, index) => [
-      new PathLayer({ id: `hover-casing-${index}`, data: hoverCasingPathData[index], _pathType: "open", positionFormat: "XY", getWidth: lineWidths.casing, widthUnits: "pixels", widthMinPixels: 1.5 }),
+    ...(hover ? routeBatches.map((batch, index) =>
       new PathLayer({ id: `hover-route-${index}`, data: hoverPathData[index], _pathType: "open", positionFormat: "XY", getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8 }),
-    ]) : []),
+    ) : []),
     ...(selected && isolateSelected ? [
       new PathLayer<RouteSegment>({ id: "isolated-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.route, widthUnits: "pixels", widthMinPixels: 0.35, pickable: true }),
     ] : selected ? [
-      new PathLayer<RouteSegment>({ id: "selected-casing", data: selectedSegments, getPath: item => item.path, getColor: effectiveTheme === "dark" ? [255, 255, 255, 230] : [13, 23, 21, 210], getWidth: lineWidths.casing, widthUnits: "pixels", widthMinPixels: 1.5 }),
-      new PathLayer<RouteSegment>({ id: "selected-route", data: selectedSegments, getPath: item => item.path, getColor: [71, 107, 204, 255], getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8, pickable: true }),
+      new PathLayer<RouteSegment>({ id: "selected-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8, pickable: true }),
     ] : []),
     ...(profileHover ? [new ScatterplotLayer<ElevationSample>({ id: "profile-position", data: [profileHover], getPosition: item => item.position, getFillColor: [71, 107, 204, 255], getLineColor: [255, 255, 255, 255], getRadius: 8, radiusUnits: "pixels", stroked: true, lineWidthMinPixels: 3 })] : []),
-  ], [effectiveTheme, hover, hoverCasingPathData, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, tab.style.color, tab.style.heatEnabled]);
+  ], [hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, tab.style.color, tab.style.heatEnabled]);
 
   return <main className="app" onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void run(); }}>
     <header className="topbar">
@@ -635,7 +631,13 @@ export function App() {
 
     <section className="map" ref={mapElement}>
       <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />
-      <DeckGL controller layers={layers} viewState={view} onViewStateChange={({ viewState }) => setView(viewState as typeof view)} onClick={info => { if (!info.object) { setSelected(null); setProfileHover(null); } }} />
+      <DeckGL controller={{ dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: 0 }} onViewStateChange={({ viewState, interactionState }) => {
+        // Ignore camera callbacks produced while an asynchronously loaded published
+        // view is being applied. Only a real pointer/wheel gesture may own the camera.
+        if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isZooming) return;
+        const next = viewState as MapState;
+        setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });
+      }} onClick={info => { if (!info.object) { setSelected(null); setProfileHover(null); } }} />
       {hover?.origin === "map" && <div className="tooltip" style={{ left: hover.x + 12, top: hover.y + 12 }}><strong>{hover.item.name}</strong><span>{hover.item.sportType} · {hover.item.startTime?.slice(0, 10)}</span><span>{distance(hover.item.distanceM ?? 0)} · {elevation(hover.item.elevationGainM ?? 0)} gain</span></div>}
     </section>
 
@@ -666,8 +668,8 @@ function ElevationProfile({ samples, active, units, onHover }: { samples: Elevat
   }
   const activeLabel = active
     ? `${integer.format(elevationValue(active.elevationM, units))} ${elevationUnit(units)} · ${distanceValue(active.distanceM, units).toFixed(1)} ${distanceUnit(units)}`
-    : "Hover to trace route";
-  return <div className="profile"><div><strong>Elevation profile</strong><span>{activeLabel}</span></div><svg aria-label="Elevation profile chart" role="img" viewBox={`0 0 ${width} ${height}`} onPointerMove={move} onPointerLeave={() => onHover(null)}><defs><linearGradient id="profile-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={ELECTRIC_BLUE} stopOpacity=".38"/><stop offset="1" stopColor={ELECTRIC_BLUE} stopOpacity=".03"/></linearGradient></defs><line x1={left} x2={width - right} y1={top} y2={top} className="profile-grid"/><line x1={left} x2={width - right} y1={height - bottom} y2={height - bottom} className="profile-grid"/><polygon points={`${left},${height - bottom} ${points} ${width - right},${height - bottom}`} fill="url(#profile-fill)"/><polyline points={points} fill="none" stroke="#fff" strokeWidth="5" opacity=".9"/><polyline points={points} fill="none" stroke={ELECTRIC_BLUE} strokeWidth="2.5"/>{active && <><line x1={x(active)} x2={x(active)} y1={top} y2={height - bottom} className="profile-cursor"/><circle cx={x(active)} cy={y(active)} r="5" fill={ELECTRIC_BLUE} stroke="#fff" strokeWidth="2"/></>}<text x={left + 2} y={top + 11}>{integer.format(elevationValue(maximumElevation, units))} {elevationUnit(units)}</text><text x={left + 2} y={height - bottom - 5}>{integer.format(elevationValue(minimumElevation, units))} {elevationUnit(units)}</text><text x={width - right} y={height - 5} textAnchor="end">{distanceValue(maximumDistance, units).toFixed(1)} {distanceUnit(units)}</text></svg></div>;
+    : "Touch or hover to trace route";
+  return <div className="profile"><div><strong>Elevation profile</strong><span>{activeLabel}</span></div><svg aria-label="Elevation profile chart" role="img" viewBox={`0 0 ${width} ${height}`} onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); move(event); }} onPointerMove={move} onPointerCancel={() => onHover(null)} onPointerLeave={event => { if (event.pointerType === "mouse") onHover(null); }}><defs><linearGradient id="profile-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={ELECTRIC_BLUE} stopOpacity=".38"/><stop offset="1" stopColor={ELECTRIC_BLUE} stopOpacity=".03"/></linearGradient></defs><line x1={left} x2={width - right} y1={top} y2={top} className="profile-grid"/><line x1={left} x2={width - right} y1={height - bottom} y2={height - bottom} className="profile-grid"/><polygon points={`${left},${height - bottom} ${points} ${width - right},${height - bottom}`} fill="url(#profile-fill)"/><polyline points={points} fill="none" stroke="#fff" strokeWidth="5" opacity=".9"/><polyline points={points} fill="none" stroke={ELECTRIC_BLUE} strokeWidth="2.5"/>{active && <><line x1={x(active)} x2={x(active)} y1={top} y2={height - bottom} className="profile-cursor"/><circle cx={x(active)} cy={y(active)} r="5" fill={ELECTRIC_BLUE} stroke="#fff" strokeWidth="2"/></>}<text x={left + 2} y={top + 11}>{integer.format(elevationValue(maximumElevation, units))} {elevationUnit(units)}</text><text x={left + 2} y={height - bottom - 5}>{integer.format(elevationValue(minimumElevation, units))} {elevationUnit(units)}</text><text x={width - right} y={height - 5} textAnchor="end">{distanceValue(maximumDistance, units).toFixed(1)} {distanceUnit(units)}</text></svg></div>;
 }
 
 function Stat({ value, label }: { value: string; label: string }) { return <div className="stat"><strong>{value}</strong><small>{label}</small></div>; }
