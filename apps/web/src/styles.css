@@ -1149,6 +1149,8 @@ button:disabled {
   border: 1px solid var(--line-soft);
   border-radius: 7px;
   cursor: crosshair;
+  touch-action: none;
+  user-select: none;
 }
 .profile svg text {
   fill: var(--muted);
