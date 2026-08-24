@@ -180,10 +180,11 @@ new aws.iam.RolePolicyAttachment("control-plane-api-logs", {
 new aws.iam.RolePolicy("control-plane-api-data", {
   role: controlPlaneRole.id,
   policy: aws.iam.getPolicyDocumentOutput({ statements: [
-    { effect: "Allow", actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"], resources: [metadataTable.arn] },
-    { effect: "Allow", actions: ["cognito-idp:AdminGetUser"], resources: [userPool.arn] },
-    { effect: "Allow", actions: ["s3:PutObject", "s3:GetObject", "s3:ListMultipartUploadParts", "s3:AbortMultipartUpload"], resources: [pulumi.interpolate`${uploadBucket.arn}/users/*`] },
-    { effect: "Allow", actions: ["batch:SubmitJob"], resources: [ingestQueue.arn, ingestDefinition.arn] },
+    { effect: "Allow", actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query", "dynamodb:BatchWriteItem"], resources: [metadataTable.arn] },
+    { effect: "Allow", actions: ["cognito-idp:AdminGetUser", "cognito-idp:AdminDeleteUser"], resources: [userPool.arn] },
+    { effect: "Allow", actions: ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListMultipartUploadParts", "s3:AbortMultipartUpload"], resources: [pulumi.interpolate`${uploadBucket.arn}/users/*`, pulumi.interpolate`${ingestedBucket.arn}/users/*`] },
+    { effect: "Allow", actions: ["s3:ListBucket"], resources: [uploadBucket.arn, ingestedBucket.arn] },
+    { effect: "Allow", actions: ["batch:SubmitJob", "batch:TerminateJob"], resources: [ingestQueue.arn, ingestDefinition.arn, "*"] },
   ] }).json,
 });
 const controlPlaneFunction = new aws.lambda.Function("control-plane-api", {
@@ -201,7 +202,7 @@ const controlPlaneApi = new aws.apigatewayv2.Api("control-plane", {
   corsConfiguration: {
     allowOrigins: [`https://${domainName}`, "http://localhost:5173"],
     allowHeaders: ["authorization", "content-type"],
-    allowMethods: ["GET", "POST", "OPTIONS"],
+    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
     maxAge: 3600,
   },
   tags,
@@ -228,6 +229,10 @@ new aws.apigatewayv2.Route("me", {
   authorizationType: "JWT",
   authorizerId: controlPlaneAuthorizer.id,
   authorizationScopes: ["openid"],
+});
+new aws.apigatewayv2.Route("me-delete", {
+  apiId: controlPlaneApi.id, routeKey: "DELETE /api/me", target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}`,
+  authorizationType: "JWT", authorizerId: controlPlaneAuthorizer.id, authorizationScopes: ["openid"],
 });
 for (const [name, routeKey] of [["uploads-create", "POST /api/uploads"], ["uploads-part", "POST /api/uploads/{id}/parts"], ["uploads-parts", "GET /api/uploads/{id}/parts"], ["uploads-complete", "POST /api/uploads/{id}/complete"], ["uploads-list", "GET /api/uploads"]] as const) {
   new aws.apigatewayv2.Route(name, { apiId: controlPlaneApi.id, routeKey, target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}`, authorizationType: "JWT", authorizerId: controlPlaneAuthorizer.id, authorizationScopes: ["openid"] });
@@ -502,7 +507,7 @@ const deployPolicy = aws.iam.getPolicyDocumentOutput({ statements: [
   {
     sid: "IngestImageAndBatch",
     effect: "Allow",
-    actions: ["ecr:BatchCheckLayerAvailability", "ecr:CompleteLayerUpload", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetAuthorizationToken", "ecr:GetDownloadUrlForLayer", "ecr:InitiateLayerUpload", "ecr:ListTagsForResource", "ecr:PutImage", "ecr:TagResource", "ecr:UntagResource", "ecr:UploadLayerPart", "batch:*", "ec2:AuthorizeSecurityGroupEgress", "ec2:CreateSecurityGroup", "ec2:CreateTags", "ec2:DeleteSecurityGroup", "ec2:Describe*", "ec2:RevokeSecurityGroupEgress"],
+    actions: ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:CompleteLayerUpload", "ecr:DeleteLifecyclePolicy", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetAuthorizationToken", "ecr:GetDownloadUrlForLayer", "ecr:GetLifecyclePolicy", "ecr:InitiateLayerUpload", "ecr:ListTagsForResource", "ecr:PutImage", "ecr:PutImageScanningConfiguration", "ecr:PutImageTagMutability", "ecr:PutLifecyclePolicy", "ecr:TagResource", "ecr:UntagResource", "ecr:UploadLayerPart", "batch:*", "ec2:AuthorizeSecurityGroupEgress", "ec2:CreateSecurityGroup", "ec2:CreateTags", "ec2:DeleteSecurityGroup", "ec2:Describe*", "ec2:RevokeSecurityGroupEgress"],
     resources: ["*"],
   },
   {

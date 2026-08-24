@@ -6,6 +6,8 @@ ZIP compilation accepts only `activities.csv` and members beneath `activities/`;
 
 Hosted source intake applies the same allowlist in the browser before transmission. It never uploads the original Strava archive. Upload authorization requires an approved Cognito user, binds one random owner-scoped S3 multipart upload to SHA-256-checked parts, expires each part URL after 15 minutes, and verifies final object size before recording `pending`. Quarantine objects and incomplete multipart uploads expire independently of curated GeoParquet.
 
+Self-service account deletion requires a valid token for the account being deleted. It terminates jobs recorded in that account partition, deletes its filtered source objects and referenced curated dataset prefixes, deletes all control-plane records under the immutable Cognito subject, and removes the Cognito identity. It cannot name another subject or arbitrary S3 prefix.
+
 The ingestion task can read only owner-scoped quarantine objects, write only curated dataset prefixes, and update control-plane job/dataset records. It receives identifiers as Batch environment overrides, never browser credentials. Curated user output stays in a distinct private bucket until authenticated range delivery is accepted; it is not published through the temporary unlisted developer-data origin.
 
 `../mvmt/data` is read-only private input. Generated datasets belong under ignored `data/local/`. Tests and docs use synthetic data or aggregate counts only. The browser does not log activity metadata or coordinates.
