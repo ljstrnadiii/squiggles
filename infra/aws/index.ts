@@ -517,6 +517,12 @@ const deployPolicy = aws.iam.getPolicyDocumentOutput({ statements: [
     resources: ["*"],
   },
   {
+    sid: "EmailIdentities",
+    effect: "Allow",
+    actions: ["ses:CreateEmailIdentity", "ses:DeleteEmailIdentity", "ses:GetEmailIdentity"],
+    resources: [pulumi.interpolate`arn:aws:ses:us-west-2:${caller.accountId}:identity/*`],
+  },
+  {
     sid: "ReadCertificateBudgetAndBootstrapIdentity",
     effect: "Allow",
     actions: ["acm:AddTagsToCertificate", "acm:DescribeCertificate", "acm:GetCertificate", "acm:ListCertificates", "acm:RemoveTagsFromCertificate", "budgets:ListTagsForResource", "budgets:ModifyBudget", "budgets:ViewBudget", "iam:Get*", "iam:List*"],
