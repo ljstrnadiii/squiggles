@@ -13,6 +13,7 @@ import { lineWidthsForViewport, routeSegments, type RouteSegment } from "./route
 import { defaultTab, ELECTRIC_BLUE, loadTabs, normalizeRouteColor, saveTabs } from "./storage";
 import { loadTheme, saveTheme } from "./theme";
 import { distanceUnit, distanceValue, elevationUnit, elevationValue, loadUnits, saveUnits } from "./units";
+import { AccountPanel } from "./AccountPanel";
 
 const blankStyle: maplibregl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
 const rasterStyles: Record<Exclude<Basemap, "blank">, { tiles: string[]; attribution: string; maxzoom: number }> = {
@@ -235,6 +236,7 @@ export function App() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [systemSettingsOpen, setSystemSettingsOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(() => window.location.pathname === "/auth/callback");
   const [tableLoading, setTableLoading] = useState(false);
   const [viewportScope, setViewportScope] = useState(false);
   const [scopedSummary, setScopedSummary] = useState(empty);
@@ -577,10 +579,11 @@ export function App() {
 
     {menuOpen && <nav className="mobile-menu utility-panel" aria-label="Query navigation">
       <section><span className="eyebrow">SAVED QUERIES</span>{tabs.map(item => <button className={item.id === tab.id ? "active" : ""} key={item.id} onClick={() => { choose(item); setMenuOpen(false); }}>{item.title}</button>)}<button onClick={() => { add(); setMenuOpen(false); }}>＋ New query</button></section>
-      <section><button onClick={() => { choose(tab, true); setMenuOpen(false); }}>⌘ Query settings</button><button disabled={!selectionReady.current} onClick={() => { toggleStats(); setMenuOpen(false); }}>▥ Statistics</button><button disabled={!selectionReady.current || tableLoading} onClick={() => { void toggleTable(); setMenuOpen(false); }}>▤ Table</button><button disabled={!selectionReady.current} onClick={() => { setRenderingOpen(true); setStatsOpen(false); setTableOpen(false); setAboutOpen(false); setToolbarOpen(false); setSchemaOpen(false); setMenuOpen(false); setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>≋ Rendering</button><button disabled={busy} onClick={() => { void openDirectory(); setMenuOpen(false); }}>◫ {datasetName ? `Change dataset · ${datasetName}` : "Open dataset"}</button><button onClick={() => { setSchemaOpen(true); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false); setToolbarOpen(false); setMenuOpen(false); setSelected(null); }}>AI Skills</button><button onClick={openSystemSettings}>⚙ System settings</button></section>
+      <section><button onClick={() => { choose(tab, true); setMenuOpen(false); }}>⌘ Query settings</button><button disabled={!selectionReady.current} onClick={() => { toggleStats(); setMenuOpen(false); }}>▥ Statistics</button><button disabled={!selectionReady.current || tableLoading} onClick={() => { void toggleTable(); setMenuOpen(false); }}>▤ Table</button><button disabled={!selectionReady.current} onClick={() => { setRenderingOpen(true); setStatsOpen(false); setTableOpen(false); setAboutOpen(false); setToolbarOpen(false); setSchemaOpen(false); setMenuOpen(false); setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>≋ Rendering</button><button disabled={busy} onClick={() => { void openDirectory(); setMenuOpen(false); }}>◫ {datasetName ? `Change dataset · ${datasetName}` : "Open dataset"}</button><button onClick={() => { setSchemaOpen(true); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false); setToolbarOpen(false); setMenuOpen(false); setSelected(null); }}>AI Skills</button><button onClick={openSystemSettings}>⚙ System settings</button><button onClick={() => { setAccountOpen(true); setMenuOpen(false); setSystemSettingsOpen(false); }}>◎ Account</button></section>
     </nav>}
 
     {systemSettingsOpen && <section className="system-settings utility-panel" aria-label="System settings"><header><div><span className="eyebrow">SYSTEM</span><strong>Appearance and units</strong></div><button aria-label="Close system settings" onClick={() => setSystemSettingsOpen(false)}>×</button></header><div><label>Theme</label><div className="theme-control" role="group" aria-label="Theme"><button aria-label="Use light theme" aria-pressed={themeMode === "light"} title="Light theme" onClick={() => changeTheme("light")}>☀︎</button><button aria-label="Use system theme" aria-pressed={themeMode === "system"} title="Follow system theme" onClick={() => changeTheme("system")}>◐</button><button aria-label="Use dark theme" aria-pressed={themeMode === "dark"} title="Dark theme" onClick={() => changeTheme("dark")}>☾</button></div></div><div><label>Distance and elevation</label><div className="unit-control" role="group" aria-label="Units"><button aria-label="Use imperial units" aria-pressed={units === "imperial"} title="Show miles and feet" onClick={() => changeUnits("imperial")}>mi</button><button aria-label="Use metric units" aria-pressed={units === "metric"} title="Show kilometres and metres" onClick={() => changeUnits("metric")}>km</button></div></div></section>}
+    {accountOpen && <AccountPanel onClose={() => setAccountOpen(false)} />}
 
     {schemaOpen && <section className="schema-panel utility-panel"><div><strong>AI Skills · Squiggles SQL</strong><button onClick={() => void copySchema()}>{schemaCopied ? "Copied" : "Copy for your AI"}</button></div><p>Paste this into the AI assistant of your choice, then describe the activities you want to select.</p><pre>{QUERY_SCHEMA}</pre></section>}
 

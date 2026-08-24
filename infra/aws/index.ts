@@ -145,6 +145,78 @@ const metadataTable = new aws.dynamodb.Table("control-plane", {
   tags,
 }, { protect: protectData });
 
+const controlPlaneRole = new aws.iam.Role("control-plane-api", {
+  assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({ Service: "lambda.amazonaws.com" }),
+  tags,
+});
+new aws.iam.RolePolicyAttachment("control-plane-api-logs", {
+  role: controlPlaneRole.name,
+  policyArn: aws.iam.ManagedPolicy.AWSLambdaBasicExecutionRole,
+});
+new aws.iam.RolePolicy("control-plane-api-data", {
+  role: controlPlaneRole.id,
+  policy: aws.iam.getPolicyDocumentOutput({ statements: [{
+    effect: "Allow",
+    actions: ["dynamodb:GetItem", "dynamodb:PutItem"],
+    resources: [metadataTable.arn],
+  }] }).json,
+});
+const controlPlaneFunction = new aws.lambda.Function("control-plane-api", {
+  role: controlPlaneRole.arn,
+  runtime: aws.lambda.Runtime.NodeJS22dX,
+  handler: "control-plane.handler",
+  code: new pulumi.asset.AssetArchive({ "control-plane.mjs": new pulumi.asset.FileAsset(path.join(path.dirname(fileURLToPath(import.meta.url)), "control-plane.mjs")) }),
+  environment: { variables: { METADATA_TABLE_NAME: metadataTable.name } },
+  memorySize: 256,
+  timeout: 10,
+  tags,
+});
+const controlPlaneApi = new aws.apigatewayv2.Api("control-plane", {
+  protocolType: "HTTP",
+  corsConfiguration: {
+    allowOrigins: [`https://${domainName}`, "http://localhost:5173"],
+    allowHeaders: ["authorization", "content-type"],
+    allowMethods: ["GET", "OPTIONS"],
+    maxAge: 3600,
+  },
+  tags,
+});
+const controlPlaneAuthorizer = new aws.apigatewayv2.Authorizer("control-plane-jwt", {
+  apiId: controlPlaneApi.id,
+  authorizerType: "JWT",
+  identitySources: ["$request.header.Authorization"],
+  jwtConfiguration: {
+    audiences: [userPoolClient.id],
+    issuer: pulumi.interpolate`https://cognito-idp.${aws.getRegionOutput().name}.amazonaws.com/${userPool.id}`,
+  },
+});
+const controlPlaneIntegration = new aws.apigatewayv2.Integration("control-plane", {
+  apiId: controlPlaneApi.id,
+  integrationType: "AWS_PROXY",
+  integrationUri: controlPlaneFunction.arn,
+  payloadFormatVersion: "2.0",
+});
+new aws.apigatewayv2.Route("me", {
+  apiId: controlPlaneApi.id,
+  routeKey: "GET /api/me",
+  target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}`,
+  authorizationType: "JWT",
+  authorizerId: controlPlaneAuthorizer.id,
+  authorizationScopes: ["openid"],
+});
+new aws.apigatewayv2.Stage("control-plane", {
+  apiId: controlPlaneApi.id,
+  name: "$default",
+  autoDeploy: true,
+  tags,
+});
+new aws.lambda.Permission("control-plane-api", {
+  action: "lambda:InvokeFunction",
+  function: controlPlaneFunction.name,
+  principal: "apigateway.amazonaws.com",
+  sourceArn: pulumi.interpolate`${controlPlaneApi.executionArn}/*/*`,
+});
+
 new aws.s3.BucketVersioning("web-versioning", {
   bucket: webBucket.id,
   versioningConfiguration: { status: "Enabled" },
@@ -315,6 +387,18 @@ for (const absolute of filesUnder(webDist)) {
   });
 }
 
+new aws.s3.BucketObject("web-runtime-config", {
+  bucket: webBucket.id,
+  key: "runtime-config.json",
+  content: pulumi.jsonStringify({
+    apiUrl: controlPlaneApi.apiEndpoint,
+    cognitoDomain: pulumi.interpolate`https://${userPoolDomain.domain}.auth.${aws.getRegionOutput().name}.amazoncognito.com`,
+    cognitoClientId: userPoolClient.id,
+  }),
+  contentType: "application/json; charset=utf-8",
+  cacheControl: "no-cache, no-store, must-revalidate",
+});
+
 const budget = new aws.budgets.Budget("monthly-development", {
   budgetType: "COST",
   limitAmount: monthlyBudgetUsd.toString(),
@@ -388,7 +472,7 @@ const deployPolicy = aws.iam.getPolicyDocumentOutput({ statements: [
   {
     sid: "ControlPlaneInfrastructure",
     effect: "Allow",
-    actions: ["cognito-idp:*", "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:Describe*", "dynamodb:List*", "dynamodb:TagResource", "dynamodb:UntagResource", "dynamodb:Update*"],
+    actions: ["cognito-idp:*", "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:Describe*", "dynamodb:List*", "dynamodb:TagResource", "dynamodb:UntagResource", "dynamodb:Update*", "apigateway:*", "lambda:AddPermission", "lambda:CreateFunction", "lambda:DeleteFunction", "lambda:Get*", "lambda:List*", "lambda:RemovePermission", "lambda:TagResource", "lambda:UntagResource", "lambda:Update*", "logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:DescribeLogGroups", "logs:ListTagsForResource", "logs:PutRetentionPolicy", "logs:TagResource", "logs:UntagResource", "iam:AttachRolePolicy", "iam:CreateRole", "iam:DeleteRole", "iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:PassRole", "iam:PutRolePolicy", "iam:TagRole", "iam:UntagRole", "iam:UpdateAssumeRolePolicy"],
     resources: ["*"],
   },
 ] });
@@ -407,3 +491,4 @@ export const userPoolClientId = userPoolClient.id;
 export const loginDomain = pulumi.interpolate`https://${userPoolDomain.domain}.auth.${aws.getRegionOutput().name}.amazoncognito.com`;
 export const googleOauthRedirectUrl = pulumi.interpolate`https://${userPoolDomain.domain}.auth.${aws.getRegionOutput().name}.amazoncognito.com/oauth2/idpresponse`;
 export const metadataTableName = metadataTable.name;
+export const controlPlaneApiUrl = controlPlaneApi.apiEndpoint;

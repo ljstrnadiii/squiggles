@@ -1,0 +1,71 @@
+export type RuntimeConfig = { apiUrl: string; cognitoDomain: string; cognitoClientId: string };
+export type AuthSession = { accessToken: string; idToken: string; refreshToken?: string };
+export type Identity = { email?: string; name?: string; picture?: string };
+export type UserProfile = Identity & { subject: string; status: "pending" | "approved" | "rejected"; role: "user" | "admin" };
+
+const sessionKey = "squiggles-auth-session";
+const verifierKey = "squiggles-auth-verifier";
+const stateKey = "squiggles-auth-state";
+
+const base64Url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+const randomValue = () => base64Url(crypto.getRandomValues(new Uint8Array(32)));
+
+export async function loadRuntimeConfig(): Promise<RuntimeConfig | null> {
+  const response = await fetch("/runtime-config.json", { cache: "no-store" });
+  if (!response.ok) return null;
+  return response.json() as Promise<RuntimeConfig>;
+}
+
+export function loadSession(): AuthSession | null {
+  try { return JSON.parse(sessionStorage.getItem(sessionKey) ?? "null") as AuthSession | null; }
+  catch { return null; }
+}
+
+export function clearSession() { sessionStorage.removeItem(sessionKey); }
+
+export function identityFromSession(session: AuthSession | null): Identity {
+  if (!session?.idToken) return {};
+  try {
+    const payload = session.idToken.split(".")[1].replaceAll("-", "+").replaceAll("_", "/");
+    return JSON.parse(atob(payload)) as Identity;
+  } catch { return {}; }
+}
+
+export async function beginGoogleLogin(config: RuntimeConfig) {
+  const verifier = randomValue();
+  const state = randomValue();
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  sessionStorage.setItem(verifierKey, verifier);
+  sessionStorage.setItem(stateKey, state);
+  const redirectUri = `${window.location.origin}/auth/callback`;
+  const url = new URL("/oauth2/authorize", config.cognitoDomain);
+  url.search = new URLSearchParams({ response_type: "code", client_id: config.cognitoClientId, redirect_uri: redirectUri, scope: "openid email profile", identity_provider: "Google", code_challenge_method: "S256", code_challenge: base64Url(new Uint8Array(digest)), state }).toString();
+  window.location.assign(url);
+}
+
+export async function finishLogin(config: RuntimeConfig): Promise<AuthSession | null> {
+  if (window.location.pathname !== "/auth/callback") return loadSession();
+  const parameters = new URLSearchParams(window.location.search);
+  const verifier = sessionStorage.getItem(verifierKey);
+  const expectedState = sessionStorage.getItem(stateKey);
+  if (!verifier || !expectedState || parameters.get("state") !== expectedState || !parameters.get("code")) throw new Error("The login response could not be verified. Please try again.");
+  const response = await fetch(new URL("/oauth2/token", config.cognitoDomain), {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "authorization_code", client_id: config.cognitoClientId, code: parameters.get("code")!, redirect_uri: `${window.location.origin}/auth/callback`, code_verifier: verifier }),
+  });
+  if (!response.ok) throw new Error("Cognito could not complete the login.");
+  const tokens = await response.json() as { access_token: string; id_token: string; refresh_token?: string };
+  const session = { accessToken: tokens.access_token, idToken: tokens.id_token, refreshToken: tokens.refresh_token };
+  sessionStorage.setItem(sessionKey, JSON.stringify(session));
+  sessionStorage.removeItem(verifierKey);
+  sessionStorage.removeItem(stateKey);
+  window.history.replaceState({}, "", "/");
+  return session;
+}
+
+export async function getProfile(config: RuntimeConfig, session: AuthSession): Promise<UserProfile> {
+  const response = await fetch(`${config.apiUrl}/api/me`, { headers: { authorization: `Bearer ${session.accessToken}` }, cache: "no-store" });
+  if (!response.ok) throw new Error(response.status === 401 ? "Your session expired. Please sign in again." : "Could not load your account.");
+  return response.json() as Promise<UserProfile>;
+}
