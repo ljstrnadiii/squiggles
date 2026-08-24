@@ -294,6 +294,7 @@ export function App() {
     return () => media.removeEventListener("change", update);
   }, []);
   useEffect(() => {
+    if (window.location.pathname === "/" && !window.location.search) return;
     const timer = window.setTimeout(() => replaceUrlSettings(tab, view, units), 180);
     return () => window.clearTimeout(timer);
   }, [tab, units, view]);
@@ -347,7 +348,18 @@ export function App() {
     const published = publishedSlug();
     const shared = sharedDatasetId();
     const local = new URLSearchParams(window.location.search).get("dataset");
-    if (!published && !shared && (!local || !/^[a-zA-Z0-9_-]+$/.test(local))) return;
+    if (!published && !shared && (!local || !/^[a-zA-Z0-9_-]+$/.test(local))) {
+      autoOpened.current = true;
+      void (async () => {
+        try {
+          const config = await loadRuntimeConfig();
+          if (!config?.defaultDatasetId) return;
+          const hostedDatasetRoot = (import.meta.env.VITE_DATASET_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/datasets";
+          await openSource({ kind: "url", baseUrl: `${hostedDatasetRoot}/${config.defaultDatasetId}`, name: config.defaultDatasetId });
+        } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+      })();
+      return;
+    }
     autoOpened.current = true;
     if (published) {
       void (async () => {

@@ -31,13 +31,28 @@ def main() -> None:
     dynamo, s3 = boto3.client("dynamodb"), boto3.client("s3")
     key = {"PK": {"S": f"USER#{subject}"}, "SK": {"S": f"UPLOAD#{upload_id}"}}
 
-    def status(value: str, detail: str = "") -> None:
+    def status(
+        value: str, detail: str = "", completed: int | None = None, total: int | None = None
+    ) -> None:
+        progress = (
+            ", progressCompleted = :completed, progressTotal = :total"
+            if completed is not None and total is not None
+            else ""
+        )
         dynamo.update_item(
             TableName=table_name,
             Key=key,
-            UpdateExpression="SET #status = :status, statusDetail = :detail",
+            UpdateExpression=f"SET #status = :status, statusDetail = :detail{progress}",
             ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={":status": {"S": value}, ":detail": {"S": detail[:500]}},
+            ExpressionAttributeValues={
+                ":status": {"S": value},
+                ":detail": {"S": detail[:500]},
+                **(
+                    {":completed": {"N": str(completed)}, ":total": {"N": str(total)}}
+                    if completed is not None and total is not None
+                    else {}
+                ),
+            },
         )
 
     try:
@@ -47,7 +62,18 @@ def main() -> None:
             status("downloading")
             s3.download_file(source_bucket, source_key, str(archive))
             status("compiling")
-            manifest = compile_strava(CompileOptions(archive, output))
+            manifest = compile_strava(
+                CompileOptions(
+                    archive,
+                    output,
+                    progress_callback=lambda completed, total: status(
+                        "compiling",
+                        f"{completed:,} of {total:,} activities · {completed / total:.0%}",
+                        completed,
+                        total,
+                    ),
+                )
+            )
             status("publishing")
             prefix = f"datasets/{upload_id}/"
             curated_bytes = 0

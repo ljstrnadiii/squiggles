@@ -1,4 +1,4 @@
-export type RuntimeConfig = { apiUrl: string; cognitoDomain: string; cognitoClientId: string };
+export type RuntimeConfig = { apiUrl: string; cognitoDomain: string; cognitoClientId: string; defaultDatasetId?: string };
 export type AuthSession = { accessToken: string; idToken: string; refreshToken?: string };
 export type Identity = { email?: string; name?: string; picture?: string };
 export type UserProfile = Identity & { subject: string; status: "pending" | "approved" | "rejected"; role: "user" | "admin"; stats?: { uploadedBytes: number; curatedBytes: number; datasetCount: number; activityCount: number; publishedViews: number; publishedMaps: number } };

@@ -183,7 +183,7 @@ export async function handler(event) {
   }
   if (route === "GET /api/uploads") {
     const result = await dynamo.send(new QueryCommand({ TableName: tableName, KeyConditionExpression: "PK = :pk AND begins_with(SK, :upload)", ExpressionAttributeValues: { ":pk": key.PK, ":upload": { S: "UPLOAD#" } }, ScanIndexForward: false }));
-    return response(200, { uploads: (result.Items ?? []).map(item => ({ id: item.SK.S.slice(7), filename: item.filename.S, byteSize: Number(item.byteSize.N), status: item.status.S, statusDetail: item.statusDetail?.S ?? "", createdAt: item.createdAt.S })) });
+    return response(200, { uploads: (result.Items ?? []).map(item => ({ id: item.SK.S.slice(7), filename: item.filename.S, byteSize: Number(item.byteSize.N), status: item.status.S, statusDetail: item.statusDetail?.S ?? "", progressCompleted: Number(item.progressCompleted?.N ?? 0), progressTotal: Number(item.progressTotal?.N ?? 0), createdAt: item.createdAt.S })) });
   }
   const accountRecords = await dynamo.send(new QueryCommand({ TableName: tableName, KeyConditionExpression: "PK = :pk", ExpressionAttributeValues: { ":pk": key.PK } }));
   const records = accountRecords.Items ?? [];

@@ -1,7 +1,7 @@
 import { BlobReader, BlobWriter, ZipReader, ZipWriter } from "@zip.js/zip.js";
 import { authFetch, type AuthSession, type RuntimeConfig } from "./auth";
 
-export type UploadRecord = { id: string; filename: string; byteSize: number; status: string; statusDetail: string; createdAt: string };
+export type UploadRecord = { id: string; filename: string; byteSize: number; status: string; statusDetail: string; progressCompleted: number; progressTotal: number; createdAt: string };
 
 export function selectStravaEntries(names: string[]) {
   const selected = names.filter(name => name === "activities.csv" || name.startsWith("activities/"));

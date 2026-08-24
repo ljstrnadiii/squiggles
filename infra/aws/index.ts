@@ -10,6 +10,7 @@ const protectData = config.getBoolean("protectData") ?? true;
 const budgetEmail = config.get("budgetEmail") ?? process.env.SQUIGGLES_BUDGET_EMAIL;
 const monthlyBudgetUsd = config.getNumber("monthlyBudgetUsd") ?? 10;
 const domainName = config.get("domainName") ?? "squiggles.io";
+const defaultDatasetId = config.get("defaultDatasetId") ?? "97d948ec-47c1-435a-add9-65eee580fa49";
 const googleClientId = config.get("googleClientId") ?? process.env.GOOGLE_CLIENT_ID;
 const googleClientSecret = config.getSecret("googleClientSecret") ?? (process.env.GOOGLE_CLIENT_SECRET ? pulumi.secret(process.env.GOOGLE_CLIENT_SECRET) : undefined);
 const ingestImage = process.env.INGEST_IMAGE ?? "public.ecr.aws/docker/library/alpine:3.22";
@@ -165,9 +166,9 @@ const ingestLogs = new aws.cloudwatch.LogGroup("ingest", { retentionInDays: 14, 
 const defaultVpc = aws.ec2.getVpcOutput({ default: true });
 const defaultSubnets = aws.ec2.getSubnetsOutput({ filters: [{ name: "vpc-id", values: [defaultVpc.id] }] });
 const ingestSecurityGroup = new aws.ec2.SecurityGroup("ingest", { vpcId: defaultVpc.id, ingress: [], egress: [{ protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] }], tags });
-const ingestCompute = new aws.batch.ComputeEnvironment("ingest", { type: "MANAGED", serviceRole: batchServiceRole.arn, computeResources: { type: "FARGATE", maxVcpus: 4, subnets: defaultSubnets.ids, securityGroupIds: [ingestSecurityGroup.id] }, tags });
+const ingestCompute = new aws.batch.ComputeEnvironment("ingest", { type: "MANAGED", serviceRole: batchServiceRole.arn, computeResources: { type: "FARGATE", maxVcpus: 8, subnets: defaultSubnets.ids, securityGroupIds: [ingestSecurityGroup.id] }, tags });
 const ingestQueue = new aws.batch.JobQueue("ingest", { state: "ENABLED", priority: 1, computeEnvironmentOrders: [{ order: 1, computeEnvironment: ingestCompute.arn }], tags });
-const ingestDefinition = new aws.batch.JobDefinition("ingest", { type: "container", platformCapabilities: ["FARGATE"], retryStrategy: { attempts: 1 }, timeout: { attemptDurationSeconds: 14400 }, containerProperties: pulumi.jsonStringify({ image: ingestImage, executionRoleArn: taskExecutionRole.arn, jobRoleArn: ingestTaskRole.arn, resourceRequirements: [{ type: "VCPU", value: "2" }, { type: "MEMORY", value: "8192" }], ephemeralStorage: { sizeInGiB: 40 }, networkConfiguration: { assignPublicIp: "ENABLED" }, logConfiguration: { logDriver: "awslogs", options: { "awslogs-group": ingestLogs.name, "awslogs-region": aws.getRegionOutput().name, "awslogs-stream-prefix": "job" } } }), tags });
+const ingestDefinition = new aws.batch.JobDefinition("ingest", { type: "container", platformCapabilities: ["FARGATE"], retryStrategy: { attempts: 1 }, timeout: { attemptDurationSeconds: 14400 }, containerProperties: pulumi.jsonStringify({ image: ingestImage, executionRoleArn: taskExecutionRole.arn, jobRoleArn: ingestTaskRole.arn, resourceRequirements: [{ type: "VCPU", value: "8" }, { type: "MEMORY", value: "16384" }], ephemeralStorage: { sizeInGiB: 40 }, networkConfiguration: { assignPublicIp: "ENABLED" }, logConfiguration: { logDriver: "awslogs", options: { "awslogs-group": ingestLogs.name, "awslogs-region": aws.getRegionOutput().name, "awslogs-stream-prefix": "job" } } }), tags });
 
 const controlPlaneRole = new aws.iam.Role("control-plane-api", {
   assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({ Service: "lambda.amazonaws.com" }),
@@ -431,6 +432,7 @@ new aws.s3.BucketObject("web-runtime-config", {
     apiUrl: controlPlaneApi.apiEndpoint,
     cognitoDomain: pulumi.interpolate`https://${userPoolDomain.domain}.auth.${aws.getRegionOutput().name}.amazoncognito.com`,
     cognitoClientId: userPoolClient.id,
+    defaultDatasetId,
   }),
   contentType: "application/json; charset=utf-8",
   cacheControl: "no-cache, no-store, must-revalidate",

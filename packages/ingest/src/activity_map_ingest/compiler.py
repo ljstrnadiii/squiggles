@@ -6,7 +6,10 @@ import json
 import math
 import shutil
 import tempfile
+import time
 import zipfile
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -45,6 +48,7 @@ class CompileOptions:
     max_rejection_rate: float | None = None
     target_shard_rows: int = 512
     row_group_rows: int = 128
+    progress_callback: Callable[[int, int], None] | None = None
 
 
 class ActivitySourceAdapter(Protocol):
@@ -253,7 +257,18 @@ def _activity_family(sport_type: str) -> str:
     )
 
 
-def _process_batch(batch: pa.Table) -> Table[ProcessingSchema]:
+class _ProgressCounter:
+    def __init__(self) -> None:
+        self.completed = 0
+
+    def advance(self, count: int) -> None:
+        self.completed += count
+
+    def value(self) -> int:
+        return self.completed
+
+
+def _process_batch(batch: pa.Table, progress: Any = None) -> Table[ProcessingSchema]:
     output: list[dict[str, Any]] = []
     for source in batch.to_pylist():
         try:
@@ -275,6 +290,8 @@ def _process_batch(batch: pa.Table) -> Table[ProcessingSchema]:
                     )
                 }
             )
+    if progress is not None:
+        progress.advance.remote(batch.num_rows)
     return cast(Table[ProcessingSchema], pa.Table.from_pylist(output, schema=_processing_schema()))
 
 
@@ -518,11 +535,28 @@ def compile_source(options: CompileOptions, adapter: ActivitySourceAdapter) -> d
             _skip_env_hook=True,
         )
         try:
-            batches = (
-                ray.data.from_items(records)
-                .map_batches(_process_batch, batch_size=options.batch_size, batch_format="pyarrow")
-                .materialize()
+            progress: Any = (
+                ray.remote(num_cpus=0)(_ProgressCounter).remote()
+                if options.progress_callback
+                else None
             )
+            pending = ray.data.from_items(records).map_batches(
+                _process_batch,
+                batch_size=options.batch_size,
+                batch_format="pyarrow",
+                fn_kwargs={"progress": progress},
+            )
+            if options.progress_callback and progress is not None:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    materialized = executor.submit(pending.materialize)
+                    while not materialized.done():
+                        completed = cast(int, ray.get(progress.value.remote()))
+                        options.progress_callback(completed, len(records))
+                        time.sleep(5)
+                    batches = materialized.result()
+                options.progress_callback(len(records), len(records))
+            else:
+                batches = pending.materialize()
             accepted = batches.map_batches(_accepted_batch, batch_format="pyarrow")
             activity_count = accepted.count()
             if activity_count:
