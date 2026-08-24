@@ -14,7 +14,7 @@ import { defaultTab, ELECTRIC_BLUE, loadTabs, normalizeRouteColor, saveTabs } fr
 import { loadTheme, saveTheme } from "./theme";
 import { distanceUnit, distanceValue, elevationUnit, elevationValue, loadUnits, saveUnits } from "./units";
 import { AccountPanel } from "./AccountPanel";
-import { beginGoogleLogin, identityFromSession, loadRuntimeConfig, loadSession } from "./auth";
+import { identityFromSession, loadSession } from "./auth";
 
 const blankStyle: maplibregl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
 const rasterStyles: Record<Exclude<Basemap, "blank">, { tiles: string[]; attribution: string; maxzoom: number }> = {
@@ -212,6 +212,8 @@ export function App() {
   const [systemSettingsOpen, setSystemSettingsOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(() => window.location.pathname === "/auth/callback");
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [logoMenuOpen, setLogoMenuOpen] = useState(false);
+  const [accountView, setAccountView] = useState<"account" | "upload" | "login">("account");
   const [sessionIdentity, setSessionIdentity] = useState(() => identityFromSession(loadSession()));
   const [tableLoading, setTableLoading] = useState(false);
   const [viewportScope, setViewportScope] = useState(false);
@@ -545,21 +547,23 @@ export function App() {
 
   return <main className="app" onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void run(); }}>
     <header className="topbar">
-      <div className="brand"><button className={`brand-button ${aboutOpen ? "active" : ""}`} aria-label="About this project" data-tooltip="About this project" onClick={() => { setAboutOpen(open => !open); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setToolbarOpen(false); setSelected(null); setProfileHover(null); setIsolateSelected(false); }}><img src={logoUrl} alt="Squiggles" /></button></div>
-      <button className="mobile-query-title" aria-label={menuOpen ? "Close query menu" : "Open query menu"} aria-expanded={menuOpen} onClick={() => { setMenuOpen(open => !open); setAccountMenuOpen(false); setSystemSettingsOpen(false); }}>{tab.title}</button>
+      <div className="brand"><button className={`brand-button ${logoMenuOpen ? "active" : ""}`} aria-label="Open Squiggles menu" data-tooltip="Squiggles menu" aria-expanded={logoMenuOpen} onClick={() => { setLogoMenuOpen(open => !open); setMenuOpen(false); setAccountMenuOpen(false); }}><img src={logoUrl} alt="Squiggles" /></button></div>
+      <button className="mobile-query-title" aria-label={menuOpen ? "Close query menu" : "Open query menu"} aria-expanded={menuOpen} onClick={() => { setMenuOpen(open => !open); setLogoMenuOpen(false); setAccountMenuOpen(false); setSystemSettingsOpen(false); }}>{tab.title}</button>
       <div className={`status ${busy ? "working" : ""}`} role="status" aria-label={status}><span /></div>
-      <button className="avatar-button" aria-label={sessionIdentity.email ? "Open account menu" : "Login"} aria-expanded={accountMenuOpen} onClick={() => { setAccountMenuOpen(open => !open); setMenuOpen(false); }}>{sessionIdentity.picture ? <img src={sessionIdentity.picture} alt="" referrerPolicy="no-referrer" /> : sessionIdentity.email ? <span>{(sessionIdentity.name || sessionIdentity.email).slice(0, 1).toUpperCase()}</span> : "Login"}</button>
+      {sessionIdentity.email ? <button className="avatar-button" aria-label="Open account menu" aria-expanded={accountMenuOpen} onClick={() => { setAccountMenuOpen(open => !open); setMenuOpen(false); setLogoMenuOpen(false); }}>{sessionIdentity.picture ? <img src={sessionIdentity.picture} alt="" referrerPolicy="no-referrer" /> : <span>{(sessionIdentity.name || sessionIdentity.email).slice(0, 1).toUpperCase()}</span>}</button> : <button className="login-button" onClick={() => { setAccountView("login"); setAccountOpen(true); setLogoMenuOpen(false); setMenuOpen(false); }}>Log in</button>}
     </header>
+
+    {logoMenuOpen && <nav className="logo-menu utility-panel" aria-label="Squiggles navigation"><button onClick={() => { setAboutOpen(true); setLogoMenuOpen(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setToolbarOpen(false); }}>About</button><button disabled={busy} onClick={() => { void openDirectory(); setLogoMenuOpen(false); }}>◫ {datasetName ? `Change dataset · ${datasetName}` : "Open dataset"}</button><button onClick={() => { setSchemaOpen(true); setLogoMenuOpen(false); }}>AI Skills</button><button onClick={() => { openSystemSettings(); setLogoMenuOpen(false); }}>⚙ System settings</button></nav>}
 
     {menuOpen && <nav className="mobile-menu utility-panel" aria-label="Query navigation">
       <section><span className="eyebrow">SAVED QUERIES</span>{tabs.map(item => <button className={item.id === tab.id ? "active" : ""} key={item.id} onClick={() => { choose(item); setMenuOpen(false); }}>{item.title}</button>)}<button onClick={() => { add(); setMenuOpen(false); }}>＋ New query</button></section>
       <section><button onClick={() => { choose(tab, true); setMenuOpen(false); }}>⌘ Query settings</button><button disabled={!selectionReady.current} onClick={() => { toggleStats(); setMenuOpen(false); }}>▥ Statistics</button><button disabled={!selectionReady.current || tableLoading} onClick={() => { void toggleTable(); setMenuOpen(false); }}>▤ Table</button><button disabled={!selectionReady.current} onClick={() => { setRenderingOpen(true); setStatsOpen(false); setTableOpen(false); setAboutOpen(false); setToolbarOpen(false); setSchemaOpen(false); setMenuOpen(false); setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>≋ Rendering</button></section>
     </nav>}
 
-    {accountMenuOpen && <nav className="account-menu utility-panel" aria-label="Account navigation"><button disabled={busy} onClick={() => { void openDirectory(); setAccountMenuOpen(false); }}>◫ {datasetName ? `Change dataset · ${datasetName}` : "Open dataset"}</button><button onClick={() => { void copyTabLink(); setAccountMenuOpen(false); }}>↗ Publish link</button><button onClick={() => { setSchemaOpen(true); setAccountMenuOpen(false); }}>AI Skills</button><button onClick={() => { openSystemSettings(); setAccountMenuOpen(false); }}>⚙ System settings</button>{sessionIdentity.email ? <button onClick={() => { setAccountOpen(true); setAccountMenuOpen(false); }}>◎ Account &amp; upload</button> : <button onClick={() => { void loadRuntimeConfig().then(config => config && beginGoogleLogin(config)); }}>Continue with Google</button>}</nav>}
+    {accountMenuOpen && <nav className="account-menu utility-panel" aria-label="Account navigation"><button onClick={() => { setAccountView("account"); setAccountOpen(true); setAccountMenuOpen(false); }}>Account</button><button onClick={() => { setAccountView("upload"); setAccountOpen(true); setAccountMenuOpen(false); }}>Upload Archive</button><button onClick={() => { void copyTabLink(); setAccountMenuOpen(false); }}>↗ Publish link</button></nav>}
 
     {systemSettingsOpen && <section className="system-settings utility-panel" aria-label="System settings"><header><div><span className="eyebrow">SYSTEM</span><strong>Appearance and units</strong></div><button aria-label="Close system settings" onClick={() => setSystemSettingsOpen(false)}>×</button></header><div><label>Theme</label><div className="theme-control" role="group" aria-label="Theme"><button aria-label="Use light theme" aria-pressed={themeMode === "light"} title="Light theme" onClick={() => changeTheme("light")}>☀︎</button><button aria-label="Use system theme" aria-pressed={themeMode === "system"} title="Follow system theme" onClick={() => changeTheme("system")}>◐</button><button aria-label="Use dark theme" aria-pressed={themeMode === "dark"} title="Dark theme" onClick={() => changeTheme("dark")}>☾</button></div></div><div><label>Distance and elevation</label><div className="unit-control" role="group" aria-label="Units"><button aria-label="Use imperial units" aria-pressed={units === "imperial"} title="Show miles and feet" onClick={() => changeUnits("imperial")}>mi</button><button aria-label="Use metric units" aria-pressed={units === "metric"} title="Show kilometres and metres" onClick={() => changeUnits("metric")}>km</button></div></div></section>}
-    {accountOpen && <AccountPanel onClose={() => setAccountOpen(false)} onIdentityChange={refreshIdentity} />}
+    {accountOpen && <AccountPanel view={accountView} onClose={() => setAccountOpen(false)} onIdentityChange={refreshIdentity} />}
 
     {schemaOpen && <section className="schema-panel utility-panel" aria-label="AI Skills"><header><strong>AI Skills · Squiggles SQL</strong><div><button onClick={() => void copySchema()}>{schemaCopied ? "Copied" : "Copy for your AI"}</button><button aria-label="Close AI Skills" onClick={() => setSchemaOpen(false)}>×</button></div></header><p>Paste this into the AI assistant of your choice, then describe the activities you want to select.</p><pre>{QUERY_SCHEMA}</pre></section>}
 

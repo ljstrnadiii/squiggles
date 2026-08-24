@@ -18,7 +18,9 @@ Verified completion submits the immutable image for that deployment to AWS Batch
 
 The account drawer exposes an explicitly confirmed **Delete account** action. The control plane first terminates known ingestion jobs, deletes owner-scoped quarantine objects and every curated dataset referenced by the user's metadata partition, removes that partition, and finally removes the Cognito identity. The browser clears its session only after the API succeeds. S3 versioning is not enabled on either user-data bucket, so deleted user objects are not retained as hidden versions.
 
-The avatar menu separates account/application actions from the query selector. **Publish link** currently copies the existing local view URL; durable server-side publication and synced tabs remain unresolved until the saved-metadata stage.
+The logo menu owns general application actions: About, local dataset selection, AI Skills, and system settings. Signed-out users see a rectangular **Log in** action whose drawer explains archive compilation, cross-device maps, stable publication, and view counts before offering **Log in with Google**. Signed-in users see their Google avatar; its menu contains only Account, Upload Archive, and Publish link. **Publish link** currently copies the existing local view URL; durable server-side publication and synced tabs remain unresolved until the saved-metadata stage.
+
+The account response aggregates only the caller's metadata partition. It reports filtered source-upload bytes, compiled activity count, published-map count, and accumulated view count. Published counts are zero until immutable share records and their authorization-safe view event are implemented; the UI does not imply that the current local URL is tracked.
 
 Content views use one responsive drawer convention: fixed-width right-side drawers on desktop and fixed-height bottom sheets on mobile. Query and avatar selectors remain compact menus. Panel-size sliders and their local-storage state were removed in favor of stable defaults so the same action has a predictable layout across sessions.
 
