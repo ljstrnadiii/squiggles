@@ -50,11 +50,21 @@ export async function uploadArchive(config: RuntimeConfig, session: AuthSession,
       if (!signed.ok) throw new Error(`Could not authorize upload part ${partNumber}.`);
       const uploadUrl = (await signed.json() as { uploadUrl: string }).uploadUrl;
       let succeeded = false;
+      let failure = "network error";
       for (let attempt = 0; attempt < 3 && !succeeded; attempt++) {
-        const result = await fetch(uploadUrl, { method: "PUT", headers: { "x-amz-checksum-sha256": checksumSha256 }, body: part });
-        succeeded = result.ok;
+        if (attempt) await new Promise(resolve => window.setTimeout(resolve, attempt * 1000));
+        try {
+          const result = await fetch(uploadUrl, { method: "PUT", headers: { "x-amz-checksum-sha256": checksumSha256 }, body: part });
+          succeeded = result.ok;
+          if (!result.ok) {
+            const detail = (await result.text()).match(/<Code>([^<]+)<\/Code>/)?.[1];
+            failure = `${result.status}${detail ? ` ${detail}` : ""}`;
+          }
+        } catch (reason) {
+          failure = reason instanceof Error ? reason.message : "network error";
+        }
       }
-      if (!succeeded) throw new Error(`Part ${partNumber} failed after three attempts. Reselect this ZIP to resume.`);
+      if (!succeeded) throw new Error(`Part ${partNumber} could not upload (${failure}). Check your connection, then select this ZIP again to resume.`);
     }
     uploaded += part.size; progress(uploaded / archive.size);
   }
