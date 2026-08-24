@@ -520,7 +520,7 @@ const deployPolicy = aws.iam.getPolicyDocumentOutput({ statements: [
   {
     sid: "EmailIdentities",
     effect: "Allow",
-    actions: ["ses:CreateEmailIdentity", "ses:DeleteEmailIdentity", "ses:GetEmailIdentity"],
+    actions: ["ses:CreateEmailIdentity", "ses:DeleteEmailIdentity", "ses:GetEmailIdentity", "ses:ListTagsForResource"],
     resources: ["*"],
   },
   {
