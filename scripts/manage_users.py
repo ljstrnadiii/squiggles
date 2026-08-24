@@ -65,16 +65,39 @@ def pending_users(table: str, profile: str) -> list[dict[str, Any]]:
     return result.get("Items", [])
 
 
-def list_pending(table: str, profile: str) -> None:
+def cognito_identities(pool: str, profile: str) -> dict[str, dict[str, str]]:
+    identities: dict[str, dict[str, str]] = {}
+    token: str | None = None
+    while True:
+        arguments = ["cognito-idp", "list-users", "--user-pool-id", pool, "--limit", "60"]
+        if token:
+            arguments += ["--pagination-token", token]
+        result = aws(arguments, profile)
+        for user in result.get("Users", []):
+            attributes = {item["Name"]: item["Value"] for item in user.get("Attributes", [])}
+            if subject := attributes.get("sub"):
+                identities[subject] = attributes
+        token = result.get("PaginationToken")
+        if not token:
+            return identities
+
+
+def list_pending(table: str, pool: str, profile: str) -> None:
     items = pending_users(table, profile)
     if not items:
         print("No pending users.")
         return
+    identities = cognito_identities(pool, profile)
+    print("SUBJECT\tEMAIL\tVERIFIED\tNAME\tCREATED")
     for item in items:
         subject = item["PK"]["S"].removeprefix("USER#")
+        identity = identities.get(subject, {})
         fields = [
             subject,
-            *(item.get(name, {}).get("S", "") for name in ("email", "name", "createdAt")),
+            identity.get("email", ""),
+            identity.get("email_verified", "false"),
+            identity.get("name", ""),
+            item.get("createdAt", {}).get("S", ""),
         ]
         print("\t".join(fields))
 
@@ -189,7 +212,7 @@ def main() -> None:
     args = parser().parse_args()
     table, pool = resources(args)
     if args.command == "list":
-        list_pending(table, args.profile)
+        list_pending(table, pool, args.profile)
     elif args.command == "approve":
         approve(args.subject, table, args.profile)
     elif args.command == "remove":
