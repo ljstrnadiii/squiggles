@@ -69,3 +69,9 @@ export async function getProfile(config: RuntimeConfig, session: AuthSession): P
   if (!response.ok) throw new Error(response.status === 401 ? "Your session expired. Please sign in again." : "Could not load your account.");
   return response.json() as Promise<UserProfile>;
 }
+
+export async function deleteAccount(config: RuntimeConfig, session: AuthSession): Promise<void> {
+  const response = await fetch(`${config.apiUrl}/api/me`, { method: "DELETE", headers: { authorization: `Bearer ${session.accessToken}` } });
+  if (!response.ok) throw new Error("Could not delete your account and data.");
+  clearSession();
+}

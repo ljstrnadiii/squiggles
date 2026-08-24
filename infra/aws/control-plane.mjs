@@ -1,7 +1,7 @@
-import { AdminGetUserCommand, CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
-import { BatchClient, SubmitJobCommand } from "@aws-sdk/client-batch";
-import { DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
-import { CompleteMultipartUploadCommand, CreateMultipartUploadCommand, HeadObjectCommand, ListPartsCommand, S3Client, UploadPartCommand } from "@aws-sdk/client-s3";
+import { AdminDeleteUserCommand, AdminGetUserCommand, CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
+import { BatchClient, SubmitJobCommand, TerminateJobCommand } from "@aws-sdk/client-batch";
+import { BatchWriteItemCommand, DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, DeleteObjectsCommand, HeadObjectCommand, ListObjectsV2Command, ListPartsCommand, S3Client, UploadPartCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { randomUUID } from "node:crypto";
 
@@ -22,6 +22,15 @@ function response(statusCode, body) {
     headers: { "content-type": "application/json", "cache-control": "no-store" },
     body: JSON.stringify(body),
   };
+}
+
+async function deletePrefix(bucket, prefix) {
+  let token;
+  do {
+    const listed = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token }));
+    if (listed.Contents?.length) await s3.send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: listed.Contents.map(item => ({ Key: item.Key })) } }));
+    token = listed.NextContinuationToken;
+  } while (token);
 }
 
 export async function handler(event) {
@@ -76,6 +85,27 @@ export async function handler(event) {
 
   const current = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: key, ConsistentRead: true }))).Item;
   const route = event.routeKey;
+  if (route === "DELETE /api/me") {
+    const records = [];
+    let cursor;
+    do {
+      const page = await dynamo.send(new QueryCommand({ TableName: tableName, KeyConditionExpression: "PK = :pk", ExpressionAttributeValues: { ":pk": key.PK }, ExclusiveStartKey: cursor }));
+      records.push(...(page.Items ?? [])); cursor = page.LastEvaluatedKey;
+    } while (cursor);
+    await Promise.all(records.filter(item => item.batchJobId?.S).map(item => batch.send(new TerminateJobCommand({ jobId: item.batchJobId.S, reason: "Squiggles account deleted" })).catch(() => undefined)));
+    await Promise.all(records.filter(item => item.multipartUploadId?.S && item.objectKey?.S).map(item => s3.send(new AbortMultipartUploadCommand({ Bucket: uploadBucket, Key: item.objectKey.S, UploadId: item.multipartUploadId.S })).catch(() => undefined)));
+    await Promise.all([deletePrefix(uploadBucket, `users/${subject}/`), ...records.filter(item => item.SK?.S?.startsWith("DATASET#")).map(item => deletePrefix(dataBucket, `datasets/${item.SK.S.slice(8)}/`))]);
+    for (let offset = 0; offset < records.length; offset += 25) {
+      let requests = records.slice(offset, offset + 25).map(item => ({ DeleteRequest: { Key: { PK: item.PK, SK: item.SK } } }));
+      for (let attempt = 0; requests.length && attempt < 5; attempt += 1) {
+        const written = await dynamo.send(new BatchWriteItemCommand({ RequestItems: { [tableName]: requests } }));
+        requests = written.UnprocessedItems?.[tableName] ?? [];
+      }
+      if (requests.length) throw new Error("account metadata deletion incomplete");
+    }
+    await cognito.send(new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: username }));
+    return response(204, {});
+  }
   if (route === "POST /api/uploads") {
     if (current?.status?.S !== "approved") return response(403, { error: "approval_required" });
     const body = JSON.parse(event.body ?? "{}");
