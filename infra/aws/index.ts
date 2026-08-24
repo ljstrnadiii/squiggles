@@ -20,11 +20,24 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const webDist = path.join(projectRoot, "apps/web/dist");
 if (!fs.existsSync(path.join(webDist, "index.html"))) throw new Error("apps/web/dist is missing; run `pnpm build` from the repository root");
 const tags = { Project: "squiggles", ManagedBy: "pulumi", Environment: pulumi.getStack() };
+const notificationEmail = `notifications@${domainName}`;
 const ingestRepository = new aws.ecr.Repository("ingest", { name: "squiggles-ingest", imageScanningConfiguration: { scanOnPush: true }, imageTagMutability: "IMMUTABLE", tags }, { import: "squiggles-ingest", protect: protectData });
 new aws.ecr.LifecyclePolicy("ingest", { repository: ingestRepository.name, policy: JSON.stringify({ rules: [{ rulePriority: 1, description: "Keep five ingest images", selection: { tagStatus: "any", countType: "imageCountMoreThan", countNumber: 5 }, action: { type: "expire" } }] }) }, { protect: protectData });
 
 const eastRegion = new aws.Provider("us-east-1", { region: "us-east-1" });
 const hostedZone = aws.route53.getZoneOutput({ name: domainName, privateZone: false });
+const emailIdentity = new aws.sesv2.EmailIdentity("notifications", { emailIdentity: domainName, tags }, { protect: protectData });
+for (let index = 0; index < 3; index += 1) {
+  const token = emailIdentity.dkimSigningAttributes.apply(attributes => attributes.tokens[index]);
+  new aws.route53.Record(`notifications-dkim-${index}`, {
+    zoneId: hostedZone.zoneId,
+    name: pulumi.interpolate`${token}._domainkey.${domainName}`,
+    type: "CNAME",
+    records: [pulumi.interpolate`${token}.dkim.amazonses.com`],
+    ttl: 300,
+  });
+}
+if (budgetEmail) new aws.sesv2.EmailIdentity("notification-test-recipient", { emailIdentity: budgetEmail, tags }, { protect: protectData });
 const certificate = new aws.acm.Certificate("application", {
   domainName,
   validationMethod: "DNS",
@@ -160,7 +173,8 @@ const ingestTaskRole = new aws.iam.Role("ingest-task", { assumeRolePolicy: aws.i
 new aws.iam.RolePolicy("ingest-task", { role: ingestTaskRole.id, policy: aws.iam.getPolicyDocumentOutput({ statements: [
   { effect: "Allow", actions: ["s3:GetObject"], resources: [pulumi.interpolate`${uploadBucket.arn}/users/*`] },
   { effect: "Allow", actions: ["s3:PutObject"], resources: [pulumi.interpolate`${ingestedBucket.arn}/datasets/*`] },
-  { effect: "Allow", actions: ["dynamodb:UpdateItem", "dynamodb:PutItem"], resources: [metadataTable.arn] },
+  { effect: "Allow", actions: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"], resources: [metadataTable.arn] },
+  { effect: "Allow", actions: ["ses:SendEmail"], resources: [emailIdentity.arn] },
 ] }).json });
 const ingestLogs = new aws.cloudwatch.LogGroup("ingest", { retentionInDays: 14, tags });
 const defaultVpc = aws.ec2.getVpcOutput({ default: true });
@@ -168,7 +182,7 @@ const defaultSubnets = aws.ec2.getSubnetsOutput({ filters: [{ name: "vpc-id", va
 const ingestSecurityGroup = new aws.ec2.SecurityGroup("ingest", { vpcId: defaultVpc.id, ingress: [], egress: [{ protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] }], tags });
 const ingestCompute = new aws.batch.ComputeEnvironment("ingest", { type: "MANAGED", serviceRole: batchServiceRole.arn, computeResources: { type: "FARGATE", maxVcpus: 8, subnets: defaultSubnets.ids, securityGroupIds: [ingestSecurityGroup.id] }, tags });
 const ingestQueue = new aws.batch.JobQueue("ingest", { state: "ENABLED", priority: 1, computeEnvironmentOrders: [{ order: 1, computeEnvironment: ingestCompute.arn }], tags });
-const ingestDefinition = new aws.batch.JobDefinition("ingest", { type: "container", platformCapabilities: ["FARGATE"], retryStrategy: { attempts: 1 }, timeout: { attemptDurationSeconds: 14400 }, containerProperties: pulumi.jsonStringify({ image: ingestImage, executionRoleArn: taskExecutionRole.arn, jobRoleArn: ingestTaskRole.arn, resourceRequirements: [{ type: "VCPU", value: "8" }, { type: "MEMORY", value: "16384" }], ephemeralStorage: { sizeInGiB: 40 }, networkConfiguration: { assignPublicIp: "ENABLED" }, logConfiguration: { logDriver: "awslogs", options: { "awslogs-group": ingestLogs.name, "awslogs-region": aws.getRegionOutput().name, "awslogs-stream-prefix": "job" } } }), tags });
+const ingestDefinition = new aws.batch.JobDefinition("ingest", { type: "container", platformCapabilities: ["FARGATE"], retryStrategy: { attempts: 1 }, timeout: { attemptDurationSeconds: 14400 }, containerProperties: pulumi.jsonStringify({ image: ingestImage, executionRoleArn: taskExecutionRole.arn, jobRoleArn: ingestTaskRole.arn, environment: [{ name: "FROM_EMAIL", value: notificationEmail }], resourceRequirements: [{ type: "VCPU", value: "8" }, { type: "MEMORY", value: "16384" }], ephemeralStorage: { sizeInGiB: 40 }, networkConfiguration: { assignPublicIp: "ENABLED" }, logConfiguration: { logDriver: "awslogs", options: { "awslogs-group": ingestLogs.name, "awslogs-region": aws.getRegionOutput().name, "awslogs-stream-prefix": "job" } } }), tags });
 
 const controlPlaneRole = new aws.iam.Role("control-plane-api", {
   assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({ Service: "lambda.amazonaws.com" }),

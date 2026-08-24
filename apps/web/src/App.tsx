@@ -323,12 +323,12 @@ export function App() {
     } finally { setBusy(false); }
   }
 
-  async function openSource(source: DatasetSource, preserveUrlCamera = false, initialTab = tab) {
+  async function openSource(source: DatasetSource, requestedView?: MapState, initialTab = tab) {
     try {
       setBusy(true); setError(""); setStatus("Reading dataset manifest…");
       const dataset = await engine.openDataset(source, (completed, total) => setStatus(`Opening dataset · ${completed.toLocaleString()} / ${total.toLocaleString()} shards`));
       ready.current = true; setDatasetName(dataset.name);
-      const initialView = preserveUrlCamera && initialUrlCamera.current ? view : fitBounds(dataset.manifest.bbox);
+      const initialView = requestedView ?? fitBounds(dataset.manifest.bbox);
       setView(initialView);
       setStatus("Running initial query…"); await run(initialTab, initialView, initialTab.sql);
     } catch (reason) {
@@ -371,7 +371,7 @@ export function App() {
           setTabs(saved.tabs); setActive(selected.id); setDraft(selected.sql); setView(selected.mapState);
           if (saved.datasetId) {
             const hostedDatasetRoot = (import.meta.env.VITE_DATASET_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/datasets";
-            await openSource({ kind: "url", baseUrl: `${hostedDatasetRoot}/${saved.datasetId}`, name: saved.datasetId }, true, selected);
+            await openSource({ kind: "url", baseUrl: `${hostedDatasetRoot}/${saved.datasetId}`, name: saved.datasetId }, selected.mapState, selected);
           } else setStatus("Published map settings loaded");
         } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
       })();
@@ -381,7 +381,7 @@ export function App() {
     const source = shared
       ? { kind: "url" as const, baseUrl: `${hostedDatasetRoot}/${shared}`, name: shared }
       : { kind: "url" as const, baseUrl: `/local-data/${local!}`, name: local! };
-    void openSource(source, true);
+    void openSource(source, initialUrlCamera.current ? view : undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
