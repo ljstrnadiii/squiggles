@@ -143,7 +143,11 @@ export async function handler(event) {
     if (!/^[0-9a-f-]{36}$/.test(id ?? "") || !Number.isInteger(body.partNumber) || body.partNumber < 1 || body.partNumber > 10000 || !/^[A-Za-z0-9+/]{43}=$/.test(body.checksumSha256 ?? "")) return response(400, { error: "invalid_part" });
     const upload = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { PK: key.PK, SK: { S: `UPLOAD#${id}` } }, ConsistentRead: true }))).Item;
     if (!upload || upload.status?.S !== "uploading") return response(409, { error: "upload_not_ready" });
-    const uploadUrl = await getSignedUrl(s3, new UploadPartCommand({ Bucket: uploadBucket, Key: upload.objectKey.S, UploadId: upload.multipartUploadId.S, PartNumber: body.partNumber, ChecksumSHA256: body.checksumSha256 }), { expiresIn: 900 });
+    const uploadUrl = await getSignedUrl(
+      s3,
+      new UploadPartCommand({ Bucket: uploadBucket, Key: upload.objectKey.S, UploadId: upload.multipartUploadId.S, PartNumber: body.partNumber, ChecksumSHA256: body.checksumSha256 }),
+      { expiresIn: 900, unhoistableHeaders: new Set(["x-amz-checksum-sha256"]) },
+    );
     return response(200, { uploadUrl });
   }
   if (route === "GET /api/uploads/{id}/parts") {
