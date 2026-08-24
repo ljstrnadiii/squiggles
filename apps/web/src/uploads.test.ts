@@ -10,7 +10,7 @@ beforeAll(() => {
 async function archive(entries: Record<string, string>) {
   const writer = new ZipWriter(new BlobWriter("application/zip"));
   for (const [name, contents] of Object.entries(entries)) await writer.add(name, new TextReader(contents));
-  return new File([await writer.close()], "export.zip", { type: "application/zip" });
+  return writer.close();
 }
 
 describe("Strava upload filtering", () => {

@@ -4,7 +4,7 @@ import type { AuthSession, RuntimeConfig } from "./auth";
 export type UploadRecord = { id: string; filename: string; byteSize: number; status: string; createdAt: string };
 const auth = (session: AuthSession) => ({ authorization: `Bearer ${session.accessToken}` });
 
-export async function filterStravaArchive(file: File): Promise<Blob> {
+export async function filterStravaArchive(file: Blob): Promise<Blob> {
   const reader = new ZipReader(new BlobReader(file));
   const entries = await reader.getEntries();
   const selected = entries.filter(entry => entry.filename === "activities.csv" || entry.filename.startsWith("activities/"));
