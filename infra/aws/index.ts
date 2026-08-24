@@ -26,7 +26,7 @@ new aws.ecr.LifecyclePolicy("ingest", { repository: ingestRepository.name, polic
 
 const eastRegion = new aws.Provider("us-east-1", { region: "us-east-1" });
 const hostedZone = aws.route53.getZoneOutput({ name: domainName, privateZone: false });
-const emailIdentity = new aws.sesv2.EmailIdentity("notifications", { emailIdentity: domainName, tags }, { protect: protectData });
+const emailIdentity = new aws.sesv2.EmailIdentity("notifications", { emailIdentity: domainName }, { protect: protectData });
 for (let index = 0; index < 3; index += 1) {
   const token = emailIdentity.dkimSigningAttributes.apply(attributes => attributes.tokens[index]);
   new aws.route53.Record(`notifications-dkim-${index}`, {
@@ -37,7 +37,7 @@ for (let index = 0; index < 3; index += 1) {
     ttl: 300,
   });
 }
-if (budgetEmail) new aws.sesv2.EmailIdentity("notification-test-recipient", { emailIdentity: budgetEmail, tags }, { protect: protectData });
+if (budgetEmail) new aws.sesv2.EmailIdentity("notification-test-recipient", { emailIdentity: budgetEmail }, { protect: protectData });
 const certificate = new aws.acm.Certificate("application", {
   domainName,
   validationMethod: "DNS",
