@@ -160,6 +160,8 @@ export async function handler(event) {
     const result = await dynamo.send(new QueryCommand({ TableName: tableName, KeyConditionExpression: "PK = :pk AND begins_with(SK, :upload)", ExpressionAttributeValues: { ":pk": key.PK, ":upload": { S: "UPLOAD#" } }, ScanIndexForward: false }));
     return response(200, { uploads: (result.Items ?? []).map(item => ({ id: item.SK.S.slice(7), filename: item.filename.S, byteSize: Number(item.byteSize.N), status: item.status.S, statusDetail: item.statusDetail?.S ?? "", createdAt: item.createdAt.S })) });
   }
+  const accountRecords = await dynamo.send(new QueryCommand({ TableName: tableName, KeyConditionExpression: "PK = :pk", ExpressionAttributeValues: { ":pk": key.PK } }));
+  const records = accountRecords.Items ?? [];
   return response(200, {
     subject,
     email: current?.email?.S ?? verifiedEmail,
@@ -167,5 +169,11 @@ export async function handler(event) {
     picture: current?.picture?.S ?? verifiedPicture,
     status: current?.status?.S ?? "pending",
     role: current?.role?.S ?? "user",
+    stats: {
+      uploadedBytes: records.filter(item => item.entityType?.S === "upload").reduce((total, item) => total + Number(item.byteSize?.N ?? 0), 0),
+      activityCount: records.filter(item => item.entityType?.S === "dataset").reduce((total, item) => total + Number(item.activityCount?.N ?? 0), 0),
+      publishedViews: records.filter(item => item.entityType?.S === "share").reduce((total, item) => total + Number(item.viewCount?.N ?? 0), 0),
+      publishedMaps: records.filter(item => item.entityType?.S === "share").length,
+    },
   });
 }

@@ -198,7 +198,9 @@ button:disabled {
   font-weight: 750;
 }
 .avatar-button img { width: 100%; height: 100%; object-fit: cover; }
-.account-menu {
+.login-button { margin-left: auto; flex: none; padding: .42rem .72rem; background: transparent; color: var(--text); border-color: var(--line); font-size: 11px; font-weight: 700; }
+.account-menu,
+.logo-menu {
   position: fixed;
   z-index: 15;
   top: 48px;
@@ -212,7 +214,9 @@ button:disabled {
   border-radius: 10px;
   box-shadow: 0 18px 55px var(--shadow);
 }
-.account-menu button { text-align: left; background: transparent; border-color: transparent; }
+.logo-menu { left: 10px; right: auto; }
+.account-menu button,
+.logo-menu button { text-align: left; background: transparent; border-color: transparent; }
 .status > span {
   width: 6px;
   height: 6px;
@@ -1383,6 +1387,10 @@ button:disabled {
 .account-upload { display: grid; gap: .75rem; border-top: 1px solid var(--border); padding-top: 1rem; }
 .account-upload h3 { margin: 0; }
 .account-upload input { display: none; }
+.account-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px !important; padding: 1px !important; overflow: hidden; border: 1px solid var(--line-soft) !important; border-radius: 10px; background: var(--line-soft); }
+.account-stats > div { min-width: 0; display: grid !important; gap: .2rem !important; align-content: center; justify-content: start !important; padding: 1rem !important; border: 0 !important; background: var(--input); }
+.account-stats strong { font-size: 1.25rem; }
+.account-stats span { color: var(--muted); font-size: .7rem; }
 .archive-dropzone { min-height: 120px; display: grid; place-content: center; gap: .25rem; text-align: center; cursor: pointer; border: 1px dashed var(--muted); border-radius: 10px; background: var(--input); }
 .archive-dropzone span { color: var(--muted); font-size: .8rem; text-transform: none; letter-spacing: 0; }
 .archive-dropzone.uploading { cursor: wait; opacity: .75; }

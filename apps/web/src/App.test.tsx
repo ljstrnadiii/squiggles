@@ -25,7 +25,7 @@ import { App } from "./App";
 
 describe("App", () => {
   function openQueryMenu() { fireEvent.click(screen.getByRole("button", { name: "Open query menu" })); }
-  function openAccountMenu() { fireEvent.click(screen.getByRole("button", { name: "Login" })); }
+  function openLogoMenu() { fireEvent.click(screen.getByRole("button", { name: "Open Squiggles menu" })); }
   function openQuerySettings() { openQueryMenu(); fireEvent.click(screen.getByRole("button", { name: "⌘ Query settings" })); }
 
   it("renders the product name", async () => {
@@ -33,14 +33,16 @@ describe("App", () => {
     render(<App />);
     expect(screen.getByRole("img", { name: "Squiggles" })).toBeInTheDocument();
     expect(screen.queryByText("Every route. One map.")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "About this project" })).toHaveAttribute("data-tooltip", "About this project");
-    fireEvent.click(screen.getByRole("button", { name: "About this project" }));
+    expect(screen.getByRole("button", { name: "Open Squiggles menu" })).toHaveAttribute("data-tooltip", "Squiggles menu");
+    expect(screen.getByRole("button", { name: "Log in" })).toHaveClass("login-button");
+    openLogoMenu();
+    fireEvent.click(screen.getByRole("button", { name: "About" }));
     expect(screen.getByRole("region", { name: "About this project" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Squiggles on GitHub" })).toHaveAttribute("href", "https://github.com/ljstrnadiii/squiggles");
     fireEvent.click(screen.getByRole("button", { name: "Close about this project" }));
     expect(screen.queryByRole("textbox", { name: "SQL query" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Toggle query toolbar" })).not.toBeInTheDocument();
-    openAccountMenu();
+    openLogoMenu();
     fireEvent.click(screen.getByRole("button", { name: "⚙ System settings" }));
     expect(screen.getByRole("region", { name: "System settings" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Use imperial units" })).toHaveAttribute("aria-pressed", "true");
@@ -85,8 +87,8 @@ describe("App", () => {
     window.history.replaceState({}, "", "/");
     render(<App />);
     expect(screen.queryByRole("button", { name: "Open navigation menu" })).not.toBeInTheDocument();
-    openAccountMenu();
-    expect(screen.getByRole("navigation", { name: "Account navigation" })).toBeInTheDocument();
+    openLogoMenu();
+    expect(screen.getByRole("navigation", { name: "Squiggles navigation" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "⚙ System settings" }));
     expect(screen.getByRole("region", { name: "System settings" })).toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Query navigation" })).not.toBeInTheDocument();
@@ -97,7 +99,7 @@ describe("App", () => {
     window.history.replaceState({}, "", `/m/${datasetId}`);
     render(<App />);
     expect(await screen.findByRole("status", { name: "1 routes selected" })).toBeInTheDocument();
-    openAccountMenu();
+    openLogoMenu();
     expect(screen.getByRole("button", { name: `◫ Change dataset · ${datasetId}` })).toBeInTheDocument();
   });
 
@@ -165,7 +167,7 @@ describe("App", () => {
   it("restores map settings from the URL and keeps changes shareable", async () => {
     window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=9.25&basemap=imagery&heat=0&palette=ice&temperature=2.4&thickness=1.6&clean=1&color=%23abcdef&units=imperial");
     render(<App />);
-    openAccountMenu();
+    openLogoMenu();
     fireEvent.click(screen.getByRole("button", { name: "⚙ System settings" }));
     expect(screen.getByRole("button", { name: "Use imperial units" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Close system settings" }));
