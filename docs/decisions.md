@@ -81,3 +81,7 @@ Pulumi state moved from the laptop-only backend to a dedicated S3 DIY backend be
 # 2026-08-23 — Serverless authentication control-plane API
 
 The first authenticated application endpoint uses API Gateway HTTP API, its Cognito JWT authorizer, one 256 MiB Lambda, and the existing on-demand DynamoDB table. This preserves authorization before metadata access and remains scale-to-zero. There is no meaningful idle compute cost; usage is covered by request-based service pricing and the existing development budget alarms.
+
+# 2026-08-24 — Filter Strava exports before hosted intake
+
+The browser accepts the familiar Strava ZIP but creates and uploads a second archive containing only `activities.csv` and `activities/**`. The original archive and media never leave the device. Quarantine storage expires after two days, incomplete uploads abort after one day, and accepted source remains `pending` until a separately accepted processor exists. This adds request-based S3 storage only and no idle compute; the temporary cap and lifecycle remain within the development budget.

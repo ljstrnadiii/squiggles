@@ -4,16 +4,22 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit",
+    "build": "tsc --noEmit && pnpm bundle",
+    "bundle": "esbuild control-plane.mjs --bundle --platform=node --target=node22 --format=esm --outfile=dist/control-plane.mjs",
     "preview": "pnpm build && pulumi preview",
     "up": "pnpm build && pulumi up"
   },
   "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.1116.0",
+    "@aws-sdk/client-dynamodb": "^3.1116.0",
+    "@aws-sdk/client-s3": "^3.1116.0",
+    "@aws-sdk/s3-request-presigner": "^3.1116.0",
     "@pulumi/aws": "7.43.0",
     "@pulumi/pulumi": "3.259.0"
   },
   "devDependencies": {
     "@types/node": "24.5.2",
+    "esbuild": "^0.28.2",
     "typescript": "5.9.2"
   }
 }

@@ -1355,3 +1355,8 @@ button:disabled {
 .approval-status span { width: .65rem; height: .65rem; border-radius: 50%; background: #d5a33b; }
 .approval-status.approved span { background: #39b87f; }
 .approval-status.rejected span { background: #d95c5c; }
+.account-upload { display: grid; gap: .75rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+.account-upload h3 { margin: 0; }
+.account-upload input { display: none; }
+.upload-row { display: flex; justify-content: space-between; gap: 1rem; font-size: .85rem; }
+.upload-row strong { color: var(--muted); text-transform: capitalize; }
