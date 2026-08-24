@@ -99,6 +99,7 @@ const googleProvider = googleClientId && googleClientSecret ? new aws.cognito.Id
   },
   attributeMapping: {
     email: "email",
+    email_verified: "email_verified",
     name: "name",
     picture: "picture",
     username: "sub",
@@ -155,18 +156,17 @@ new aws.iam.RolePolicyAttachment("control-plane-api-logs", {
 });
 new aws.iam.RolePolicy("control-plane-api-data", {
   role: controlPlaneRole.id,
-  policy: aws.iam.getPolicyDocumentOutput({ statements: [{
-    effect: "Allow",
-    actions: ["dynamodb:GetItem", "dynamodb:PutItem"],
-    resources: [metadataTable.arn],
-  }] }).json,
+  policy: aws.iam.getPolicyDocumentOutput({ statements: [
+    { effect: "Allow", actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"], resources: [metadataTable.arn] },
+    { effect: "Allow", actions: ["cognito-idp:AdminGetUser"], resources: [userPool.arn] },
+  ] }).json,
 });
 const controlPlaneFunction = new aws.lambda.Function("control-plane-api", {
   role: controlPlaneRole.arn,
   runtime: aws.lambda.Runtime.NodeJS22dX,
   handler: "control-plane.handler",
   code: new pulumi.asset.AssetArchive({ "control-plane.mjs": new pulumi.asset.FileAsset(path.join(path.dirname(fileURLToPath(import.meta.url)), "control-plane.mjs")) }),
-  environment: { variables: { METADATA_TABLE_NAME: metadataTable.name } },
+  environment: { variables: { METADATA_TABLE_NAME: metadataTable.name, USER_POOL_ID: userPool.id } },
   memorySize: 256,
   timeout: 10,
   tags,
