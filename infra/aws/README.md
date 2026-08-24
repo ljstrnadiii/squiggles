@@ -2,6 +2,8 @@
 
 This Pulumi project implements static application and private GeoParquet delivery plus the first authentication/control-plane foundation. Cognito and DynamoDB are present, but Google federation, the application API, private signed-cookie delivery, and managed upload are enabled only in their gated follow-up slices. It intentionally has no server-side analytics.
 
+Google federation reads `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` only during the protected production deployment. Configure the ID as a GitHub environment variable and the secret as a GitHub environment secret. Both must be present together; neither is written to the repository, browser bundle, or Pulumi outputs.
+
 It creates separate private web and dataset buckets, CloudFront with Origin Access Control, SPA routing and range-friendly dataset delivery, Route 53 records for `squiggles.io`, an ACM certificate in `us-east-1`, incomplete multipart-upload cleanup, and an AWS Budget. The free-tier-oriented default is $10/month with notifications at 10%, 50%, and 80%; configuration cannot exceed the project's $50 development ceiling. A budget alerts but is not a hard spending cap.
 
 No Cognito, DynamoDB, SES, Lambda, or API Gateway resource is created in this slice.

@@ -2,6 +2,8 @@
 
 Squiggles uses Amazon Cognito as its OIDC authorization server and Google as the first external identity provider. The browser uses the authorization-code flow with PKCE and has no client secret. Cognito's callback exchanges the Google authorization result; the application receives only Cognito tokens.
 
+The Google OAuth client ID is a GitHub production-environment variable and its client secret is an encrypted environment secret. The deployment workflow passes both directly to Pulumi. Pull-request validation has neither value and therefore type-checks the Cognito-only fallback without creating or changing infrastructure. Production enables only Google on the public browser client; native Cognito password sign-up is not exposed.
+
 Authentication is not approval. The first authenticated API request idempotently creates a DynamoDB user record with `status=pending`. Pending or rejected users can read only their own approval status. Dataset metadata, upload authorization, saved queries, and CloudFront private-data cookies require `status=approved`. An administrator record is also required for approval endpoints; an email address or Google domain is never itself an authorization rule.
 
 The DynamoDB table is control-plane storage only. Its single-table keys cover users, datasets, saved queries, and immutable shares. Canonical activities remain Parquet/GeoParquet objects in S3 and are never copied into DynamoDB. Authorization happens before returning dataset metadata, upload URLs, or private-delivery cookies.
