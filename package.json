@@ -10,6 +10,7 @@
     "python:typecheck": "uv run mypy",
     "test": "pnpm --filter @squiggles/web test",
     "typecheck": "pnpm --filter @squiggles/web typecheck",
+    "users": "python3 scripts/manage_users.py",
     "release": "semantic-release"
   },
   "devDependencies": {

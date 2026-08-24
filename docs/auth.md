@@ -24,3 +24,14 @@ Persistent identity resources and metadata use deletion protection, DynamoDB poi
 4. The account panel must show **Access pending**. At this stage, pending accounts cannot list data, upload, or persist queries remotely.
 
 The first administrator is bootstrapped only after this acceptance succeeds. Inspect the newly created `USER#<Cognito sub>` / `PROFILE` record, verify the intended human out of band, and change its status and role in a separate approval stage. Do not approve based only on an email domain.
+
+Use the checked-in operator helper after authenticating the AWS SSO profile:
+
+```bash
+aws sso login --profile squiggle-dev
+pnpm users list
+pnpm users approve <exact-cognito-subject>
+pnpm users remove <exact-cognito-subject>
+```
+
+`list` shows pending users. `approve` uses a conditional DynamoDB update and refuses a record that is no longer pending. It makes that explicitly selected first user an administrator. `remove` requires the operator to retype the exact subject (or pass `--yes` for automation), deletes the matching Cognito identity, and then deletes every item in that user's control-plane partition. Resource IDs are auto-discovered only when exactly one matching Squiggles table and user pool exist; otherwise pass `--table` and `--user-pool`. Always verify the intended human out of band before approval.
