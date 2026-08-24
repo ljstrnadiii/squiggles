@@ -747,17 +747,6 @@ button:disabled {
   position: absolute;
   inset: 0;
 }
-.map:after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: radial-gradient(
-    circle at center,
-    transparent 58%,
-    color-mix(in srgb, var(--bg) 36%, transparent) 100%
-  );
-}
 .maplibregl-ctrl-attrib {
   font-size: 10px !important;
 }
