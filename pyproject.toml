@@ -56,5 +56,5 @@ strict = true
 files = ["packages"]
 
 [[tool.mypy.overrides]]
-module = ["fitdecode", "lxml", "lxml.*", "pyarrow", "pyarrow.*", "shapely", "shapely.*"]
+module = ["boto3", "fitdecode", "lxml", "lxml.*", "pyarrow", "pyarrow.*", "shapely", "shapely.*"]
 ignore_missing_imports = true

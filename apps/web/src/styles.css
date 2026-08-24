@@ -1360,3 +1360,4 @@ button:disabled {
 .account-upload input { display: none; }
 .upload-row { display: flex; justify-content: space-between; gap: 1rem; font-size: .85rem; }
 .upload-row strong { color: var(--muted); text-transform: capitalize; }
+.upload-row small { display: block; color: var(--muted); margin-top: .2rem; }

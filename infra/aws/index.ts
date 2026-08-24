@@ -12,12 +12,15 @@ const monthlyBudgetUsd = config.getNumber("monthlyBudgetUsd") ?? 10;
 const domainName = config.get("domainName") ?? "squiggles.io";
 const googleClientId = config.get("googleClientId") ?? process.env.GOOGLE_CLIENT_ID;
 const googleClientSecret = config.getSecret("googleClientSecret") ?? (process.env.GOOGLE_CLIENT_SECRET ? pulumi.secret(process.env.GOOGLE_CLIENT_SECRET) : undefined);
+const ingestImage = process.env.INGEST_IMAGE ?? "public.ecr.aws/docker/library/alpine:3.22";
 if (Boolean(googleClientId) !== Boolean(googleClientSecret)) throw new Error("Google federation requires both GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET");
 if (monthlyBudgetUsd <= 0 || monthlyBudgetUsd > 50) throw new Error("monthlyBudgetUsd must be greater than 0 and no more than 50");
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const webDist = path.join(projectRoot, "apps/web/dist");
 if (!fs.existsSync(path.join(webDist, "index.html"))) throw new Error("apps/web/dist is missing; run `pnpm build` from the repository root");
 const tags = { Project: "squiggles", ManagedBy: "pulumi", Environment: pulumi.getStack() };
+const ingestRepository = new aws.ecr.Repository("ingest", { name: "squiggles-ingest", imageScanningConfiguration: { scanOnPush: true }, imageTagMutability: "IMMUTABLE", tags }, { import: "squiggles-ingest", protect: protectData });
+new aws.ecr.LifecyclePolicy("ingest", { repository: ingestRepository.name, policy: JSON.stringify({ rules: [{ rulePriority: 1, description: "Keep five ingest images", selection: { tagStatus: "any", countType: "imageCountMoreThan", countNumber: 5 }, action: { type: "expire" } }] }) }, { protect: protectData });
 
 const eastRegion = new aws.Provider("us-east-1", { region: "us-east-1" });
 const hostedZone = aws.route53.getZoneOutput({ name: domainName, privateZone: false });
@@ -64,6 +67,7 @@ function privateBucket(name: string, protect = false) {
 const webBucket = privateBucket("web");
 const dataBucket = privateBucket("data", protectData);
 const uploadBucket = privateBucket("uploads", protectData);
+const ingestedBucket = privateBucket("ingested", protectData);
 
 // Identity and control-plane metadata are intentionally separate from canonical
 // activity data. Cognito owns authentication; DynamoDB contains only ownership,
@@ -147,6 +151,24 @@ const metadataTable = new aws.dynamodb.Table("control-plane", {
   tags,
 }, { protect: protectData });
 
+const batchServiceRole = new aws.iam.Role("batch-service", { assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({ Service: "batch.amazonaws.com" }), tags });
+new aws.iam.RolePolicyAttachment("batch-service", { role: batchServiceRole.name, policyArn: "arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole" });
+const taskExecutionRole = new aws.iam.Role("ingest-execution", { assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({ Service: "ecs-tasks.amazonaws.com" }), tags });
+new aws.iam.RolePolicyAttachment("ingest-execution", { role: taskExecutionRole.name, policyArn: aws.iam.ManagedPolicy.AmazonECSTaskExecutionRolePolicy });
+const ingestTaskRole = new aws.iam.Role("ingest-task", { assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({ Service: "ecs-tasks.amazonaws.com" }), tags });
+new aws.iam.RolePolicy("ingest-task", { role: ingestTaskRole.id, policy: aws.iam.getPolicyDocumentOutput({ statements: [
+  { effect: "Allow", actions: ["s3:GetObject"], resources: [pulumi.interpolate`${uploadBucket.arn}/users/*`] },
+  { effect: "Allow", actions: ["s3:PutObject"], resources: [pulumi.interpolate`${ingestedBucket.arn}/datasets/*`] },
+  { effect: "Allow", actions: ["dynamodb:UpdateItem", "dynamodb:PutItem"], resources: [metadataTable.arn] },
+] }).json });
+const ingestLogs = new aws.cloudwatch.LogGroup("ingest", { retentionInDays: 14, tags });
+const defaultVpc = aws.ec2.getVpcOutput({ default: true });
+const defaultSubnets = aws.ec2.getSubnetsOutput({ filters: [{ name: "vpc-id", values: [defaultVpc.id] }] });
+const ingestSecurityGroup = new aws.ec2.SecurityGroup("ingest", { vpcId: defaultVpc.id, ingress: [], egress: [{ protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] }], tags });
+const ingestCompute = new aws.batch.ComputeEnvironment("ingest", { type: "MANAGED", serviceRole: batchServiceRole.arn, computeResources: { type: "FARGATE", maxVcpus: 4, subnets: defaultSubnets.ids, securityGroupIds: [ingestSecurityGroup.id] }, tags });
+const ingestQueue = new aws.batch.JobQueue("ingest", { state: "ENABLED", priority: 1, computeEnvironmentOrders: [{ order: 1, computeEnvironment: ingestCompute.arn }], tags });
+const ingestDefinition = new aws.batch.JobDefinition("ingest", { type: "container", platformCapabilities: ["FARGATE"], retryStrategy: { attempts: 1 }, timeout: { attemptDurationSeconds: 14400 }, containerProperties: pulumi.jsonStringify({ image: ingestImage, executionRoleArn: taskExecutionRole.arn, jobRoleArn: ingestTaskRole.arn, resourceRequirements: [{ type: "VCPU", value: "2" }, { type: "MEMORY", value: "8192" }], ephemeralStorage: { sizeInGiB: 40 }, networkConfiguration: { assignPublicIp: "ENABLED" }, logConfiguration: { logDriver: "awslogs", options: { "awslogs-group": ingestLogs.name, "awslogs-region": aws.getRegionOutput().name, "awslogs-stream-prefix": "job" } } }), tags });
+
 const controlPlaneRole = new aws.iam.Role("control-plane-api", {
   assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({ Service: "lambda.amazonaws.com" }),
   tags,
@@ -161,6 +183,7 @@ new aws.iam.RolePolicy("control-plane-api-data", {
     { effect: "Allow", actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"], resources: [metadataTable.arn] },
     { effect: "Allow", actions: ["cognito-idp:AdminGetUser"], resources: [userPool.arn] },
     { effect: "Allow", actions: ["s3:PutObject", "s3:GetObject", "s3:ListMultipartUploadParts", "s3:AbortMultipartUpload"], resources: [pulumi.interpolate`${uploadBucket.arn}/users/*`] },
+    { effect: "Allow", actions: ["batch:SubmitJob"], resources: [ingestQueue.arn, ingestDefinition.arn] },
   ] }).json,
 });
 const controlPlaneFunction = new aws.lambda.Function("control-plane-api", {
@@ -168,7 +191,7 @@ const controlPlaneFunction = new aws.lambda.Function("control-plane-api", {
   runtime: aws.lambda.Runtime.NodeJS22dX,
   handler: "control-plane.handler",
   code: new pulumi.asset.AssetArchive({ "control-plane.cjs": new pulumi.asset.FileAsset(path.join(path.dirname(fileURLToPath(import.meta.url)), "dist/control-plane.cjs")) }),
-  environment: { variables: { METADATA_TABLE_NAME: metadataTable.name, USER_POOL_ID: userPool.id, UPLOAD_BUCKET_NAME: uploadBucket.bucket } },
+  environment: { variables: { METADATA_TABLE_NAME: metadataTable.name, USER_POOL_ID: userPool.id, UPLOAD_BUCKET_NAME: uploadBucket.bucket, DATA_BUCKET_NAME: ingestedBucket.bucket, INGEST_JOB_QUEUE: ingestQueue.arn, INGEST_JOB_DEFINITION: ingestDefinition.arn } },
   memorySize: 256,
   timeout: 10,
   tags,
@@ -456,7 +479,7 @@ const deployPolicy = aws.iam.getPolicyDocumentOutput({ statements: [
     sid: "ApplicationBuckets",
     effect: "Allow",
     actions: ["s3:CreateBucket", "s3:Get*", "s3:List*", "s3:Put*", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload"],
-    resources: [webBucket.arn, pulumi.interpolate`${webBucket.arn}/*`, dataBucket.arn, pulumi.interpolate`${dataBucket.arn}/*`, uploadBucket.arn, pulumi.interpolate`${uploadBucket.arn}/*`, "arn:aws:s3:::uploads-*"],
+    resources: [webBucket.arn, pulumi.interpolate`${webBucket.arn}/*`, dataBucket.arn, pulumi.interpolate`${dataBucket.arn}/*`, uploadBucket.arn, pulumi.interpolate`${uploadBucket.arn}/*`, ingestedBucket.arn, pulumi.interpolate`${ingestedBucket.arn}/*`, "arn:aws:s3:::uploads-*", "arn:aws:s3:::ingested-*"],
   },
   {
     sid: "CloudFrontDelivery",
@@ -474,6 +497,12 @@ const deployPolicy = aws.iam.getPolicyDocumentOutput({ statements: [
     sid: "ReadCertificateBudgetAndBootstrapIdentity",
     effect: "Allow",
     actions: ["acm:AddTagsToCertificate", "acm:DescribeCertificate", "acm:GetCertificate", "acm:ListCertificates", "acm:RemoveTagsFromCertificate", "budgets:ListTagsForResource", "budgets:ModifyBudget", "budgets:ViewBudget", "iam:Get*", "iam:List*"],
+    resources: ["*"],
+  },
+  {
+    sid: "IngestImageAndBatch",
+    effect: "Allow",
+    actions: ["ecr:BatchCheckLayerAvailability", "ecr:CompleteLayerUpload", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetAuthorizationToken", "ecr:GetDownloadUrlForLayer", "ecr:InitiateLayerUpload", "ecr:ListTagsForResource", "ecr:PutImage", "ecr:TagResource", "ecr:UntagResource", "ecr:UploadLayerPart", "batch:*", "ec2:AuthorizeSecurityGroupEgress", "ec2:CreateSecurityGroup", "ec2:CreateTags", "ec2:DeleteSecurityGroup", "ec2:Describe*", "ec2:RevokeSecurityGroupEgress"],
     resources: ["*"],
   },
   {
