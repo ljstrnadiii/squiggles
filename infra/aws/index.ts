@@ -63,6 +63,7 @@ function privateBucket(name: string, protect = false) {
 
 const webBucket = privateBucket("web");
 const dataBucket = privateBucket("data", protectData);
+const uploadBucket = privateBucket("uploads", protectData);
 
 // Identity and control-plane metadata are intentionally separate from canonical
 // activity data. Cognito owns authentication; DynamoDB contains only ownership,
@@ -157,16 +158,17 @@ new aws.iam.RolePolicyAttachment("control-plane-api-logs", {
 new aws.iam.RolePolicy("control-plane-api-data", {
   role: controlPlaneRole.id,
   policy: aws.iam.getPolicyDocumentOutput({ statements: [
-    { effect: "Allow", actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"], resources: [metadataTable.arn] },
+    { effect: "Allow", actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"], resources: [metadataTable.arn] },
     { effect: "Allow", actions: ["cognito-idp:AdminGetUser"], resources: [userPool.arn] },
+    { effect: "Allow", actions: ["s3:PutObject", "s3:GetObject", "s3:ListMultipartUploadParts", "s3:AbortMultipartUpload"], resources: [pulumi.interpolate`${uploadBucket.arn}/users/*`] },
   ] }).json,
 });
 const controlPlaneFunction = new aws.lambda.Function("control-plane-api", {
   role: controlPlaneRole.arn,
   runtime: aws.lambda.Runtime.NodeJS22dX,
   handler: "control-plane.handler",
-  code: new pulumi.asset.AssetArchive({ "control-plane.mjs": new pulumi.asset.FileAsset(path.join(path.dirname(fileURLToPath(import.meta.url)), "control-plane.mjs")) }),
-  environment: { variables: { METADATA_TABLE_NAME: metadataTable.name, USER_POOL_ID: userPool.id } },
+  code: new pulumi.asset.AssetArchive({ "control-plane.mjs": new pulumi.asset.FileAsset(path.join(path.dirname(fileURLToPath(import.meta.url)), "dist/control-plane.mjs")) }),
+  environment: { variables: { METADATA_TABLE_NAME: metadataTable.name, USER_POOL_ID: userPool.id, UPLOAD_BUCKET_NAME: uploadBucket.bucket } },
   memorySize: 256,
   timeout: 10,
   tags,
@@ -176,7 +178,7 @@ const controlPlaneApi = new aws.apigatewayv2.Api("control-plane", {
   corsConfiguration: {
     allowOrigins: [`https://${domainName}`, "http://localhost:5173"],
     allowHeaders: ["authorization", "content-type"],
-    allowMethods: ["GET", "OPTIONS"],
+    allowMethods: ["GET", "POST", "OPTIONS"],
     maxAge: 3600,
   },
   tags,
@@ -204,6 +206,9 @@ new aws.apigatewayv2.Route("me", {
   authorizerId: controlPlaneAuthorizer.id,
   authorizationScopes: ["openid"],
 });
+for (const [name, routeKey] of [["uploads-create", "POST /api/uploads"], ["uploads-part", "POST /api/uploads/{id}/parts"], ["uploads-parts", "GET /api/uploads/{id}/parts"], ["uploads-complete", "POST /api/uploads/{id}/complete"], ["uploads-list", "GET /api/uploads"]] as const) {
+  new aws.apigatewayv2.Route(name, { apiId: controlPlaneApi.id, routeKey, target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}`, authorizationType: "JWT", authorizerId: controlPlaneAuthorizer.id, authorizationScopes: ["openid"] });
+}
 new aws.apigatewayv2.Stage("control-plane", {
   apiId: controlPlaneApi.id,
   name: "$default",
@@ -243,6 +248,8 @@ const oac = new aws.cloudfront.OriginAccessControl("private-s3", {
   signingBehavior: "always",
   signingProtocol: "sigv4",
 });
+new aws.s3.BucketLifecycleConfiguration("upload-lifecycle", { bucket: uploadBucket.id, rules: [{ id: "expire-source", status: "Enabled", expiration: { days: 2 }, abortIncompleteMultipartUpload: { daysAfterInitiation: 1 } }] }, { protect: protectData });
+new aws.s3.BucketCorsConfiguration("upload-cors", { bucket: uploadBucket.id, corsRules: [{ allowedHeaders: ["content-type", "x-amz-checksum-sha256"], allowedMethods: ["PUT"], allowedOrigins: [`https://${domainName}`, "http://localhost:5173"], exposeHeaders: ["ETag"], maxAgeSeconds: 3600 }] }, { protect: protectData });
 
 const spaRewrite = new aws.cloudfront.Function("spa-rewrite", {
   runtime: "cloudfront-js-2.0",
@@ -448,8 +455,8 @@ const deployPolicy = aws.iam.getPolicyDocumentOutput({ statements: [
   {
     sid: "ApplicationBuckets",
     effect: "Allow",
-    actions: ["s3:Get*", "s3:List*", "s3:Put*", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload"],
-    resources: [webBucket.arn, pulumi.interpolate`${webBucket.arn}/*`, dataBucket.arn, pulumi.interpolate`${dataBucket.arn}/*`],
+    actions: ["s3:CreateBucket", "s3:Get*", "s3:List*", "s3:Put*", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload"],
+    resources: [webBucket.arn, pulumi.interpolate`${webBucket.arn}/*`, dataBucket.arn, pulumi.interpolate`${dataBucket.arn}/*`, uploadBucket.arn, pulumi.interpolate`${uploadBucket.arn}/*`, "arn:aws:s3:::uploads-*"],
   },
   {
     sid: "CloudFrontDelivery",

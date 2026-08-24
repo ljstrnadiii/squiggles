@@ -17,6 +17,7 @@
     "@deck.gl/react": "9.3.10",
     "@duckdb/duckdb-wasm": "1.33.1-dev57.0",
     "@uiw/react-codemirror": "4.25.11",
+    "@zip.js/zip.js": "^2.8.57",
     "apache-arrow": "21.2.0",
     "maplibre-gl": "6.5.0",
     "react": "19.2.8",
