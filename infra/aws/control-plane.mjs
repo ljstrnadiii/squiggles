@@ -1,4 +1,5 @@
 import { AdminGetUserCommand, CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
+import { BatchClient, SubmitJobCommand } from "@aws-sdk/client-batch";
 import { DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { CompleteMultipartUploadCommand, CreateMultipartUploadCommand, HeadObjectCommand, ListPartsCommand, S3Client, UploadPartCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -7,9 +8,13 @@ import { randomUUID } from "node:crypto";
 const dynamo = new DynamoDBClient({});
 const cognito = new CognitoIdentityProviderClient({});
 const s3 = new S3Client({});
+const batch = new BatchClient({});
 const tableName = process.env.METADATA_TABLE_NAME;
 const userPoolId = process.env.USER_POOL_ID;
 const uploadBucket = process.env.UPLOAD_BUCKET_NAME;
+const dataBucket = process.env.DATA_BUCKET_NAME;
+const jobQueue = process.env.INGEST_JOB_QUEUE;
+const jobDefinition = process.env.INGEST_JOB_DEFINITION;
 
 function response(statusCode, body) {
   return {
@@ -23,7 +28,7 @@ export async function handler(event) {
   const claims = event.requestContext?.authorizer?.jwt?.claims;
   const subject = claims?.sub;
   const username = claims?.username;
-  if (!subject || !username || !tableName || !userPoolId || !uploadBucket) return response(401, { error: "unauthorized" });
+  if (!subject || !username || !tableName || !userPoolId || !uploadBucket || !dataBucket || !jobQueue || !jobDefinition) return response(401, { error: "unauthorized" });
 
   const cognitoUser = await cognito.send(new AdminGetUserCommand({ UserPoolId: userPoolId, Username: username }));
   const attributes = Object.fromEntries((cognitoUser.UserAttributes ?? []).map(attribute => [attribute.Name, attribute.Value ?? ""]));
@@ -101,19 +106,29 @@ export async function handler(event) {
     const id = event.pathParameters?.id;
     if (!/^[0-9a-f-]{36}$/.test(id ?? "")) return response(400, { error: "invalid_upload" });
     const uploadKey = { PK: key.PK, SK: { S: `UPLOAD#${id}` } };
-    const upload = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: uploadKey, ConsistentRead: true }))).Item;
-    if (!upload || upload.status?.S !== "uploading") return response(409, { error: "upload_not_ready" });
-    const listed = await s3.send(new ListPartsCommand({ Bucket: uploadBucket, Key: upload.objectKey.S, UploadId: upload.multipartUploadId.S }));
-    if (listed.IsTruncated || !(listed.Parts?.length)) return response(422, { error: "upload_verification_failed" });
-    await s3.send(new CompleteMultipartUploadCommand({ Bucket: uploadBucket, Key: upload.objectKey.S, UploadId: upload.multipartUploadId.S, MultipartUpload: { Parts: listed.Parts.map(part => ({ PartNumber: part.PartNumber, ETag: part.ETag, ChecksumSHA256: part.ChecksumSHA256 })) } }));
-    const object = await s3.send(new HeadObjectCommand({ Bucket: uploadBucket, Key: upload.objectKey.S }));
-    if (object.ContentLength !== Number(upload.byteSize.N)) return response(422, { error: "upload_verification_failed" });
-    await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: uploadKey, ConditionExpression: "#status = :uploading", UpdateExpression: "SET #status = :pending, updatedAt = :now", ExpressionAttributeNames: { "#status": "status" }, ExpressionAttributeValues: { ":uploading": { S: "uploading" }, ":pending": { S: "pending" }, ":now": { S: new Date().toISOString() } } }));
-    return response(200, { id, status: "pending" });
+    let upload = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: uploadKey, ConsistentRead: true }))).Item;
+    if (!upload) return response(404, { error: "upload_not_found" });
+    if (upload.status?.S === "queued") return response(200, { id, status: "queued" });
+    if (upload.status?.S === "uploading") {
+      const listed = await s3.send(new ListPartsCommand({ Bucket: uploadBucket, Key: upload.objectKey.S, UploadId: upload.multipartUploadId.S }));
+      if (listed.IsTruncated || !(listed.Parts?.length)) return response(422, { error: "upload_verification_failed" });
+      await s3.send(new CompleteMultipartUploadCommand({ Bucket: uploadBucket, Key: upload.objectKey.S, UploadId: upload.multipartUploadId.S, MultipartUpload: { Parts: listed.Parts.map(part => ({ PartNumber: part.PartNumber, ETag: part.ETag, ChecksumSHA256: part.ChecksumSHA256 })) } }));
+      const object = await s3.send(new HeadObjectCommand({ Bucket: uploadBucket, Key: upload.objectKey.S }));
+      if (object.ContentLength !== Number(upload.byteSize.N)) return response(422, { error: "upload_verification_failed" });
+      await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: uploadKey, ConditionExpression: "#status = :uploading", UpdateExpression: "SET #status = :pending, updatedAt = :now", ExpressionAttributeNames: { "#status": "status" }, ExpressionAttributeValues: { ":uploading": { S: "uploading" }, ":pending": { S: "pending" }, ":now": { S: new Date().toISOString() } } }));
+      upload = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: uploadKey, ConsistentRead: true }))).Item;
+    }
+    if (upload?.status?.S !== "pending") return response(409, { error: "upload_not_ready" });
+    const submitted = await batch.send(new SubmitJobCommand({ jobName: `ingest-${id}`, jobQueue, jobDefinition, containerOverrides: { environment: [
+      { name: "TABLE_NAME", value: tableName }, { name: "SOURCE_BUCKET", value: uploadBucket }, { name: "SOURCE_KEY", value: upload.objectKey.S },
+      { name: "DATA_BUCKET", value: dataBucket }, { name: "USER_SUB", value: subject }, { name: "UPLOAD_ID", value: id },
+    ] } }));
+    await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: uploadKey, ConditionExpression: "#status = :pending", UpdateExpression: "SET #status = :queued, batchJobId = :job, updatedAt = :now", ExpressionAttributeNames: { "#status": "status" }, ExpressionAttributeValues: { ":pending": { S: "pending" }, ":queued": { S: "queued" }, ":job": { S: submitted.jobId }, ":now": { S: new Date().toISOString() } } }));
+    return response(200, { id, status: "queued" });
   }
   if (route === "GET /api/uploads") {
     const result = await dynamo.send(new QueryCommand({ TableName: tableName, KeyConditionExpression: "PK = :pk AND begins_with(SK, :upload)", ExpressionAttributeValues: { ":pk": key.PK, ":upload": { S: "UPLOAD#" } }, ScanIndexForward: false }));
-    return response(200, { uploads: (result.Items ?? []).map(item => ({ id: item.SK.S.slice(7), filename: item.filename.S, byteSize: Number(item.byteSize.N), status: item.status.S, createdAt: item.createdAt.S })) });
+    return response(200, { uploads: (result.Items ?? []).map(item => ({ id: item.SK.S.slice(7), filename: item.filename.S, byteSize: Number(item.byteSize.N), status: item.status.S, statusDetail: item.statusDetail?.S ?? "", createdAt: item.createdAt.S })) });
   }
   return response(200, {
     subject,

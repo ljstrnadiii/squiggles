@@ -1,7 +1,7 @@
 import { BlobReader, BlobWriter, ZipReader, ZipWriter } from "@zip.js/zip.js";
 import type { AuthSession, RuntimeConfig } from "./auth";
 
-export type UploadRecord = { id: string; filename: string; byteSize: number; status: string; createdAt: string };
+export type UploadRecord = { id: string; filename: string; byteSize: number; status: string; statusDetail: string; createdAt: string };
 const auth = (session: AuthSession) => ({ authorization: `Bearer ${session.accessToken}` });
 
 export function selectStravaEntries(names: string[]) {

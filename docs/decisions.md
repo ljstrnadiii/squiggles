@@ -85,3 +85,7 @@ The first authenticated application endpoint uses API Gateway HTTP API, its Cogn
 # 2026-08-24 — Filter Strava exports before hosted intake
 
 The browser accepts the familiar Strava ZIP but creates and uploads a second archive containing only `activities.csv` and `activities/**`. The original archive and media never leave the device. Quarantine storage expires after two days, incomplete uploads abort after one day, and accepted source remains `pending` until a separately accepted processor exists. This adds request-based S3 storage only and no idle compute; the temporary cap and lifecycle remain within the development budget.
+
+# 2026-08-24 — Run shared ingestion as an AWS Batch Fargate job
+
+Each verified source upload submits one 2-vCPU/8-GiB Fargate job with 40 GiB ephemeral storage and a four-hour hard timeout. The image is immutable per Git commit in ECR, limited to five retained images, and executes the same Python compiler used locally. Fargate uses a public subnet rather than a NAT Gateway and scales to zero between jobs. The job writes to a private ingested bucket that is not part of the current public CloudFront data origin. This creates per-job compute and temporary storage charges but no meaningful idle compute; the existing monthly budget alarms remain the cost boundary.

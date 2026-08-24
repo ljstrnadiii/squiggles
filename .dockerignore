@@ -1,0 +1,6 @@
+.git
+.venv
+node_modules
+dist
+data
+infra/aws/.pulumi

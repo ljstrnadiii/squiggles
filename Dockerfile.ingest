@@ -1,0 +1,8 @@
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY pyproject.toml uv.lock README.md ./
+COPY packages ./packages
+RUN uv sync --frozen --no-dev && uv pip install 'boto3>=1.40,<2'
+ENV PATH="/app/.venv/bin:$PATH"
+CMD ["python", "-m", "activity_map_ingest.cloud_job"]
