@@ -16,6 +16,7 @@ from activity_map_ingest.compiler import (
     compile_strava,
     validate_dataset,
 )
+from activity_map_ingest.dataset_builds import rebuild_derived_dataset, versioned_manifest
 from activity_map_ingest.parsers import (
     TrackPoint,
     _merge_fit_records,
@@ -242,6 +243,22 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
     ]
     with pytest.raises(FileExistsError):
         compile_strava(CompileOptions(source, output))
+
+    legacy = json.loads((output / "dataset.json").read_text())
+    legacy["schema_version"] = "1.3.0"
+    legacy.pop("render_levels")
+    (output / "dataset.json").write_text(json.dumps(legacy))
+    rebuilt_path = tmp_path / "rebuilt"
+    rebuilt = rebuild_derived_dataset(output, rebuilt_path)
+    assert rebuilt["schema_version"] == "1.4.0"
+    assert rebuilt["derived_from_schema_version"] == "1.3.0"
+    assert validate_dataset(rebuilt_path)["activity_count"] == 2
+    published = versioned_manifest(rebuilt, "schema-1.4.0-test")
+    assert published["build"]["id"] == "schema-1.4.0-test"
+    assert all(
+        entry["path"].startswith("builds/schema-1.4.0-test/")
+        for entry in [*published["shards"], *published["render_levels"]]
+    )
 
 
 def test_compile_rejects_a_row_group_larger_than_its_shard(tmp_path: Path) -> None:
