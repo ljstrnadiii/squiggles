@@ -110,6 +110,7 @@ def datasets(buckets: list[str], profile: str) -> list[dict[str, Any]]:
                     "schema": manifest.get("schema_version", "unknown"),
                     "build": manifest.get("build", {}).get("id"),
                     "activities": manifest.get("activity_count", 0),
+                    "manifest": manifest,
                 }
             )
     return found
@@ -123,6 +124,7 @@ def submit_rebuild(
     definition: str,
     args: argparse.Namespace,
 ) -> str:
+    job_suffix = re.sub(r"[^A-Za-z0-9_-]", "-", build_id[-24:])
     environment = [
         {"name": "JOB_MODE", "value": "derived"},
         {"name": "TABLE_NAME", "value": table},
@@ -139,7 +141,7 @@ def submit_rebuild(
             "--region",
             args.region,
             "--job-name",
-            f"rebuild-{item['id'][:8]}-{build_id[-14:]}",
+            f"rebuild-{item['id'][:8]}-{job_suffix}",
             "--job-queue",
             queue,
             "--job-definition",
@@ -150,6 +152,99 @@ def submit_rebuild(
         args.profile,
     )
     return result["jobId"]
+
+
+def snapshot_legacy(
+    item: dict[str, Any], target_build_id: str, table: str, args: argparse.Namespace
+) -> str:
+    """Register the preserved root artifacts as the rollback build for a first migration."""
+    current = item["manifest"]
+    legacy_id = f"legacy-before-{target_build_id}"
+    legacy = json.loads(json.dumps(current))
+    source_schema = legacy.pop("derived_from_schema_version", legacy.get("schema_version"))
+    legacy["schema_version"] = source_schema
+    legacy.pop("render_levels", None)
+    legacy["shards"] = [
+        {**entry, "path": entry["path"][entry["path"].find("activities/") :]}
+        for entry in legacy["shards"]
+    ]
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    legacy["build"] = {"id": legacy_id, "created_at": now}
+    payload = json.dumps(legacy, indent=2) + "\n"
+    bucket, dataset_id = item["bucket"], item["id"]
+    aws_stdin(
+        [
+            "s3",
+            "cp",
+            "-",
+            f"s3://{bucket}/datasets/{dataset_id}/builds/{legacy_id}/dataset.json",
+            "--content-type",
+            "application/json",
+            "--cache-control",
+            "public,max-age=31536000,immutable",
+            "--no-progress",
+        ],
+        args.profile,
+        payload,
+    )
+    aws(
+        [
+            "dynamodb",
+            "put-item",
+            "--table-name",
+            table,
+            "--item",
+            json.dumps(
+                {
+                    "PK": {"S": f"DATASET#{dataset_id}"},
+                    "SK": {"S": f"BUILD#{legacy_id}"},
+                    "entityType": {"S": "datasetBuild"},
+                    "status": {"S": "ready"},
+                    "datasetId": {"S": dataset_id},
+                    "buildId": {"S": legacy_id},
+                    "bucket": {"S": bucket},
+                    "schemaVersion": {"S": str(source_schema)},
+                    "activityCount": {"N": str(item["activities"])},
+                    "createdAt": {"S": now},
+                }
+            ),
+        ],
+        args.profile,
+    )
+    if item["build"]:
+        update = "SET previousBuild = :legacy, updatedAt = :now"
+    else:
+        update = (
+            "SET activeBuild = :legacy, datasetId = :dataset, bucket = :bucket, "
+            "entityType = :type, schemaVersion = :schema, updatedAt = :now"
+        )
+    values = {":legacy": {"S": legacy_id}, ":now": {"S": now}}
+    if not item["build"]:
+        values.update(
+            {
+                ":dataset": {"S": dataset_id},
+                ":bucket": {"S": bucket},
+                ":type": {"S": "datasetRegistry"},
+                ":schema": {"S": str(source_schema)},
+            }
+        )
+    aws(
+        [
+            "dynamodb",
+            "update-item",
+            "--table-name",
+            table,
+            "--key",
+            json.dumps({"PK": {"S": f"DATASET#{dataset_id}"}, "SK": {"S": "META"}}),
+            "--update-expression",
+            update,
+            "--expression-attribute-values",
+            json.dumps(values),
+        ],
+        args.profile,
+    )
+    print(f"Registered {legacy_id} for {dataset_id}.")
+    return legacy_id
 
 
 def rollback(item: dict[str, Any], build_id: str, table: str, args: argparse.Namespace) -> None:
@@ -218,6 +313,9 @@ def parser() -> argparse.ArgumentParser:
     rollback_parser = commands.add_parser("rollback")
     rollback_parser.add_argument("dataset_id")
     rollback_parser.add_argument("build_id")
+    snapshot = commands.add_parser("snapshot-legacy")
+    snapshot.add_argument("dataset_id")
+    snapshot.add_argument("target_build_id")
     return result
 
 
@@ -234,7 +332,7 @@ def main() -> None:
             )
         return
     selected = hosted
-    if args.command in {"rebuild", "rollback"}:
+    if args.command in {"rebuild", "rollback", "snapshot-legacy"}:
         selected = [item for item in hosted if item["id"] == args.dataset_id]
         if len(selected) != 1:
             raise SystemExit(
@@ -243,12 +341,17 @@ def main() -> None:
     if args.command == "rollback":
         rollback(selected[0], args.build_id, table, args)
         return
+    if args.command == "snapshot-legacy":
+        snapshot_legacy(selected[0], args.target_build_id, table, args)
+        return
     build_id = args.build_id or f"schema-1.4.0-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
     submitted = 0
     for item in selected:
         if item["build"] == build_id and not args.force:
             print(f"Skipping {item['id']}; {build_id} is already active.")
             continue
+        if not item["build"]:
+            snapshot_legacy(item, build_id, table, args)
         job_id = submit_rebuild(item, build_id, table, queue, definition, args)
         print(f"Queued {item['id']} as {job_id} -> {build_id}.")
         submitted += 1
