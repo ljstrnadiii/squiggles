@@ -123,6 +123,7 @@ def submit_rebuild(
     definition: str,
     args: argparse.Namespace,
 ) -> str:
+    job_suffix = re.sub(r"[^A-Za-z0-9_-]", "-", build_id[-24:])
     environment = [
         {"name": "JOB_MODE", "value": "derived"},
         {"name": "TABLE_NAME", "value": table},
@@ -139,7 +140,7 @@ def submit_rebuild(
             "--region",
             args.region,
             "--job-name",
-            f"rebuild-{item['id'][:8]}-{build_id[-14:]}",
+            f"rebuild-{item['id'][:8]}-{job_suffix}",
             "--job-queue",
             queue,
             "--job-definition",
