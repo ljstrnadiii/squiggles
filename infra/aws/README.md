@@ -163,6 +163,22 @@ SHARD_PATH=$(jq -r '.shards[0].path' data/local/strava/dataset.json)
 curl -sS -D - -o /dev/null -H 'Range: bytes=0-15' "$DATASET_BASE/$DATASET_ID/$SHARD_PATH"
 ```
 
+## Rebuild and roll back hosted datasets
+
+Rendering-only schema changes are rebuilt from canonical GeoParquet and do not require another source upload. The fleet command discovers datasets in both hosted data buckets and submits one immutable Batch build for each. The compute environment queues them under its existing concurrency ceiling.
+
+```zsh
+aws sso login --profile squiggle-dev
+pnpm datasets --profile squiggle-dev list
+pnpm datasets --profile squiggle-dev rebuild-all
+```
+
+Each stable `datasets/<uuid>/dataset.json` is replaced only after its complete build has been published. List the active build before rollback, then select an exact retained build:
+
+```zsh
+pnpm datasets --profile squiggle-dev rollback <dataset-uuid> <build-id>
+```
+
 ## Destruction safety
 
 Buckets are not force-destroyed. The data bucket is protected by default. Remove test objects deliberately, set `activity-map-aws:protectData false`, run `pulumi up`, and only then use `pulumi destroy`.

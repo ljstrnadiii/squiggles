@@ -152,3 +152,7 @@ The deployed CloudFront development distribution returned HTTP 200 for both the 
 ## Hosted ingestion
 
 The first full Strava archive run (`ingest-4961ee5f`, 2026-08-24) is the 2-vCPU/8-GiB baseline. CloudWatch reported 1,661 processed records after approximately 19 minutes, with Ray estimating 3,534 total records at that point. That projects to roughly 40 minutes for parsing before publication and validation. The next full archive accepted on the 8-vCPU/16-GiB definition must record the same processed-count timing here; the machine-size change is not considered performance-accepted until that after measurement exists.
+
+## Derived dataset rebuild — 2026-08-25
+
+The immutable-build migration was exercised against the 3,189-activity schema-1.3 layout with 11 canonical shards and 574,257,176 canonical bytes. Copying and validating the canonical files and generating all five payload-balanced render levels completed locally in 13.55 seconds wall time (28.11 seconds user, 4.82 seconds system). Render outputs were 3,371,684, 6,849,206, 23,135,102, 94,869,093, and 213,324,023 bytes with 1, 1, 3, 12, and 27 row groups. This demonstrates that a rendering-layout migration does not justify reparsing the source archive; hosted timing including S3 download and publication is recorded after the first fleet run.

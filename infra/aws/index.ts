@@ -172,8 +172,8 @@ new aws.iam.RolePolicyAttachment("ingest-execution", { role: taskExecutionRole.n
 const ingestTaskRole = new aws.iam.Role("ingest-task", { assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({ Service: "ecs-tasks.amazonaws.com" }), tags });
 new aws.iam.RolePolicy("ingest-task", { role: ingestTaskRole.id, policy: aws.iam.getPolicyDocumentOutput({ statements: [
   { effect: "Allow", actions: ["s3:GetObject"], resources: [pulumi.interpolate`${uploadBucket.arn}/users/*`] },
-  { effect: "Allow", actions: ["s3:PutObject"], resources: [pulumi.interpolate`${ingestedBucket.arn}/datasets/*`] },
-  { effect: "Allow", actions: ["dynamodb:UpdateItem", "dynamodb:PutItem"], resources: [metadataTable.arn] },
+  { effect: "Allow", actions: ["s3:GetObject", "s3:PutObject"], resources: [pulumi.interpolate`${dataBucket.arn}/datasets/*`, pulumi.interpolate`${ingestedBucket.arn}/datasets/*`] },
+  { effect: "Allow", actions: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"], resources: [metadataTable.arn] },
 ] }).json });
 const ingestLogs = new aws.cloudwatch.LogGroup("ingest", { retentionInDays: 14, tags });
 const defaultVpc = aws.ec2.getVpcOutput({ default: true });
@@ -358,6 +358,17 @@ const distribution = new aws.cloudfront.Distribution("delivery", {
       allowedMethods: ["GET", "HEAD", "OPTIONS"],
       cachedMethods: ["GET", "HEAD"],
       cachePolicyId: cachingOptimized.id,
+      responseHeadersPolicyId: responseHeaders.id,
+      compress: true,
+    },
+    {
+      // The manifest is the atomic pointer to immutable dataset builds.
+      pathPattern: "/datasets/*/dataset.json",
+      targetOriginId: "data",
+      viewerProtocolPolicy: "redirect-to-https",
+      allowedMethods: ["GET", "HEAD", "OPTIONS"],
+      cachedMethods: ["GET", "HEAD", "OPTIONS"],
+      cachePolicyId: cachingDisabled.id,
       responseHeadersPolicyId: responseHeaders.id,
       compress: true,
     },
