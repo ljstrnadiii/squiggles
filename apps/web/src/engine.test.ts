@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { QueryTab, ViewportResult } from "./contracts";
 import { BrowserDuckDBEngine, cacheBudget, lodForZoom } from "./engine";
@@ -22,6 +22,33 @@ const viewport = (): Omit<ViewportResult, "cache"> => ({
 });
 
 describe("BrowserDuckDBEngine viewport cache", () => {
+  it("registers optional render pyramid files separately from canonical shards", async () => {
+    const posted: Record<string, unknown>[] = [];
+    class WorkerMock {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      postMessage(message: { id: number } & Record<string, unknown>) {
+        posted.push(message);
+        queueMicrotask(() => this.onmessage?.({ data: { id: message.id, ok: true, value: true } } as MessageEvent));
+      }
+    }
+    const originalWorker = globalThis.Worker;
+    globalThis.Worker = WorkerMock as unknown as typeof Worker;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      schema_version: "1.4.0", activity_count: 1, rejection_count: 0, bbox: [-105, 40, -104, 41],
+      shards: [{ path: "activities/a.parquet", row_count: 1, byte_size: 10, sha256: "a" }],
+      render_levels: [{ lod: 0, path: "render/lod-0.parquet", row_count: 1, byte_size: 5, sha256: "b", row_groups: [{ row_count: 1, bbox: [-105, 40, -104, 41], vertex_count: { sum: 2, min: 2, max: 2 }, clean_vertex_count: { sum: 2, min: 2, max: 2 } }] }],
+    })));
+    const engine = new BrowserDuckDBEngine();
+    await engine.openDataset({ kind: "url", baseUrl: "https://example.test/dataset", name: "test" });
+    expect(posted[0]).toMatchObject({
+      type: "open",
+      files: [{ name: "activities/a.parquet", url: "https://example.test/dataset/activities/a.parquet" }],
+      renderLevels: [{ lod: 0, file: { name: "render/lod-0.parquet", url: "https://example.test/dataset/render/lod-0.parquet", rowGroups: [{ vertexSum: 2, cleanVertexSum: 2 }] } }],
+    });
+    fetchMock.mockRestore();
+    globalThis.Worker = originalWorker;
+  });
+
   it("holds coarse overviews until the map is close enough to benefit from detail", () => {
     expect([7.99, 8, 11.99, 12, 13.99, 14, 15.99, 16].map(lodForZoom)).toEqual([0, 1, 1, 2, 2, 3, 3, 4]);
   });

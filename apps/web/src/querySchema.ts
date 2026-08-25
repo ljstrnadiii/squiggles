@@ -1,4 +1,4 @@
-export const QUERY_SCHEMA = `Squiggles DuckDB query contract (schema 1.3.0)
+export const QUERY_SCHEMA = `Squiggles DuckDB query contract (schema 1.4.0)
 
 Return requirement:
 - Every selection query must return an activity_id column.
@@ -16,7 +16,7 @@ name VARCHAR NOT NULL
 sport_type VARCHAR NOT NULL
 start_time TIMESTAMPTZ
 end_time TIMESTAMPTZ
-start_year BIGINT NOT NULL -- Hive partition column
+start_year BIGINT NOT NULL
 start_month BIGINT NOT NULL -- 1 through 12
 activity_family VARCHAR NOT NULL -- run, ride, ski, foot, water, other; Hive partition column
 original_start_time VARCHAR

@@ -6,6 +6,7 @@ const engineCalls = vi.hoisted(() => ({ execute: vi.fn() }));
 vi.mock("maplibre-gl", () => ({ Map: class { jumpTo() {} setStyle() {} remove() {} } }));
 vi.mock("./engine", () => ({
   BrowserDuckDBEngine: class {
+    setResolution() {}
     async openDataset(source: { name?: string }) {
       return { id: source.name ?? "synthetic", name: source.name ?? "synthetic", manifest: { schema_version: "1.0.0", activity_count: 1, rejection_count: 0, bbox: [-105, 39, -104, 40], shards: [] } };
     }
@@ -47,6 +48,10 @@ describe("App", () => {
     expect(screen.getByRole("region", { name: "System settings" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Use imperial units" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Use system theme" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Medium" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "High" }));
+    expect(screen.getByRole("button", { name: "High" })).toHaveAttribute("aria-pressed", "true");
+    expect(localStorage.getItem("activity-map.resolution.v1")).toBe("high");
     fireEvent.click(screen.getByRole("button", { name: "Use light theme" }));
     expect(screen.getByRole("button", { name: "Use light theme" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("img", { name: "Squiggles" })).toHaveAttribute("src", "/logo-light.png");
