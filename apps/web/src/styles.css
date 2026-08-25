@@ -298,7 +298,8 @@ button:disabled {
   display: none;
 }
 .theme-control,
-.unit-control {
+.unit-control,
+.resolution-control {
   flex: none;
   display: inline-flex;
   gap: 0;
@@ -308,7 +309,8 @@ button:disabled {
   background: var(--input);
 }
 .theme-control button,
-.unit-control button {
+.unit-control button,
+.resolution-control button {
   width: 25px;
   height: 24px;
   padding: 0;
@@ -364,12 +366,14 @@ button:disabled {
   text-transform: uppercase;
 }
 .theme-control button[aria-pressed="true"],
-.unit-control button[aria-pressed="true"] {
+.unit-control button[aria-pressed="true"],
+.resolution-control button[aria-pressed="true"] {
   background: var(--panel);
   color: var(--text);
   box-shadow: 0 1px 4px var(--shadow);
 }
-.unit-control {
+.unit-control,
+.resolution-control {
   flex: none;
   display: inline-flex;
   gap: 0;
@@ -378,12 +382,14 @@ button:disabled {
   border-radius: 8px;
   background: var(--input);
 }
-.unit-control button {
+.unit-control button,
+.resolution-control button {
   width: 28px;
   font-size: 9px;
   font-weight: 750;
   text-transform: uppercase;
 }
+.resolution-control button { width: auto; padding-inline: 8px; }
 .toolbar {
   position: fixed;
   z-index: 12;

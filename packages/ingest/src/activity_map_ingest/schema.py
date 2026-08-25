@@ -7,7 +7,7 @@ import pandera.pyarrow as pa_model
 import pyarrow as pa
 from pandera.typing.pyarrow import Table
 
-SCHEMA_VERSION = "1.3.0"
+SCHEMA_VERSION = "1.4.0"
 GEOMETRY_COLUMNS = (
     "geometry",
     "geometry_lod0",
@@ -93,6 +93,19 @@ class RejectionSchema(pa_model.DataFrameModel):
     message: str
 
 
+class RenderActivitySchema(pa_model.DataFrameModel):
+    activity_id: str
+    name: str
+    sport_type: str
+    point_count: int = pa_model.Field(ge=2)
+    clean_point_count: int = pa_model.Field(ge=2)
+    vertex_count: int = pa_model.Field(ge=2)
+    clean_vertex_count: int = pa_model.Field(ge=2)
+
+    class Config:
+        strict = False
+
+
 def activity_arrow_schema() -> pa.Schema:
     scalar = [
         pa.field("activity_id", pa.string(), False),
@@ -168,6 +181,81 @@ def geo_metadata(bounds: list[float]) -> dict[bytes, bytes]:
         }
     payload = {"version": "1.1.0", "primary_column": "geometry", "columns": columns}
     return {b"geo": json.dumps(payload, separators=(",", ":")).encode()}
+
+
+def render_arrow_schema() -> pa.Schema:
+    names = [
+        "activity_id",
+        "name",
+        "sport_type",
+        "start_time",
+        "distance_m",
+        "elevation_gain_m",
+        "max_elevation_m",
+        "clean_distance_m",
+        "clean_elevation_gain_m",
+        "clean_max_elevation_m",
+        "source_url",
+        "xmin",
+        "ymin",
+        "xmax",
+        "ymax",
+        "clean_xmin",
+        "clean_ymin",
+        "clean_xmax",
+        "clean_ymax",
+        "point_count",
+        "clean_point_count",
+    ]
+    canonical = activity_arrow_schema()
+    fields = [canonical.field(name) for name in names]
+    geometry_metadata = {
+        b"ARROW:extension:name": b"geoarrow.linestring",
+        b"ARROW:extension:metadata": json.dumps({"crs": "OGC:CRS84"}).encode(),
+    }
+    return pa.schema(
+        [
+            *fields,
+            pa.field("vertex_count", pa.int64(), False),
+            pa.field("clean_vertex_count", pa.int64(), False),
+            pa.field("geometry", line_type, False, metadata=geometry_metadata),
+            pa.field("geometry_clean", line_type, False, metadata=geometry_metadata),
+        ]
+    )
+
+
+def render_geo_metadata(bounds: list[float]) -> dict[bytes, bytes]:
+    columns = {}
+    for name, prefix in (("geometry", ""), ("geometry_clean", "clean_")):
+        columns[name] = {
+            "encoding": "linestring",
+            "geometry_types": ["LineString"],
+            "bbox": bounds,
+            "covering": {
+                "bbox": {
+                    "xmin": [f"{prefix}xmin"],
+                    "ymin": [f"{prefix}ymin"],
+                    "xmax": [f"{prefix}xmax"],
+                    "ymax": [f"{prefix}ymax"],
+                }
+            },
+        }
+    payload = {"version": "1.1.0", "primary_column": "geometry", "columns": columns}
+    return {b"geo": json.dumps(payload, separators=(",", ":")).encode()}
+
+
+def validate_render_table(
+    table: Table[RenderActivitySchema],
+) -> Table[RenderActivitySchema]:
+    expected = render_arrow_schema()
+    if table.schema.names != expected.names:
+        raise ValueError("render table columns do not match the render schema")
+    for expected_field, actual_field in zip(expected, table.schema, strict=True):
+        if expected_field.type != actual_field.type:
+            raise ValueError(
+                f"invalid render Arrow type for {actual_field.name}: {actual_field.type}"
+            )
+    return RenderActivitySchema.validate(table)
 
 
 def validate_arrow_table(table: Table[ActivitySchema]) -> Table[ActivitySchema]:

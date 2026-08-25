@@ -4,7 +4,7 @@ import DeckGL from "@deck.gl/react";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 
-import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SummaryStats, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";
+import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";
 import { binaryPathData, pickedActivity, routeColors } from "./binaryRoutes";
 import { BrowserDuckDBEngine } from "./engine";
 import { buildBinaryHeatDataCooperative, colorForWeight, type CooperativeHeatResult } from "./heat";
@@ -17,6 +17,7 @@ import { AccountPanel } from "./AccountPanel";
 import { clearSession, identityFromSession, loadSession } from "./auth";
 import { loadRuntimeConfig } from "./auth";
 import { loadPublishedView, publishView } from "./publishing";
+import { loadSystemResolution, saveSystemResolution } from "./resolution";
 
 const blankStyle: maplibregl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
 const rasterStyles: Record<Exclude<Basemap, "blank">, { tiles: string[]; attribution: string; maxzoom: number }> = {
@@ -193,6 +194,8 @@ function routeColor(value: string, alpha = 190): [number, number, number, number
 
 export function App() {
   const engine = useMemo(() => new BrowserDuckDBEngine(), []);
+  const [systemResolution, setSystemResolution] = useState<SystemResolution>(loadSystemResolution);
+  engine.setResolution(systemResolution);
   const [tabs, setTabs] = useState(() => tabsWithUrlSettings(loadTabs()));
   const [active, setActive] = useState(() => {
     const requested = new URLSearchParams(window.location.search).get("tab");
@@ -231,6 +234,7 @@ export function App() {
   const [units, setUnits] = useState<UnitSystem>(loadUnits);
   const [systemDark, setSystemDark] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true);
   const [busy, setBusy] = useState(false);
+  const [mapInteracting, setMapInteracting] = useState(false);
   const [selected, setSelected] = useState<RouteActivity | null>(null);
   const [isolateSelected, setIsolateSelected] = useState(false);
   const [hover, setHover] = useState<{ x: number; y: number; item: RouteMetadata; origin: "map" | "table" } | null>(null);
@@ -268,7 +272,6 @@ export function App() {
     if (!tab.style.heatEnabled || isolateSelected) { setHeat(emptyHeat); return; }
     let cancelled = false;
     const element = mapElement.current;
-    setHeat(emptyHeat);
     void buildBinaryHeatDataCooperative(
       routeBatches,
       renderedView,
@@ -277,9 +280,10 @@ export function App() {
       selected?.activityId,
       8,
       () => cancelled,
+      systemResolution === "low" ? 4 : 8,
     ).then(result => { if (!cancelled && result) setHeat(result); });
     return () => { cancelled = true; };
-  }, [isolateSelected, renderedView, routeBatches, selected?.activityId, tab.style.heatEnabled]);
+  }, [isolateSelected, renderedView, routeBatches, selected?.activityId, systemResolution, tab.style.heatEnabled]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = effectiveTheme;
@@ -326,7 +330,7 @@ export function App() {
   async function openSource(source: DatasetSource, requestedView?: MapState, initialTab = tab) {
     try {
       setBusy(true); setError(""); setStatus("Reading dataset manifest…");
-      const dataset = await engine.openDataset(source, (completed, total) => setStatus(`Opening dataset · ${completed.toLocaleString()} / ${total.toLocaleString()} shards`));
+      const dataset = await engine.openDataset(source, (completed, total) => setStatus(`Opening dataset · ${completed.toLocaleString()} / ${total.toLocaleString()} files`));
       ready.current = true; setDatasetName(dataset.name);
       const initialView = requestedView ?? fitBounds(dataset.manifest.bbox);
       setView(initialView);
@@ -386,7 +390,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!ready.current || !selectionReady.current) return;
+    if (!ready.current || !selectionReady.current || mapInteracting) return;
     const request = ++viewportRequest.current;
     const timer = window.setTimeout(async () => {
       const bounds = viewportBounds(view, mapElement.current);
@@ -402,7 +406,7 @@ export function App() {
       }
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [engine, summary.activityCount, view]);
+  }, [engine, mapInteracting, summary.activityCount, systemResolution, view]);
 
   useEffect(() => {
     if (!viewportScope || (!statsOpen && !tableOpen) || !selectionReady.current) return;
@@ -460,6 +464,7 @@ export function App() {
   }
   function changeTheme(theme: ThemeMode) { setThemeMode(theme); saveTheme(theme); }
   function changeUnits(next: UnitSystem) { setUnits(next); saveUnits(next); }
+  function changeSystemResolution(next: SystemResolution) { setSystemResolution(next); saveSystemResolution(next); }
   function openSystemSettings() {
     setSystemSettingsOpen(true); setMenuOpen(false); setSchemaOpen(false); setToolbarOpen(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false);
   }
@@ -606,7 +611,7 @@ export function App() {
 
     {accountMenuOpen && <nav className="account-menu utility-panel" aria-label="Account navigation"><button onClick={() => { setAccountView("account"); setAccountOpen(true); setAccountMenuOpen(false); }}>Account</button><button onClick={() => { setAccountView("upload"); setAccountOpen(true); setAccountMenuOpen(false); }}>Upload Archive</button><button onClick={() => { void publishTabs(); setAccountMenuOpen(false); }}>Publish link</button><button onClick={() => { clearSession(); refreshIdentity(); setAccountMenuOpen(false); }}>Log out</button></nav>}
 
-    {systemSettingsOpen && <section className="system-settings utility-panel" aria-label="System settings"><header><div><span className="eyebrow">SYSTEM</span><strong>Appearance and units</strong></div><button aria-label="Close system settings" onClick={() => setSystemSettingsOpen(false)}>×</button></header><div><label>Theme</label><div className="theme-control" role="group" aria-label="Theme"><button aria-label="Use light theme" aria-pressed={themeMode === "light"} title="Light theme" onClick={() => changeTheme("light")}>☀︎</button><button aria-label="Use system theme" aria-pressed={themeMode === "system"} title="Follow system theme" onClick={() => changeTheme("system")}>◐</button><button aria-label="Use dark theme" aria-pressed={themeMode === "dark"} title="Dark theme" onClick={() => changeTheme("dark")}>☾</button></div></div><div><label>Distance and elevation</label><div className="unit-control" role="group" aria-label="Units"><button aria-label="Use imperial units" aria-pressed={units === "imperial"} title="Show miles and feet" onClick={() => changeUnits("imperial")}>mi</button><button aria-label="Use metric units" aria-pressed={units === "metric"} title="Show kilometres and metres" onClick={() => changeUnits("metric")}>km</button></div></div></section>}
+    {systemSettingsOpen && <section className="system-settings utility-panel" aria-label="System settings"><header><div><span className="eyebrow">SYSTEM</span><strong>Appearance and performance</strong></div><button aria-label="Close system settings" onClick={() => setSystemSettingsOpen(false)}>×</button></header><div><label>Theme</label><div className="theme-control" role="group" aria-label="Theme"><button aria-label="Use light theme" aria-pressed={themeMode === "light"} title="Light theme" onClick={() => changeTheme("light")}>☀︎</button><button aria-label="Use system theme" aria-pressed={themeMode === "system"} title="Follow system theme" onClick={() => changeTheme("system")}>◐</button><button aria-label="Use dark theme" aria-pressed={themeMode === "dark"} title="Dark theme" onClick={() => changeTheme("dark")}>☾</button></div></div><div><label>Distance and elevation</label><div className="unit-control" role="group" aria-label="Units"><button aria-label="Use imperial units" aria-pressed={units === "imperial"} title="Show miles and feet" onClick={() => changeUnits("imperial")}>mi</button><button aria-label="Use metric units" aria-pressed={units === "metric"} title="Show kilometres and metres" onClick={() => changeUnits("metric")}>km</button></div></div><div><label>Map resolution</label><div className="resolution-control" role="group" aria-label="Map resolution"><button aria-pressed={systemResolution === "low"} onClick={() => changeSystemResolution("low")}>Low</button><button aria-pressed={systemResolution === "medium"} onClick={() => changeSystemResolution("medium")}>Medium</button><button aria-pressed={systemResolution === "high"} onClick={() => changeSystemResolution("high")}>High</button></div></div></section>}
     {accountOpen && <AccountPanel view={accountView} onClose={() => setAccountOpen(false)} onIdentityChange={refreshIdentity} />}
 
     {schemaOpen && <section className="schema-panel utility-panel" aria-label="AI Skills"><header><strong>AI Skills · Squiggles SQL</strong><div><button onClick={() => void copySchema()}>{schemaCopied ? "Copied" : "Copy for your AI"}</button><button aria-label="Close AI Skills" onClick={() => setSchemaOpen(false)}>×</button></div></header><p>Paste this into the AI assistant of your choice, then describe the activities you want to select.</p><pre>{QUERY_SCHEMA}</pre></section>}
@@ -631,7 +636,7 @@ export function App() {
 
     <section className="map" ref={mapElement}>
       <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />
-      <DeckGL controller={{ dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: 0 }} onViewStateChange={({ viewState, interactionState }) => {
+      <DeckGL controller={{ dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: 0 }} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
         // Ignore camera callbacks produced while an asynchronously loaded published
         // view is being applied. Only a real pointer/wheel gesture may own the camera.
         if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isZooming) return;

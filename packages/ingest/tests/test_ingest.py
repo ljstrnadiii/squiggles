@@ -206,7 +206,7 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
     assert progress[-1] == (2, 2)
     assert manifest["activity_count"] == 2
     assert manifest["rejection_count"] == 1
-    assert manifest["schema_version"] == "1.3.0"
+    assert manifest["schema_version"] == "1.4.0"
     assert all("activity_family=" in shard["path"] for shard in manifest["shards"])
     assert all("start_year=" not in shard["path"] for shard in manifest["shards"])
     assert all("start_month=" not in shard["path"] for shard in manifest["shards"])
@@ -215,6 +215,18 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
     assert all(
         sum(group["row_count"] for group in shard["row_groups"]) == shard["row_count"]
         for shard in manifest["shards"]
+    )
+    assert [level["lod"] for level in manifest["render_levels"]] == list(range(5))
+    assert all(level["path"].startswith("render/lod-") for level in manifest["render_levels"])
+    assert all(
+        sum(group["vertex_count"]["sum"] for group in level["row_groups"]) > 0
+        for level in manifest["render_levels"]
+    )
+    assert all(
+        group["vertex_count"]["sum"] + group["clean_vertex_count"]["sum"] <= 1_000_000
+        or group["row_count"] == 1
+        for level in manifest["render_levels"]
+        for group in level["row_groups"]
     )
     activity_table = pq.ParquetFile(output / manifest["shards"][0]["path"]).read()
     assert activity_table["start_year"].to_pylist() == [2025]
