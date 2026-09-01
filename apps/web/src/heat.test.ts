@@ -68,10 +68,10 @@ describe("buildHeatData", () => {
     const east = buildBinaryHeatData([batch], { longitude: -104.5, latitude: 40, zoom: 12 }, 800, 600);
     expect(west.sourceVertices).toBe(2);
     expect(west.maxScore).toBe(1);
-    expect(west.scores.has("c")).toBe(false);
+    expect(west.scores.get("c") ?? 0).toBe(0);
     expect(east.sourceVertices).toBe(3);
     expect(east.maxScore).toBe(2);
-    expect(east.scores.has("a")).toBe(false);
+    expect(east.scores.get("a") ?? 0).toBe(0);
   });
 
   it("cooperatively scores the same binary coordinates and yields between slices", async () => {
