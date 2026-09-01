@@ -1,5 +1,6 @@
 import type { ActivityListItem,BinaryRouteBatch,Dataset,DatasetManifest,DatasetSource,ExecutionEngine,QueryResult,QueryTab,RouteActivity,SystemResolution,ViewportBounds,ViewportResult } from "./contracts";
 import { RESOLUTION_VERTEX_BUDGETS } from "./lod";
+import { normalizeSelectionSql } from "./querySql";
 type Result<T>={id:number;ok:true;value:T}|{id:number;ok:false;error:string};
 type WorkerViewportResult=Omit<ViewportResult,"cache">;
 type CacheEntry={result:WorkerViewportResult;bytes:number;bounds?:ViewportBounds;lod:ReturnType<typeof lodForZoom>};
@@ -51,8 +52,9 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   }
   async execute(tab:QueryTab,zoom:number,bounds?:ViewportBounds):Promise<QueryResult&ViewportResult>{
     const nextClean=tab.style.cleanEnabled;
-    const result=await this.networkRequest<QueryResult&WorkerViewportResult>({type:"execute",sql:tab.sql,lod:lodForZoom(zoom),budget:RESOLUTION_VERTEX_BUDGETS[this.resolution],bounds,clean:nextClean});
-    this.clean=nextClean;this.selectionKey=`${this.datasetRevision}|${this.clean?1:0}|${tab.sql}`;
+    const sql=normalizeSelectionSql(tab.sql);
+    const result=await this.networkRequest<QueryResult&WorkerViewportResult>({type:"execute",sql,lod:lodForZoom(zoom),budget:RESOLUTION_VERTEX_BUDGETS[this.resolution],bounds,clean:nextClean});
+    this.clean=nextClean;this.selectionKey=`${this.datasetRevision}|${this.clean?1:0}|${sql}`;
     return {...result,...this.cacheResult(result,this.cacheKey(zoom,bounds),false,bounds,zoom)};
   }
   async renderViewport(zoom:number,bounds:ViewportBounds):Promise<ViewportResult>{
