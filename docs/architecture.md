@@ -1,37 +1,88 @@
 # Architecture
 
-SQL, datasets, tabs, summaries, and map semantics are stable concepts. The execution location is replaceable.
+## Boundaries
 
-The browser and future hosted engine share SQL semantics and produce a `QueryResult` with a summary and renderer-facing `RenderPlan`. An Arrow plan names activities for local rendering; an MVT plan supplies a tile URL template. Physical output need not match across engines.
+- **Ingestion:** source adapter → normalized Arrow → GeoParquet.
+- **Canonical data:** immutable activity GeoParquet.
+- **Query:** DuckDB SQL over the logical `activities` relation.
+- **Rendering:** GeoArrow buffers → deck.gl; MapLibre provides basemaps.
+- **Control plane:** identity, ownership, saved views, publishing, upload state.
+- **Infrastructure:** Pulumi-managed AWS resources.
 
-An `ActivitySourceAdapter` isolates source discovery and metadata normalization; Strava is the first implementation and accepts ZIP or extracted-directory inputs. It normalizes duplicate-header CSV metadata and FIT/GPX/TCX tracks into Ray Dataset items. Ray produces Pandera-typed PyArrow batches, groups by coarse activity family, and calls `write_datasink` directly. `GeoParquetDataSink` spatially sorts all years together inside each family, chunks complete groups, validates them, attaches per-shard GeoParquet metadata, and writes them without driver-side activity materialization or a publication reread. `start_year` and `start_month` remain scalar Parquet columns. The separate validation phase deliberately rereads shards and checks their hashes/schema.
+## Ingestion
 
-The browser reads `dataset.json`, registers its canonical shards and optional render pyramid with DuckDB-Wasm in a Web Worker, and creates a private `activity_source` relation plus the public logical `activities` view. SQL materializes distinct activity IDs together with effective point counts and bounds; summary SQL semi-joins those IDs. Subsequent pans estimate visible vertices from that in-memory selection rather than rescanning canonical Parquet. Schema 1.4 renders from exactly one spatially ordered GeoParquet level, while older manifests continue selecting one of their canonical GeoArrow LOD columns. DuckDB applies row-group bbox statistics and the exact row predicate. Rendering diagnostics reports exact candidate-fragment counts and metadata-derived expected row-group/row counts, bytes avoided, and kept-row efficiency. It deliberately labels row-group reads as estimates because DuckDB-Wasm does not expose a stable per-query physical row-group counter. The worker exposes each Arrow record batch to deck.gl's binary `PathLayer`: the interleaved `Float64Array` coordinate values are transferred by ownership, while compact offsets and activity indices support segmentation and picking. Variable route colors are repeated into the binary API's required four-byte-per-vertex GPU attribute; coordinates themselves are not repeated. No viewport coordinate is expanded into a JavaScript point object or GeoJSON. Before a Clean execution, the worker replaces the public view with a projection of the precompiled `clean_*` geometry, bounds, summaries, point count, and `list_filter(track_points, p -> p.clean)` under the canonical names. The same user SQL therefore observes the chosen raw or clean representation, while source Parquet remains immutable. MapLibre offers OpenStreetMap streets, OpenTopoMap, Esri imagery, and a network-independent blank style with provider attribution visible.
+- Source adapters isolate archive-specific discovery and metadata normalization.
+- Strava export is the currently supported adapter.
+- FIT, GPX, and TCX normalize into one activity schema.
+- Ray processes Arrow batches; Pandera validates table contracts.
+- `GeoParquetDataSink` writes canonical shards directly.
+- Raw activity data remains canonical; cleaning is stored as derived columns.
 
-Statistics and Table normally describe the complete distinct SQL selection. Their shared Viewport-only control instead sends the current camera bounds to the same worker, preselects manifest fragments, applies the canonical route-bbox intersection predicate, and semi-joins `current_selection`. The scoped panels refresh after the map render settles, so panning a mountain updates both interfaces without changing or resaving the user's SQL.
+## Physical data layout
 
-Saved queries and map state are control-plane metadata in versioned local storage and are selected through the current-query dropdown rather than a visible tab strip. Stable query IDs remain independent of that presentation. The URL mirrors the active query ID, map camera, route-thickness scale, and other non-sensitive rendering controls so a reload or copied link restores the same view. A newly created query inherits the live camera and style because changing a selection should not relocate the user; established queries retain their own successfully saved camera. Query/settings use the same occlusion-aware right drawer and mobile bottom sheet as the product views. Visual controls update live. Clean refreshes the last successfully applied SQL against the derived relation without applying an unsaved SQL draft; edited SQL requires explicit Run, while switching queries necessarily executes the newly active query. The URL does not contain SQL, activity IDs, dataset contents, or custom query definitions; custom queries therefore still require the receiving browser's local storage. Hosted identity will move this metadata to per-user control-plane storage, while cross-user custom-query links require an explicit immutable share record keyed independently from the owner's editable query. Camera coordinates can reveal the viewed area and are treated as an explicit sharing choice. Canonical activity data remains ignored GeoParquet. No application API exists yet.
+- Hive partition: `activity_family`.
+- `start_year` and `start_month` remain scalar Parquet columns.
+- Activities are spatially ordered by route-bbox Morton key.
+- Manifest stores shard and row-group conservative bboxes.
+- Canonical shards contain full data and LOD columns.
+- Schema 1.4 adds render-only GeoParquet files for LOD0–LOD4.
 
-The top-level Table asks the DuckDB worker for scalar metadata and precomputed bounds for every activity in `current_selection`. It does not transfer route geometry. The browser sorts those lightweight rows locally; choosing a row fits the map to its bounds, closes the table, and fetches that activity's full geometry and telemetry on demand. Selection-wide aggregation remains in DuckDB, and table filtering remains ordinary editable DuckDB SQL.
+## Browser execution
 
-Stage 4's heat path runs after the debounced viewport selection and never creates a second geometry representation. It assigns every vertex of the worker-selected LOD/raw path to stable 8-pixel Web Mercator cells. Numeric cell totals and per-activity cell counts produce a route score from cross-activity vertex pairs in the same or eight neighboring cells; own-route counts are subtracted. The main-thread calculation cooperatively yields between bounded slices so camera input and drawing can proceed without cloning or detaching deck.gl's coordinate buffers. deck.gl renders the existing route segments once, using that activity's single logarithmically scaled color. The algorithm is linear in vertices plus nine lookups per occupied route cell, preserves the selected geometry exactly, and avoids both a global cloud and lower-resolution heat sections.
+- Browser loads `dataset.json`.
+- DuckDB-Wasm runs in a Web Worker.
+- `activity_source` is private; user SQL targets `activities` only.
+- Selection queries must return `activity_id`.
+- Selection state is reused by viewport rendering, statistics, and table queries.
+- Clean mode replaces the logical `activities` view with derived clean columns before SQL runs.
 
-MapLibre and deck.gl remain separate stacked canvases. deck.gl owns interaction and cursor-anchored zoom; both receive the same controlled camera. MapLibre applies that camera in a pre-paint layout effect rather than a later animation frame, preventing a transient basemap/route offset during pan and zoom.
+## Viewport rendering
 
-Successfully encountered viewport batches are retained in a main-thread LRU keyed by dataset, SQL selection, clean/raw mode, LOD ceiling, and exact bounds. The cache owns the already-transferred typed buffers and returns the same references on a hit; it does not serialize, convert, or duplicate coordinates. Its adaptive budget is 128 MiB per reported GiB of device memory, clamped to 256 MiB–1 GiB. Dataset changes clear it and least-recently-used viewports are evicted under pressure. This first cache deliberately targets repeat views; overlap-aware spatial buffer reuse and persistent browser storage remain later benchmark decisions.
+- Manifest bboxes prune unrelated files.
+- Row-group bboxes guide expected Parquet pruning.
+- Exact activity bbox predicates run in DuckDB.
+- Zoom sets the maximum LOD fidelity.
+- Vertex budget may choose a coarser representation.
+- LOD0–LOD3 are simplified; LOD4 is full geometry.
+- GeoArrow coordinate buffers transfer directly to deck.gl.
+- Routes are split at coordinate gaps over 20 km before drawing.
 
-LOD route geometry is an overview and picking approximation, not an additional activity. A separate transparent 10-pixel hit layer makes thin overview paths practical to select. Once selected, that activity is removed from both the LOD overview and proximity-heat inputs and is rendered exactly once from full geometry above a casing. The detail card can isolate it by suppressing all remaining overview and heat layers. This prevents the simplified and ground-truth paths from double-rendering or double-contributing to heat.
+## Cache
 
-Heat colors normalize distinct-neighbor counts with `log1p(weight) / log1p(maximum)`, then apply a per-tab temperature exponent. Temperature changes only the color transfer function, not proximity counts or geometry. The query toolbar lazy-loads a CodeMirror SQL editor with the public `activities` schema for local completion. DuckDB's native autocomplete/UI extensions are not loaded: the UI extension does not support Wasm, and arbitrary extension loading remains outside the browser security boundary.
+- Cache key includes dataset revision, SQL selection, clean/raw state, LOD ceiling, and bounds.
+- Cached viewport results own already-transferred typed arrays.
+- Contained viewports can reuse an enclosing cached result.
+- Follow-up viewport misses use padded bounds to improve reuse.
+- Cache is memory-only and LRU-bounded.
 
-For every viewport render, the browser worker calculates five visible-vertex estimates in one DuckDB aggregation: four measured LOD limits and raw `point_count`. Zoom is a real fidelity ceiling: zooms below 8 use LOD0, 8–11 use at most LOD1, 12–13 use at most LOD2, 14–15 use at most LOD3, and raw geometry becomes eligible at 16. Within those ceilings, budgets of 250,000, 400,000, 600,000, 850,000, and 1 million vertices can downgrade dense views further. A dense close view therefore never reads a finer column merely because it exists, while raw fidelity returns when its visible estimate fits. Every deck.gl path explicitly declares pixel units rather than relying on PathLayer's meter default. Base route and heat width is 0.15% of the map's shorter pixel dimension at every zoom; a persisted 0.25–4.0× factor scales it linearly, and ResizeObserver keeps responsive layouts current. Hover/selection widths derive from that same basis, while the transparent picking target remains at least 10 pixels. Map and table hover share the same route-focus layers, but only map-origin hover displays a tooltip. Route fitting uses pixel bounds and pads for the measured right drawer or mobile bottom sheet. Statistics and Table optionally restrict their semi-joined selection to activities whose complete route bbox is contained in the unobscured map, while rendering continues to intersect route bboxes with the full map. The first-class Rendering drawer reports the chosen representation, planned/raw estimates, budget, actual transferred vertices, combined query/transfer time, and requested/resulting widths. LOD0 remains the floor for broader views; datasets too large even there still require the pending measured density/MVT decision. Before deck.gl and heat preparation, paths are split at coordinate gaps over 20 km so missing or corrupt sections cannot become cross-map lines.
+## UI/query semantics
 
-The local hosting boundary is static. Manifest and shard reads, query execution, clean projection, summaries, viewport pruning, LOD selection, table/detail reads, and nested telemetry processing all run in DuckDB-Wasm inside the browser worker. Proximity heat and drawing run in the main browser process through deck.gl/WebGL. No FastAPI endpoint, hosted database, server-side query, or application credential is present. A static host needs byte-range delivery for efficient URL datasets; directory-picker datasets remain completely local. Optional basemap tiles are the only third-party runtime dependency.
+- Saved queries keep SQL, camera, and per-query rendering style.
+- Switching queries executes the saved SQL.
+- Editing SQL requires explicit Run.
+- New queries inherit the live camera/style.
+- Statistics and Table describe the full selection by default and can scope to the viewport.
+- Activity detail fetches full geometry/telemetry on demand.
+- Published views persist query tabs, active tab, camera, and rendering state.
 
-Activity detail loads full geometry plus the selected activity's nested track points on demand. The worker derives cumulative distance/elevation samples, and the profile hover state drives a separate map marker without adding another dataset query.
+## Heat
 
-## Hosted delivery boundary
+- Heat uses the already selected render geometry.
+- Each route receives one score/color from nearby vertices belonging to other activities.
+- Heat does not create a second geometry dataset.
 
-The hosted V1 keeps execution client-first. For development without purchased DNS, Pulumi owns separate private web and dataset S3 buckets behind one CloudFront distribution and its generated hostname. The default behavior serves the content-hashed Vite app with SPA rewriting; `/datasets/*` uses the range-friendly data origin. DuckDB-Wasm therefore fetches manifests and Parquet ranges directly from CloudFront without an application server. Vercel remains an optional later frontend/preview host, not a dependency of the current dev deployment.
+## Hosted V1
 
-Hosted datasets use a stable root manifest as an atomic pointer to immutable builds beneath `datasets/<dataset-id>/builds/<build-id>/`. Canonical, render, and rejection objects are uploaded and validated before the root manifest changes. Parquet build objects are cached as immutable; the root `dataset.json` bypasses CloudFront caching. Before a legacy root receives its first rebuild, its preserved artifacts and manifest are registered as the initial rollback build. DynamoDB records active, previous, and historical builds so an administrator can switch the root manifest back without recompilation. A fleet rebuild queues every discovered dataset in one operation, while the Batch compute-environment vCPU ceiling continues to bound actual concurrency and cost.
+- Static application and immutable dataset objects are delivered through CloudFront/S3.
+- DuckDB and rendering remain client-side.
+- Cognito handles identity.
+- DynamoDB stores control-plane metadata only.
+- Lambda/API Gateway handles account/upload/publish operations.
+- AWS Batch/Fargate performs managed compilation with no idle worker.
+- Private activity data is not stored in DynamoDB.
+
+## Execution abstraction
+
+- SQL semantics are stable across execution engines.
+- `RenderPlan` separates query semantics from physical rendering delivery.
+- Direct Arrow is current; MVT remains benchmark-gated.
