@@ -1,0 +1,22 @@
+.admin-console { margin-top: 16px; border-top: 1px solid var(--line-soft); padding-top: 14px; }
+.admin-console > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.admin-console > header strong { font-size: 12px; }
+.admin-console > header span { color: var(--muted); font-size: 10px; }
+.admin-users { display: grid; gap: 8px; }
+.admin-user { display: grid; gap: 7px; padding: 10px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--panel-2); }
+.admin-user-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.admin-user-identity { min-width: 0; display: grid; gap: 2px; }
+.admin-user-identity strong, .admin-user-identity span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-user-identity strong { font-size: 11px; }
+.admin-user-identity span, .admin-user-meta, .admin-user-detail { color: var(--muted); font-size: 9px; }
+.admin-user-status { flex: none; padding: 3px 6px; border: 1px solid var(--line); border-radius: 999px; font-size: 9px; text-transform: uppercase; }
+.admin-user-status.pending { color: #d4aa4f; }
+.admin-user-status.approved { color: #68b88a; }
+.admin-user-status.rejected { color: #d77870; }
+.admin-user-meta { display: flex; flex-wrap: wrap; gap: 8px; }
+.admin-user-detail { overflow-wrap: anywhere; }
+.admin-user-links, .admin-user-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.admin-user-links a { font-size: 9px; color: var(--accent); }
+.admin-user-actions button { padding: 4px 7px; font-size: 9px; }
+.admin-user-actions button.active { border-color: var(--accent); color: var(--text); }
+.admin-empty { color: var(--muted); font-size: 10px; }
