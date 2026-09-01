@@ -274,23 +274,31 @@ function manifestVertexEstimate(level: Lod, bounds: Bounds | undefined, clean: b
   return total;
 }
 
+async function preciseVertexEstimates(bounds: Bounds | undefined): Promise<number[]> {
+  const count = "point_count";
+  const estimatesSql = [
+    ...LOD_VERTEX_LIMITS.map((limit, index) => `coalesce(sum(least(a.${count},${limit})),0) lod${index}`),
+    `coalesce(sum(a.${count}),0) lod4`,
+  ].join(",");
+  const estimateSource = selectionAll ? "activities a" : "current_selection a";
+  const estimate = await connection!.query(`SELECT ${estimatesSql} FROM ${estimateSource} WHERE ${viewportPredicate(bounds)}`);
+  const estimates = estimate.toArray()[0] as unknown as Record<string, unknown>;
+  return [0, 1, 2, 3, 4].map(index => Number(scalar(estimates[`lod${index}`])));
+}
+
 async function render(lod: Lod, budget: number, bounds?: Bounds, clean = false) {
   let vertexEstimates: number[] | null = null;
   if (selectionAll) {
     const estimates = [0, 1, 2, 3, 4].map(level => manifestVertexEstimate(level as Lod, bounds, clean));
-    if (estimates.every(value => value != null)) vertexEstimates = estimates as number[];
+    if (estimates.every(value => value != null)) {
+      const manifestEstimates = estimates as number[];
+      // Row-group sums are a cheap upper bound. They are trustworthy when the
+      // requested LOD fits, but a small viewport can intersect a large row-group
+      // bbox and make the bound far too conservative. Refine before downshifting.
+      if (chooseLod(manifestEstimates, lod, budget) === lod) vertexEstimates = manifestEstimates;
+    }
   }
-  if (!vertexEstimates) {
-    const count = "point_count";
-    const estimatesSql = [
-      ...LOD_VERTEX_LIMITS.map((limit, index) => `coalesce(sum(least(a.${count},${limit})),0) lod${index}`),
-      `coalesce(sum(a.${count}),0) lod4`,
-    ].join(",");
-    const estimateSource = selectionAll ? "activities a" : "current_selection a";
-    const estimate = await connection!.query(`SELECT ${estimatesSql} FROM ${estimateSource} WHERE ${viewportPredicate(bounds)}`);
-    const estimates = estimate.toArray()[0] as unknown as Record<string, unknown>;
-    vertexEstimates = [0, 1, 2, 3, 4].map(index => Number(scalar(estimates[`lod${index}`])));
-  }
+  if (!vertexEstimates) vertexEstimates = await preciseVertexEstimates(bounds);
   const plannedLod = chooseLod(vertexEstimates, lod, budget);
   const renderFile = registeredRenderLevels.get(plannedLod);
   const scan = viewportScan(bounds, renderFile ? [renderFile] : registeredFiles);
