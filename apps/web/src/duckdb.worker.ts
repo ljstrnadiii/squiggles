@@ -371,11 +371,9 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     selectionIsAll = isUniversalSelection(request.sql);
     if (selectionIsAll) {
       await connection!.query("DROP TABLE IF EXISTS current_selection");
-      await connection!.query("DROP VIEW IF EXISTS current_selection");
     } else {
       const probe = await connection!.query(`WITH selected AS (${request.sql}) SELECT * FROM selected LIMIT 0`);
       if (!probe.schema.fields.some(field => field.name === "activity_id")) throw new Error("SQL must return an activity_id column");
-      await connection!.query("DROP VIEW IF EXISTS current_selection");
       await connection!.query("DROP TABLE IF EXISTS current_selection");
       await connection!.query(`CREATE TEMP TABLE current_selection AS WITH selected AS (${request.sql}) SELECT DISTINCT CAST(a.activity_id AS VARCHAR) activity_id,a.point_count,a.xmin,a.ymin,a.xmax,a.ymax FROM activities a SEMI JOIN selected s USING(activity_id)`);
     }
