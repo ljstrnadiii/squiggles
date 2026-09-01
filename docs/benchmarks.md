@@ -1,160 +1,77 @@
 # Benchmarks
 
-## Extracted Strava integration — 2026-08-22
-
-Only aggregate, non-location information from private external input is recorded.
-
-- Metadata rows: 3,264
-- Activity files: 3,233
-- Formats: 2,602 FIT/FIT.GZ, 392 GPX/GPX.GZ, 225 TCX/TCX.GZ, 14 other
-- Initial Arrow→Python publication trial: stopped after more than 12 minutes when nested timestamp materialization caused repeated multi-minute stalls.
-- Accepted activities: 3,189
-- Rejections: 75 — 31 missing files, 30 non-renderable tracks with fewer than two valid points, and 14 unsupported files
-- Ray parse/materialization: 420.43 seconds on 8 local CPUs; reported worker/object-store memory stayed approximately flat near 50 MiB during the steady-state parse
-- Direct `GeoParquetDataSink` write: 6.32 seconds for 1.2 GiB of uncompressed Arrow block data
-- Published output: 322 activity shards, 589,418,400 compressed activity bytes; shard sizes range from 30,392 to 6,608,842 bytes
-- Family/year grouping benchmark: 522.57 seconds end-to-end, including 463.05 seconds for parse/materialization and 25.74 seconds for grouped hash-shuffle plus direct sink publication
-- Grouped output: 49 logical Hive partitions and 83 shards totaling 510,094,335 bytes; shards contain at most 64 rows and range up to 19,813,874 bytes
-- Compared with the month-fragmented baseline, grouping reduced physical shard count by 74.2% and compressed activity bytes by 13.5%, at a one-time publication cost increase of 19.42 seconds. This is accepted because browser startup otherwise fans out over 322 files.
-- The first grouped compile revealed that topology-preserving LineString simplification could retain 3,443,070 vertices in `geometry_lod0`, despite its measured 40-vertex target. LineStrings now use deterministic non-topology-preserving Douglas-Peucker simplification; endpoints and validity are still checked, while the validation command enforces the measured per-row LOD limits.
-- Corrected LOD compile: 294.24 seconds end-to-end, including 245.98 seconds for parse/materialization and 14.90 seconds for grouped publication. It produced the same 3,189 accepted rows and 75 rejections in 83 shards totaling 438,628,862 bytes; the largest shard was 16,572,525 bytes.
-- Corrected geometry totals: 126,494 LOD0 vertices, 317,136 LOD1, 1,259,440 LOD2, 5,708,384 LOD3, and 13,255,105 full-resolution vertices. Relative to the first grouped compile, the correction reduced LOD0 vertices by 96.3%, end-to-end compile time by 43.7%, and compressed output by 14.0%.
-- Validation: manifest checksums, canonical schema, GeoParquet metadata, and DuckDB uniqueness/count checks passed
-- Aggregate quality scan: no invalid bounds, missing/zero distance, missing/zero moving time, or out-of-range timestamps; 12 activities report maximum elevation above 9,000 m and remain unchanged pending a provenance-aware quality policy
-
-The browser developer source opened all 3,189 routes without an API server and a SQL distance filter updated the map and summaries together to 45 routes. With the corrected dataset, an 800-pixel-wide headless browser rendered 3,186 of 3,189 selected activities at LOD0 and constructed 61 distinct-activity heat cells from all 126,377 visible LOD vertices in 16.2 ms. The example nested-point query selected 258 high-altitude runs, rendered 253 in its saved viewport, and constructed 90 heat cells from 10,055 vertices in 1.3 ms. The named query tab and result restored after reload.
-
-Before the compiler correction, a direct browser heat preparation pass over 3,437,126 visible LOD0 vertices took 541.9 ms. Adding bounded sampling and direct Web Mercator cell calculation reduced that compatibility case to 46.1 ms over 112,825 sampled vertices. The corrected dataset no longer needs sampling at LOD0 for this export and completes the same preparation in 16.2–20.2 ms. Heat weights count each activity at most once per screen-space cell, so dense recording intervals within one route do not inflate the result.
-
-The global heat cloud was replaced after visual evaluation with heat-colored route sections. A first exact 3×3 neighboring-cell union did not return browser control within 30 seconds because dense global cells repeatedly rebuilt large distinct-activity sets. Exact same-cell membership is constant-time per vertex. Rendering every edge separately then took 61.0 ms to prepare 123,305 line instances; coalescing adjacent edges with identical density reduced this to 33.8–39.2 ms and 3,247 path instances for all 126,494 visible vertices. The 12k-foot query prepared 10,095 vertices as 600 colored route sections in 3.8 ms at a 390×844 mobile viewport. The mobile document and toolbar remained 390 pixels wide with no horizontal page overflow. A fresh-page final acceptance reported no application or deck.gl console errors.
-
-Browser memory, query latency, FPS, and the required 1M/10M/50M/100M synthetic planner tiers remain Stage 4 work.
-
-## Schema 1.2 clean-view compile — 2026-08-22
-
-The same ignored private export compiled with conservative derived clean geometry/LOD/summary fields in approximately 326 seconds: Ray parsing and derivation took 263.52 seconds and grouped shuffle/write took 35.25 seconds. It retained 3,189 accepted activities and 75 rejections across 83 shards. Compressed activity shards increased from 438,628,862 bytes in schema 1.1 to 634,436,538 bytes in schema 1.2 (44.6%) because raw and clean geometry LODs coexist; raw telemetry is not duplicated.
-
-Aggregate validation found 13,255,105 raw points and 13,255,070 clean points. Two activities contained 35 isolated elevation spikes; the spatial-jump heuristic removed zero points. These are aggregate counts only. Independent schema, checksum, clean-flag/count, geometry-length, and raw/clean LOD endpoint validation passed. A first validator implementation converted nested telemetry to Python and exceeded two minutes plus 1 GB RSS; replacing it with DuckDB list predicates restored validation to seconds while retaining the same invariants.
-
-A 390×844 headless Chromium acceptance opened `?dataset=strava&tab=example-high-runs`, selected the linked 258-activity tab, reran it with Clean enabled, opened first-class Statistics, and exposed cleaning counts without an application error. Query settings remained closed after an explicit toggle, while AI Skills, Dataset, and System theme remained independently available.
-
-## Heat temperature and SQL editor — 2026-08-22
-
-Five million baseline logarithmic color normalizations took 126.93 ms; logarithmic normalization plus the default 1.7 temperature exponent took 244.42 ms on the same machine. The added 23.5 ns per color is approximately 0.08 ms for the measured 3,247-section full viewport, below the precision of the existing 33.8–39.2 ms heat preparation observation. Unit coverage verifies that increasing temperature heats intermediate weights while palette endpoints remain invariant.
-
-The schema-aware editor initially raised the main JavaScript bundle from 1,767.54 kB/490.12 kB gzip to 2,212.89 kB/636.17 kB gzip. Lazy-loading restored the initial chunk to 1,768.49 kB/490.47 kB gzip and moved the editor into a 442.54 kB/145.15 kB gzip chunk fetched only when query controls open. A 390×844 Chromium pass loaded the direct-linked 258-route tab with the editor initially absent, opened it on demand, applied the Skiing starter, persisted temperature 2.4, switched to the dark theme button, and reported no document overflow or runtime exception.
-
-## URL state and bottom inspection — 2026-08-22
-
-A 390×844 Chromium pass opened the private dataset at an explicit camera with imagery, Ice heat, temperature 2.4, and Clean enabled. It restored 258 selected routes with query controls closed, no redundant menu, and a 390/390-pixel document width. Clicking the active tab restored the configured controls without toolbar overflow. The bottom Table showed 22 viewport-visible routes out of 258 selected, Statistics and Table closed one another, changing the basemap updated the URL, and no application exception occurred. Only aggregate counts are recorded here.
-
-## Full-selection table navigation — 2026-08-22
-
-The bottom rail was removed in the follow-up design. At a 390×844 Chromium viewport, Statistics and Table rendered in the top header with no horizontal overflow. Opening Table transferred and rendered scalar metadata plus bounds for all 3,189 selected activities in 596 ms without route geometry. Maximum-elevation sorting reported the expected descending state; selecting a row closed the table, changed the persisted camera, opened full detail, and produced no application exception. Only aggregate counts and timing are recorded.
-
-## Adaptive LOD promotion — 2026-08-22
-
-The private export contains 126,494 LOD0, 317,136 LOD1, 1,259,440 LOD2, 5,708,384 LOD3, and 13,255,105 full-resolution vertices. The previous zoom-capped path rendered the broad view at LOD0. A first uniform 1.5-million-vertex budget promoted it to LOD2, but a subsequent full-view interaction exceeded 15 seconds under software WebGL and the trial was rejected.
-
-The August 2026 overview-planner pass used those same measured private-export counts as a controlled before/after planning benchmark. Immediately before the change, the promotion planner selected LOD1 for the broadest view: 317,136 vertices. Treating zoom as a fidelity ceiling selects LOD0 instead: 126,494 vertices, a reduction of 190,642 vertices or 60.1%. The transition points moved from zooms 6/10/13/14 to 8/12/14/16, and tier budgets fell from 750k/900k/1.2M/1.5M/2M to 250k/400k/600k/850k/1M. This measures planner output and transferred-vertex opportunity, not browser latency; a new physical-LOD schema must record its own compile-size and browser-timing comparison before adoption.
-
-The physical-layout follow-up compared the existing 128-row-shard/16-row-group export with two full recompiles. A 512-row-shard/16-row-group candidate reduced files from 30 to 11 while retaining 202 groups. The accepted 512-row-shard/128-row-group candidate retains the same 3,189 activities and 75 rejections in 11 files and 30 groups. Compressed activity bytes fell from 718,888,213 to 574,257,176 (-20.1%), and the largest file is 128.5 MiB. Six warm native full-archive LOD0 aggregates improved from 18.9–19.9 ms to 10.6–11.8 ms (about 42% at the midpoint). On the sanitized dense objective, conservative candidates changed from 25 files/108 groups/1,715 expected rows to 11 files/25 groups/2,765 expected rows. The deliberate tradeoff reads more rows for a narrow view but drastically reduces file and range-request fan-out for both narrow and broad views; the much smaller overview columns make the common broad-view case favorable.
-
-The accepted planner estimates every LOD in one DuckDB aggregation and applies zoom-tier budgets of 750k, 900k, 1.2M, and 1.5M. The broad 3,189-activity view now renders 317,136 LOD1 vertices—2.5× the prior detail—while heat preparation remains bounded at 53.3 ms through per-route sampling. A local viewport containing 81 activities promoted from the former LOD1 ceiling of at most 8,100 vertices to LOD3 with 146,044 vertices (about 18×), tracing corners and trails from the highest compiled representation; heat preparation was 4.7 ms. No application exception or horizontal overflow occurred. The 50× density/MVT crossover remains unresolved.
-
-## Clean SQL, detail, and drawer acceptance — 2026-08-22
-
-The worker-side clean projection was checked independently with DuckDB and in headless Chromium against the ignored private dataset. It exposed 13,255,070 filtered track points, exactly matching the aggregate clean point count, across all 3,189 accepted activities. Of those activities, 2,928 contain at least two recorded elevation samples and can display an elevation profile; activities without source elevation now show an explicit empty state.
-
-Chromium opened the private dataset with Clean enabled and completed the selection at 3,189 activities without an application error. The saved high-altitude query completed at 258 activities; close zoom selected the new full-geometry LOD4 path. A selected activity with elevation rendered a 148-pixel profile. At desktop size, Table was a flush right drawer spanning from the 54-pixel header to the viewport bottom. At 390×844, Statistics was a full-width bottom sheet with no horizontal document overflow. These checks record only aggregate counts and layout dimensions.
-
-## Selected-route deduplication and tab activation — 2026-08-22
-
-A 1,440×1,000 Chromium pass opened all 3,189 activities and activated the saved high-altitude tab without using Run. Its SQL completed with 258 selected activities in 4.70 seconds, including the worker query, geometry transfer, and render update. The selection table contained all 258 result rows; row-to-full-detail navigation completed in 480 ms. The detail control successfully isolated the full-resolution activity while leaving the 258-activity SQL selection unchanged. Light/dark header and favicon assets switched with the theme and loaded at 512×512. No application error occurred.
-
-The selected activity is now removed from both the approximate overview layer and heat preparation before its full geometry is drawn, eliminating the duplicate path and preventing corner-cutting LOD vertices from adding a second heat contribution. The overview keeps its existing geometry workload and adds only a transparent 10-pixel GPU picking layer; a future interaction-FPS benchmark can determine whether spatially indexed CPU picking is warranted at the 50× dataset tier.
-
-## Raw close-zoom fidelity and project drawers — 2026-08-22
-
-At zoom 14, a populated private-export viewport used LOD4 raw geometry for three visible routes: 27,139 coordinates transferred in 424.3 ms and produced seven heat-colored route sections in 2.0 ms. The route and heat strokes reported the intended half-scale 1.00-pixel base width. This viewport was below the former 2-million-vertex fallback, so the representation was unchanged there; planner coverage separately verifies that close zoom now remains raw above that limit instead of silently returning LOD3. The accepted tradeoff permits multi-second close-view transfers in unusually dense extents while retaining the existing budgets below zoom 14.
-
-Desktop Chromium verified the first-class Rendering table and mutually exclusive About drawer with no application error. At 390×844, both drawers became full-width bottom sheets with no document overflow. The mobile tab strip minimum was reduced by 30 pixels to accommodate the added Rendering control without increasing total header width.
-
-## Spatial row-group and manifest pruning — 2026-08-22
-
-Before this change, the 83 private-export shards contained exactly 83 Parquet row groups because the 128-row row-group target exceeded the 64-row shard target. All bbox columns had statistics, but DuckDB's representative small-viewport plan still reported `Total Files Read: 83`; the ordering key packed longitude above latitude rather than interleaving them.
-
-The replacement compile completed parsing/materialization in 269.60 seconds and grouped shuffle/direct publication in 31.18 seconds. It retained 3,189 accepted activities, 75 rejections, 49 Hive partitions, and 83 shards. True Morton bbox-center ordering plus a 16-row target produced 230 row groups (one to four per shard), and all 83 manifest shards now include conservative covering bboxes. Compressed activity data is 716,696,364 bytes; the increase versus the previous schema-1.2 compile reflects smaller row-group compression domains and metadata and is accepted provisionally for measured viewport pruning.
-
-For a representative sparse bbox, only 12 shards contained qualifying rows. Conservative shard extents selected 41 of 83 candidate files before DuckDB, reducing a warm local bbox scan from 17.17 ms to 7.56 ms. The remaining false positives are largely expected from long activities whose bounds cross the viewport or widen a shard's covering rectangle. A denser representative bbox selected 65 of 83 candidates, so this is not a universal 2× improvement; Rendering diagnostics exposes candidate/total counts for continued browser measurement. No spatial centroid is used as a correctness filter.
-
-### FIT elevation recovery and row-group diagnostics — 2026-08-22
-
-Before timestamp joining, 2,928 of 3,189 accepted activities had at least two source elevation samples: all 392 GPX and 225 TCX activities, but only 2,311 of 2,572 FIT activities. A sanitized 30-file sample of the 261 blank FIT profiles found coordinate and altitude record messages at matching timestamps; the old parser recovered zero profiles from that sample. Timestamp merging plus `enhanced_altitude` preference recovered 29/30 in the sample.
-
-The full private recompile retained 3,189 accepted activities and 75 rejections. Ray parsing/materialization took 312.11 seconds and grouped shuffle/direct publication took 36.17 seconds. The result contains 83 shards, 230 row groups, and 718,520,706 compressed activity bytes. It now exposes 3,188 usable elevation profiles: 2,571/2,572 FIT, 392/392 GPX, and 225/225 TCX. The one remaining blank profile has no usable source elevation and is not fabricated.
-
-All 230 row groups have manifest row counts and conservative covering bboxes computed before the direct GeoParquet write; their row counts sum exactly to every shard count. Browser diagnostics uses these values to estimate row-group pruning without issuing a second `EXPLAIN ANALYZE` scan. This adds no Parquet finalization reread and avoids doubling the interactive query merely to collect instrumentation.
-
-### Spatial-first cross-year publication — 2026-08-22
-
-The densest objective 0.02-degree center cell in the private export was used without recording its location. Its viewport intersects 1,097 activities. Under schema 1.2's family/year layout, manifest pruning selected 64/83 fragments and 151/230 row groups. A pre-implementation simulation that spatially ordered all years together within activity family selected 38 fragments and 108 row groups at 64 rows per fragment; using 128-row fragments reduced file opens to 25 while retaining the same 16-row groups.
-
-Schema 1.3 implements that layout and stores `start_year` as a canonical scalar instead of a Hive directory. The private compile retained 3,189 accepted activities, 75 rejections, and 3,188 usable elevation profiles. Parsing/materialization took 286.50 seconds and family shuffle/direct publication took 24.41 seconds. Output contains 30 fragments, 202 row groups, and 718,888,213 compressed bytes; the largest fragment is 56,822,036 bytes. The same dense viewport now selects 25/30 fragments and 108/202 expected row groups. A warm native DuckDB query counting routes and reading LOD3 lengths across those candidates had a 33.0 ms median and returned 2,036,488 vertices. Browser-Wasm/network latency remains a separate acceptance measurement.
-
-The preceding schema-1.2 Vite HTTP-range browser check selected 36 of 83 shards for a populated zoom-14 viewport. DuckDB-Wasm transferred 27,139 raw vertices in 281.0 ms and prepared seven heat sections in 2.3 ms. The clean logical projection reused the same 36-shard prefilter without a query error. Activity isolation removed the focus treatment while retaining full-resolution geometry and the 10-pixel invisible picking target. Only aggregate counts and timings are recorded.
-
-## Full-resolution per-route heat — 2026-08-22
-
-The previous heat representation sampled at most 64 vertices per route and constructed coalesced section geometry. It prepared the 126,494-vertex LOD0 full-export view as 3,247 sections in 33.8–39.2 ms and sampled the high-runs query to roughly 10,000 vertices/600 sections in 3.8 ms, but visibly cut corners independently of the viewport LOD.
-
-The replacement creates no heat paths. On the rebuilt private dataset, the All Activities view scored all 316,836 worker-selected LOD1 vertices and colored 3,186 intact routes in 42.8 ms. The high-runs view scored all 500,371 selected LOD3 vertices and colored 254 intact routes in 69.8 ms. Thus the latter retained roughly 50 times as many heat-evaluated vertices while remaining under 70 ms on this machine. Scores sum cross-activity vertex pairs over the same and eight neighboring 8-pixel cells; each route gets one logarithmically temperature-scaled color.
-
-## Dense close-view planning and ordering — 2026-08-23
-
-The reported dense zoom-14.17 baseline forced raw geometry: 4,761,806 vertices took 8,501.3 ms for query/transfer and 1,948.6 ms for route heat preparation. The planner now treats close zoom as raw eligibility rather than a budget bypass. A 1,440×1,000 software-WebGL pass over a dense local viewport estimated 2,087,813 raw vertices, selected LOD3 at 816,801 estimated/812,382 transferred vertices under the 2-million budget, completed query/transfer in 922.2 ms, and prepared heat in 416.5 ms. This is not a same-extent latency ratio; it confirms column avoidance and planner behavior while the user-provided baseline motivates the change.
-
-Physical ordering was evaluated independently before altering schema 1.3. Exact intersection components over LOD0 produced 286 components, but the largest contained 2,506/3,189 activities (78.6%), making component ID a poor primary sort key. For a dense local objective with 1,058 intersecting activities, current bbox-center Morton order selected 102 row groups/1,632 expected rows (64.8% kept). Coarse Morton-cluster-then-time variants selected 104–159 groups and achieved 41.6–63.6%; adding an extent bucket achieved 42.1–54.6%; route-midpoint and route-coordinate-median Morton keys achieved 56.0% and 60.7%. The current ordering was retained. A front-range-scale objective intersects 2,569 activities and necessarily retained 24 fragments/169 row groups/95.0% row efficiency under current order, so selecting only the planned LOD column is more consequential there than another time interleave.
-
-## Binary GeoArrow rendering and bounded reuse — 2026-08-23
-
-The prior browser path called Arrow `Table.toArray()`, then created one JavaScript array for every route and coordinate pair before structured-cloning the result to the UI. A controlled Node 26 benchmark over 1,000,000 interleaved points measured 68.53 ms and 68.76 MiB of additional JS heap for that nested-point materialization. Constructing deck.gl's binary view over the same `Float64Array` took 0.06 ms, 0.01 MiB of measured heap, and retained exact buffer identity. The route-varying color attribute required by deck.gl's binary path layout took a further 24.38 ms, 1.01 MiB JS heap, and a 3.81 MiB `Uint8Array`; this is a compact GPU attribute rather than a coordinate copy. GPU upload remains unavoidable; the eliminated work is the intermediate per-point object graph and worker structured clone.
-
-The private schema-1.3 dataset then passed a 1,440×900 Chromium acceptance at the existing dense close camera. The selection contained 3,189 activities; viewport pruning kept 1,199 routes from 26/30 candidate fragments and 120/202 expected row groups. The planner chose LOD2, transferred 475,883 vertices as 7.3 MiB of logical GeoArrow buffers, and completed the cold geometry query plus ownership transfer in 912.6 ms. The LRU retained 9.3 MiB of backing buffers under the former 1 GiB desktop budget; the subsequent exact-viewport render was a cache hit in 0.1 ms and retained the same typed buffers. Diagnostics reported zero coordinate objects. Enabling heat scored all 475,883 binary vertices across 1,199 routes and 33,220 proximity cells in 395.5 ms without changing geometry resolution. This real-browser result is not an isolated query-latency comparison with the earlier LOD3 run because the viewport dimensions and chosen representation differ; the controlled materialization benchmark above isolates the representation change.
-
-The viewport-cache regression check previously issued a second worker query when returning from a broader same-LOD viewport to a contained area because exact six-decimal bounds formed the key. Containment reuse reduces that controlled sequence from two geometry requests to one while retaining the same transferred buffers. Cache ceilings are now explicit at 512 MiB for fine-pointer desktop devices and 128 MiB for coarse-pointer mobile devices; heat remains derived and is recomputed rather than cached.
-
-The resolution-budget baseline used the two recorded dense close-view estimate vectors `[51,400, 128,500, 514,000, 2,200,000, 4,761,806]` and `[98,000, 247,100, 988,400, 4,440,000, 8,700,000]`. The former fixed 1M close-view budget selected LOD2 for both (514,000 and 988,400 planned vertices). The device-aware planner selects LOD1 for both at Low/250k, LOD2 then LOD1 at Medium/750k, and LOD2 for both at High/1.25M. Thus mobile's default upper bound falls 75%, desktop's default falls 25%, and users can raise the explicit desktop ceiling 25%, while sparse close views still reach raw geometry. This is a deterministic planner benchmark, not a GPU-frame-time claim; interaction FPS and network timings remain acceptance work on representative Android Chrome and desktop hardware.
-
-## Resolution GeoParquet pyramid — 2026-08-24
-
-The controlled layout tool compared the accepted 11-file/30-row-group schema-1.3 export, two single canonical files, and one render-only GeoParquet per resolution over the same 3,189 activities and automatically selected dense 0.02-degree objective. Warm native LOD2 medians were 12.32 ms for current shards, 14.60 ms for a single canonical file with 128-row groups, and 19.66 ms with 512-row groups, so collapsing canonical data was rejected. The payload-balanced render files measured 3.3 MB LOD0, 6.8 MB LOD1, 23.3 MB LOD2, 95.4 MB LOD3, and 213.8 MB raw. Fixed row counts made average group payloads vary from roughly 0.9 MB to 8.4 MB, so the accepted writer instead closes each level's row groups near one million combined raw-plus-clean vertices. This produced 1/1/3/12/27 groups; the non-terminal groups cluster around 7.4–7.6 MiB compressed on this archive. Vertex count is a better stable payload proxy than route count and permits different boundaries at every level.
-
-Over a local HTTP byte-range server with fresh DuckDB connections, the dense LOD2 objective returned the identical 1,097 activities and 436,553 vertices in 119.54 ms from current shards versus 68.64 ms from the payload-balanced LOD2 render file, a 42.6% latency reduction. Server logs fell from approximately 140 GETs across 11 files to 16 GETs against one file. This isolates HTTP/footer/range fan-out without WAN latency and therefore understates rather than proves the mobile benefit. A rebuilt CloudFront dataset and Android Chrome trace remain required deployment acceptance. The reproducible tool writes only ignored local candidates and never records objective coordinates.
-
-Frontend acceptance now includes 19 tests covering direct buffer identity, binary picking/color mapping, binary heat scoring, and exact-viewport cache reuse. ESLint, TypeScript, tests, and the production build passed. DuckDB-Wasm exports the canonical fixed-size pair as `List<List<Float64>>`; the adapter validates every inner list has exactly two values and uses its flat values buffer directly rather than rewriting it. A fresh software-WebGL redraw after explicitly declaring `positionFormat: XY` and expanding variable colors to deck.gl's required per-vertex layout produced no further draw-buffer underflow errors.
-
-## Camera interaction follow-up — 2026-08-23
-
-Profiling found that each controlled camera update created new binary `PathLayer` data wrappers and layer instances despite retaining the same underlying GeoArrow typed arrays. Those wrapper and layer identities are now memoized across camera-only renders. A subsequent visual correctness pass removed the one-animation-frame delay between deck.gl and the non-interactive MapLibre canvas: MapLibre now receives the identical center and zoom before paint. Geometry, picking, and color buffers are unchanged by these optimizations.
-
-Heat preparation was the other measured main-thread interaction blocker. On the same private export's broad 316,836-vertex LOD1 view, the prior exact binary route scorer completed in one 42.8 ms task. The cooperative implementation completed the same route-level calculation in 51.0 ms wall time over seven slices; the longest observed slice was 8.7 ms. The roughly 8.2 ms wall-time cost is accepted to return control to input and rendering between slices. It deliberately retains the existing buffers on the main thread: transferring them would detach deck.gl's data and cloning them would add a second coordinate allocation. Diagnostics now expose heat slice count and maximum slice duration. Twenty frontend tests, ESLint, TypeScript, and the production build passed.
-
-The mobile heat follow-up prevents viewport queries from starting during an active drag/pan/zoom and retains the last complete heat colors until replacement scores are ready, eliminating the temporary blue fallback. A controlled 500,000-vertex cooperative heat pass reduced the longest synthetic UI slice from 8.77 ms at the former 8 ms target to 4.68 ms at the mobile 4 ms target. Wall time increased from 88.74 to 103.10 ms across 9 versus 18 yields; that trade is accepted because input receives control about twice as often and the prior geometry remains correctly colored while work completes. Desktop retains the 8 ms target.
-
-The camera correctness pass used the full 3,189-activity private selection without recording private coordinates. A wheel event placed at 75% of the map width changed zoom from 1.00 to 1.93 and changed the camera center in the corresponding direction, confirming deck.gl retained the pointer anchor rather than zooming around the old center. Creating a query immediately afterward retained that exact camera and completed without an application error. The regression suite now contains 21 frontend tests; ESLint, TypeScript, tests, and the production build pass.
-
-A DuckDB-Wasm pthread trial reached the threaded runtime under cross-origin isolation but could not load its required published Parquet extension because of a shared-memory linkage mismatch. Since no dataset query could run, no speedup was measurable; the COI assets, headers, probing, fallback, diagnostics, and dependency bump were reverted in favor of the existing EH/MVP path.
-
-## Hosted delivery baseline — 2026-08-23
-
-The deployed CloudFront development distribution returned HTTP 200 for both the root application and an SPA deep link. From the development Mac, fresh command-line requests completed in 180–220 ms. The schema 1.3.0 manifest for the private developer dataset contains 3,189 activities across 30 shards and was served as a CloudFront cache hit; three cached requests transferred its 53,250 bytes in 84–91 ms. A 64 KiB range request against the first GeoParquet shard returned HTTP 206 in 281 ms on the first request and 83–90 ms on two warm requests. These are delivery-path observations, not application interaction thresholds; browser query, render, memory, and large-synthetic planner acceptance remain separate measurements.
-## Hosted ingestion
-
-The first full Strava archive run (`ingest-4961ee5f`, 2026-08-24) is the 2-vCPU/8-GiB baseline. CloudWatch reported 1,661 processed records after approximately 19 minutes, with Ray estimating 3,534 total records at that point. That projects to roughly 40 minutes for parsing before publication and validation. The next full archive accepted on the 8-vCPU/16-GiB definition must record the same processed-count timing here; the machine-size change is not considered performance-accepted until that after measurement exists.
-
-## Derived dataset rebuild — 2026-08-25
-
-The immutable-build migration was exercised against the 3,189-activity schema-1.3 layout with 11 canonical shards and 574,257,176 canonical bytes. Copying and validating the canonical files and generating all five payload-balanced render levels completed locally in 13.55 seconds wall time (28.11 seconds user, 4.82 seconds system). Render outputs were 3,371,684, 6,849,206, 23,135,102, 94,869,093, and 213,324,023 bytes with 1, 1, 3, 12, and 27 row groups. This demonstrates that a rendering-layout migration does not justify reparsing the source archive.
-
-The first fleet operation submitted both hosted datasets together under one build ID. The existing eight-vCPU ceiling ran them serially; their Fargate execution times were 63.07 and 63.34 seconds, including S3 download, render generation, validation, immutable publication, and the root-manifest switch. Both live manifests reported schema 1.4 and render-level byte ranges returned HTTP 206. The secondary dataset was then switched to its registered schema-1.3 legacy manifest and back to schema 1.4 without recompilation, verifying the rollback path and uncached manifest behavior.
+## Goals
+
+Track the costs that affect map responsiveness:
+
+- dataset open time
+- selection execution time
+- viewport render time
+- candidate Parquet bytes
+- expected row groups
+- transferred geometry bytes
+- visible vertices
+- cache hit rate
+
+## Browser diagnostics
+
+Production logs use the prefix:
+
+```text
+[squiggles:perf]
+```
+
+Important events:
+
+- `dataset-open`
+  - total time
+  - manifest time
+  - DuckDB worker open time
+- `selection-execute`
+  - total time
+  - requested/planned LOD
+  - selected/rendered routes
+  - vertices and geometry bytes
+  - candidate bytes and row groups
+- `viewport-fetch`
+  - render latency and transfer metrics
+- `viewport-cache-hit`
+  - reused geometry
+- `network-retry`
+  - transient Parquet request retry
+
+## Data-layout benchmark
+
+Use:
+
+```bash
+uv run python scripts/benchmark_geoparquet_layout.py
+```
+
+Compare layouts by:
+
+- shard count
+- row-group count
+- bytes scanned
+- range-request fan-out
+- viewport pruning effectiveness
+
+## Current rendering budgets
+
+| Resolution | Vertex budget |
+| --- | ---: |
+| Low | 250,000 |
+| Medium | 750,000 |
+| High | 1,250,000 |
+
+LOD targets: 40, 100, 400, 2,000 vertices/activity, then raw geometry.
+
+## Performance rule
+
+For material optimizations:
+
+- capture baseline diagnostics
+- change one major variable at a time
+- compare the same dataset/query/camera
+- record regressions as well as wins
+- prefer reduced latency/data transfer over theoretical complexity improvements
