@@ -1,104 +1,93 @@
 # Architecture decisions
 
-## Stage boundaries
+Current accepted decisions only. Historical benchmark detail belongs in [benchmarks.md](benchmarks.md).
 
-The project will prove local ingestion and browser execution before introducing a native server or AWS. Canonical data will be Parquet/GeoParquet, DuckDB SQL remains the query language, and render plans decouple execution from visualization.
+## Product
 
-## Client-first hosted V1 pivot — 2026-08-23
+- Squiggles is an activity-archive explorer and storytelling tool.
+- It is not a route planner, navigation product, coaching platform, or social feed.
+- Ingestion is source-adapter based; Strava export is the currently supported archive format.
 
-The hosted V1 requested after local browser acceptance does not introduce the previously planned native server or hosted SQL service. AWS is limited to authentication, ownership metadata, upload authorization, object storage, CDN delivery, notifications, and static application hosting; DuckDB-Wasm, Arrow, and WebGL remain the query/rendering data path. This explicitly supersedes the old requirement that a native server precede all AWS work and reorders the hosted slices, while Stage 4's large synthetic planner benchmarks remain open rather than being silently marked complete.
+## Canonical data
 
-The first deployable slice uses separate private S3 web/data buckets behind one CloudFront distribution. GeoParquet is range-read directly from CloudFront, and Route 53/ACM provide the selected `squiggles.io` hostname. The account is currently on AWS's free plan, so the default budget is $10 with 10%/50%/80% alerts, capped by configuration at the project's $50 ceiling. AWS Budgets is monitoring, not a hard cap. This creates low variable S3/CloudFront cost but no idle compute. Cognito, Google federation, DynamoDB, SES, Lambda, API Gateway, and managed upload are deliberately excluded until remote range-read/share acceptance passes. Data is unlisted, not access-controlled: anyone with the high-entropy share URL can download it.
+- GeoParquet is authoritative.
+- One canonical activity row contains metadata, summaries, bounds, geometry, LODs, and nested telemetry.
+- Raw samples are immutable.
+- Clean fields are derived, conservative, and reversible.
+- `activity_family` is the only Hive partition key; time remains scalar columns.
+- Physical order is spatial Morton order across years.
 
-The first authentication slice adds a deletion-protected Cognito user pool, Cognito managed-login domain, public browser client using authorization-code with PKCE, and a deletion-protected DynamoDB on-demand metadata table with point-in-time recovery. These resources are serverless and have no meaningful idle compute cost; Cognito usage and DynamoDB request/storage/PITR charges remain under the existing budget alarms. Google federation follows after the Cognito redirect URI is registered with Google. Authentication creates no data authority by itself: approval status in control-plane metadata gates every dataset, upload, query-sync, and private-cookie API operation.
+## Query execution
 
-Daily local AWS access uses temporary credentials from IAM Identity Center; root and long-lived access keys are prohibited. GitHub deployment uses OIDC role assumption, not stored AWS keys. Native Pulumi commands keep infrastructure behavior visible; Make is reserved for aggregate verification and secret scanning.
+- DuckDB SQL is the user query language.
+- User SQL targets only `activities` and returns `activity_id`.
+- Browser execution uses DuckDB-Wasm in a Web Worker.
+- Selection semantics are separate from rendering delivery.
+- A universal selection may be optimized internally without changing SQL semantics.
+- Hosted execution is optional later and must preserve the same SQL contract.
 
-## Public name and domain — 2026-08-23
+## Rendering
 
-The selected working identity is Squiggles, with repository `ljstrnadiii/squiggles` and domain `squiggles.io`. Route 53 reported the domain available at $71/year when checked; availability is not a reservation. Registration remains a manual, explicitly authorized purchase because it requires billing approval and registrant contact details. The registrar purchase and its automatically created hosted zone are bootstrap exceptions to Pulumi ownership; the hosted zone must be imported or adopted immediately afterward, and Pulumi owns certificate validation, CloudFront aliases, DNS records, and subsequent persistent configuration. The annual registration cost is accepted separately from the $50/month development infrastructure ceiling.
+- Direct Arrow/GeoArrow is the default render path.
+- No large GeoJSON intermediate representation.
+- LOD0–LOD3 plus full geometry form the render pyramid.
+- Zoom is a fidelity ceiling; vertex budget can downgrade dense views.
+- Manifest file/row-group bboxes and exact DuckDB bbox predicates prune viewport reads.
+- Full activity geometry/telemetry loads on demand.
+- MVT remains benchmark-gated.
 
-## Repository release and deployment — 2026-08-23
+## Cache
 
-The public repository uses Conventional Commits and semantic-release for GitHub tags/releases only; it does not publish npm or PyPI artifacts. CI runs Python, web, infrastructure typing, and gitleaks checks before deployment. Successful `main` pushes deploy the `dev` stack through GitHub OIDC and the existing S3 Pulumi backend, then release. Main deployments serialize rather than cancel because interrupting Pulumi can leave a stack lock; a production-environment-protected manual workflow exists to clear a confirmed stale lock. The production-environment trust claim binds the AWS role to `ljstrnadiii/squiggles`; no AWS access key is stored in GitHub. The role can update the existing delivery plane, including deleting superseded versions of hashed web assets, but cannot modify IAM or its own policy, so bootstrap identity changes remain an explicit local administrative operation.
+- Cache already-transferred binary viewport results in memory.
+- Reuse enclosing cached viewports when possible.
+- Use padded follow-up viewport fetches to improve small-pan reuse.
+- Persistent/tile-level caching requires measurement before adoption.
 
-Unused source logo JPGs, a redundant large PNG, generated TypeScript build metadata, empty synthetic fixtures, empty future API/query package placeholders, the empty benchmark directory, and unused Vercel configuration were removed before the initial public commit. This keeps later-stage infrastructure out of the repository until its stage begins. Existing `activity-map` Python CLI/import names and browser storage keys remain compatibility aliases while the product and active workspace names use Squiggles. The deployed Pulumi project name also remains `activity-map-aws` until a deliberate state migration can preserve every resource URN.
+## Heat
 
-Pulumi state moved from the laptop-only backend to a dedicated S3 DIY backend before the first stack was created. The bucket is the explicit bootstrap exception to Pulumi ownership: AWS CLI creates it because the backend must predate the stack. It has Block Public Access, BucketOwnerEnforced ownership, AES-256 server-side encryption, and versioning. It contains infrastructure state only, never application datasets. Account-derived naming stays out of tracked configuration. The tiny state objects add negligible S3 usage but remain within budget monitoring scope.
+- Heat colors the existing selected route geometry.
+- Scores use nearby vertices from other activities.
+- No separate global heat cloud or duplicate geometry layer.
 
-## Unresolved after Stage 0
+## UI
 
-- Package dependencies are initially unconstrained within lockfiles and should be reviewed during routine dependency updates.
-- Generate and commit `pnpm-lock.yaml` on a machine with Node.js/pnpm, then make CI installs frozen.
-- TypeScript and Python contracts are intentionally parallel; a generated cross-language schema may be considered when API serialization begins.
+- Saved queries own SQL, camera, and per-query rendering style.
+- New queries inherit the live camera/style.
+- Switching a saved query executes it.
+- SQL drafts apply only through Run.
+- Statistics and Table are secondary inspection views; Activity Detail keeps its dedicated compact layout.
+- Published views preserve their saved camera exactly.
 
-## Local milestone — 2026-08-22
+## Hosted V1
 
-- Python support is `>=3.12,<3.14`, matching Ray.
-- Pandera is pinned to official commit `8de6a445d3f89e752bb0b2234917946bac7010b0` until its PyArrow backend reaches the configured index.
-- Native GeoParquet 1.1 `linestring` geometry uses the specification's default CRS84 by omitting the GeoParquet `crs` member; Arrow extension metadata also identifies CRS84.
-- Hive keys initially used coarse `activity_family/start_year` paths; schema 1.3's measured cross-year `activity_family` layout below supersedes that physical choice. Strava CSV values that only say `Ride` remain `ride` rather than being guessed as mountain biking.
-- File System Access API shards are registered as buffers because DuckDB-Wasm cannot range-read directory handles. The Vite-only developer source registers local shard URLs with DuckDB-Wasm and serves byte ranges without copying or bundling private data.
-- A full-export trial showed nested Arrow-to-Python conversion causes severe backpressure, so publication remains Arrow-native.
-- Ray owns canonical publication through `Dataset.write_datasink(GeoParquetDataSink)`. Ray groups complete Hive activity families before the sink performs configurable chunking, cross-year spatial ordering, Pandera/Arrow validation, and GeoParquet metadata attachment directly on worker blocks. Manifest statistics and checksums come from the buffers being written; only explicit validation rereads the files.
-- The initial shard target is row-based (`64`) because the full private benchmark kept every compressed shard below 20 MB. Route duration and telemetry make row byte sizes variable; a byte-aware policy requires a future before/after benchmark. Explicit one-CPU runs use sort/repartition because Ray's grouped hash-shuffle aggregator otherwise waits for an unavailable scheduling slot.
-- Source-specific discovery is behind `ActivitySourceAdapter`; `StravaSourceAdapter` is the first implementation so future importers do not require restructuring the canonical compiler.
-- MapLibre is mounted directly beneath deck.gl. The React MapLibre wrapper was removed after real-browser testing found an initialization crash against MapLibre 6; deck.gl owns interaction and synchronizes its view state to the network-independent MapLibre base.
-- Selection queries return only the zoom-selected LOD and viewport-intersecting bboxes. Pan/zoom reruns only this render query; selection-wide summaries remain stable. Full geometry is fetched on demand after picking, avoiding full-resolution route transfer for every selected activity. MVT remains deferred until Stage 4/6 benchmarks justify it.
-- Standard, topographic, and imagery basemaps are optional network resources with visible provider attribution; a blank style remains available for fully offline/private evaluation. No activity data is sent to tile providers because requests contain only ordinary basemap tile coordinates.
-- Query-dependent heat counts distinct activities per stable screen-space cell, rather than raw points, and samples at most 64 LOD vertices per route. The original GPU heat cloud was visually rejected because it colored the surrounding map rather than the traversed routes. The replacement colors coalesced route sections by other-activity proximity. A naïve neighboring-cell union did not complete within the 30-second interaction budget on the full viewport; exact same-cell membership plus section coalescing reduced preparation from 61.0 ms and 123,305 line instances to 33.8 ms and 3,247 path instances. The 12k-foot query prepares 10,095 vertices as 600 colored sections in 3.8 ms.
-- The browser LOD planner evaluates all viewport estimates in one DuckDB aggregation. The initial promotion strategy treated zoom only as a budget selector and rendered the full private export at LOD1 (317,136 vertices) even when zoom requested LOD0. The August 2026 interaction pass makes zoom a fidelity ceiling, delays transitions to zooms 8/12/14/16, and lowers tier budgets to 250k/400k/600k/850k/1M. The same broad view now stays at LOD0 (126,494 vertices, 60.1% fewer). LOD0 remains the floor; additional physical overview columns and density/MVT thresholds remain gated on a dataset rebuild and the large synthetic benchmark tiers.
-- LineString LOD simplification uses Douglas–Peucker without polygon topology preservation. The previous `preserve_topology=True` retained 3.44 million vertices in LOD 0 around route self-crossings. Line endpoints and valid LineString structure remain enforced, while validation now rejects any shard exceeding its measured vertex target.
-- Schema 1.2 keeps raw telemetry canonical and adds conservative clean geometry, LOD, bbox, summary, and point-flag fields. Cleaning is compile-time because applying sequential anomaly rules repeatedly in browser SQL would add interaction cost; the per-tab toggle only chooses which representation to query. The cleaner requires isolated two-sided GPS or elevation evidence so sustained fast travel and real climbs are not silently discarded.
-- Keeping raw and clean geometry plus four LODs increased the measured compressed activity dataset by 44.6% (438.6 MB to 634.4 MB). This is accepted for the local evaluation because it makes Clean switching a column choice and avoids duplicating nested telemetry. A future representation change still requires a before/after interaction and storage benchmark.
-- Dataset selection, AI Skills, Statistics, and Table are global first-class header controls; the duplicate bottom summary rail was removed. Query SQL and per-tab map styling stay behind a closed-by-default toolbar toggled solely by the active tab. The URL mirrors the local tab ID, camera, and rendering settings, while excluding SQL and activity records. This restores a view but intentionally does not implement cross-browser custom-query sharing ahead of Stage 12.
-- The Table loads scalar metadata and four precomputed bounds for the full DuckDB selection, but no geometry. This modest control-plane transfer enables sorting and map navigation across all selected activities without weakening the separate viewport-pruned geometry path. A row click fits its bounds and only then requests full detail.
-- Heat color transfer remains logarithmic and now applies a persisted 0.5–3.0 temperature exponent (default 1.7). This changes saturation without changing distinct-activity proximity counts, so dense short home routes no longer force every less-frequent shared corridor into the cold end of the palette.
-- DuckDB's autocomplete extension targets the CLI, while the DuckDB UI extension excludes Wasm and starts its own native HTTP UI. The browser therefore uses a lazy-loaded, schema-aware CodeMirror SQL editor rather than enabling extension installation or a second query interface. Starter choices replace the visible SQL draft and do not introduce a DSL.
-- CodeMirror adds a separate 442.54 kB/145.15 kB gzip lazy chunk. The initial application JavaScript remains effectively unchanged at 1,768.49 kB/490.47 kB gzip versus 1,767.54 kB/490.12 kB before the editor.
-- Clean now replaces the worker-local logical `activities` view before validating and running user SQL. The projection aliases precompiled clean geometry, summaries, bbox, point count, and filtered nested telemetry to their canonical names; turning Clean off restores a raw projection. This avoids recomputing sequential anomaly detection during interaction, preserves identical SQL semantics across the toggle, and does not mutate source Parquet. Valid neighbors are connected across an excluded isolated point, but replacement telemetry is not invented.
-- The renderer also splits any route at a coordinate gap over 20 km. This conservative presentation guard uses the compiler's no-timestamp implausible-leg threshold and prevents fabricated cross-map lines even when an anomaly is not the isolated three-point pattern required for data cleaning.
-- Full geometry is the fifth planner representation and is eligible from zoom 16 with a 1-million-visible-vertex budget. Zoom establishes a fidelity ceiling rather than bypassing the budget: dense close views read only the highest compiled LOD column that fits, and raw geometry returns automatically as the visible extent shrinks. Statistics and Table are flush right-side drawers on desktop and bottom sheets on mobile. Metric/imperial is presentation-only, persisted locally and in deep links; SQL continues to use metres and seconds.
-- [MapLibre already supports WebGL 3D terrain](https://maplibre.org/maplibre-gl-js/docs/examples/3d-terrain/) from raster DEM tiles, so a Mapbox renderer migration is unnecessary. Terrain is not enabled yet because it adds a network data provider, attribution/terms choice, camera pitch synchronization between deck.gl and MapLibre, and another performance dimension that must be benchmarked. The existing raster basemaps and blank offline style remain unchanged.
-- Selecting an activity removes that ID from the simplified overview and heat preparation before drawing its full geometry. A transparent 10-pixel picking layer makes narrow LOD routes clickable without visually widening them; the selected ground-truth route is then the sole representation of that activity. The detail-card isolation toggle hides every other route and heat section without changing the SQL selection or summary.
-- Saved-tab activation executes its SQL immediately. The active tab still toggles the settings toolbar, but Run is no longer required to apply a tab. New and duplicated tabs use the same path, while query failures preserve the last successful route set.
-- The brand accent changed from `#0000FF` to `#476BCC`; built-in old-blue tabs migrate with the other historical defaults. Theme-specific transparent PNGs derived from the supplied root logos are used for the application header, statistics, README, and favicon.
-- The unconditional zoom-14 raw mode was rejected after a dense close viewport transferred 4.76 million vertices in 8.50 seconds. Close inspection now makes raw eligible under the 2-million-vertex budget and otherwise retains the highest compiled LOD that fits. All visible stroke roles decay continuously after zoom 12 rather than switching once; the transparent picking target remains 10 px. The selected activity remains removed from the overview and heat inputs, so ground truth never sits above a corner-cutting duplicate.
-- Rendering diagnostics moved from the query toolbar into a first-class responsive drawer beside Statistics and Table. The logo is the About control and explains the Parquet → GeoArrow → DuckDB-Wasm → deck.gl local scale path, its privacy boundary, and the project's storytelling—not route-planning—intent.
-- The original 64-row shards each formed one 128-row-cap Parquet row group, and a representative bbox plan reported `Total Files Read: 83`. Publication then adopted a true Morton key for bbox centers and 16-row groups inside the same 64-row shard envelope. Shard covering bboxes remain in the manifest so viewport renders can construct a candidate-file scan before DuckDB; older manifests retain an all-file compatibility path. We do not filter by route centroid because that could hide a route crossing the viewport. The family/year physical layout described by this historical decision is superseded by schema 1.3 below.
+- Client-first query/rendering remains the primary data path.
+- CloudFront + private S3 deliver the static app and GeoParquet ranges.
+- Cognito handles identity.
+- DynamoDB stores control-plane metadata only.
+- Lambda/API Gateway handles control-plane actions.
+- AWS Batch/Fargate performs managed compilation.
+- No always-on query server is required.
 
-- Row-group covering boxes and row counts are control-plane metadata in `dataset.json`, calculated from the validated Arrow slices immediately before `GeoParquetDataSink` writes them. The accepted broad-view layout uses 512-row spatial shards with 128-row groups: the private archive falls from 30 files/202 groups to 11 files/30 groups and is 20.1% smaller, at the measured cost of coarser narrow-viewport pruning. This makes browser pruning visible without rereading/re-writing Parquet during publication or running a duplicate `EXPLAIN ANALYZE` query. Candidate fragments are exact; row-group reads remain explicitly labeled estimates because DuckDB-Wasm does not currently provide a stable physical row-group counter. Older manifests degrade safely to one conservative group per shard.
+## Security
 
-- FIT messages sharing a timestamp are treated as one logical track sample. Several exporters emit coordinates and enhanced altitude as separate record messages, so dropping coordinate-free messages erased valid elevation profiles. Non-null fields are merged in encounter order, enhanced altitude wins over legacy altitude, and missing source elevation remains missing rather than being interpolated or fabricated.
+- Activity locations are private data.
+- Authorization occurs before hosted data access.
+- Browser receives no AWS credentials.
+- GitHub deploys through OIDC.
+- Local operators use IAM Identity Center temporary credentials.
+- Published slugs are locators, not secrets.
 
-- Schema 1.3 removes `start_year` from the Hive directory hierarchy and stores it as a canonical scalar column. Benchmarking the densest private-export viewport showed that family/year fragmentation required 64/83 files and 151/230 row groups for 1,097 intersecting routes. Spatial ordering across all years reduced the 64-row simulation to 38 files/108 row groups; a 128-row fragment envelope reduced file opens further to 25 while preserving the same 16-row pruning granularity. This favors interactive viewport and HTTP-range access. Time predicates retain normal Parquet statistics but no longer receive directory pruning; that tradeoff is accepted because the browser's dominant repeated operation is spatial rendering, not full-archive year filtering.
-- Geometry-intersection components and coarse spatial-cluster/time ordering were benchmarked before another physical-layout change. Exact LOD0 intersections put 78.6% of the private archive into one connected component, so component IDs provide almost no useful pruning. For a dense local objective, current bbox-center Morton order retained 64.8% row efficiency; tested cluster-then-time variants fell to 41.6–63.6%, and route-midpoint/coordinate-median keys fell to 56.0%/60.7%. Schema 1.3's existing Morton order is therefore retained. Time remains a scalar predicate axis with row-group statistics rather than a primary sort key.
-- Isolating a selected activity suppresses its focus casing and highlight color. The sole full-resolution route uses the normal tab color and zoom-scaled width, avoiding self-crossing/star artifacts while the invisible picking target remains independent.
-- The section-colored heat representation is superseded. Sampling each route to at most 64 vertices and drawing coalesced heat sections visibly reduced route fidelity even when DuckDB had selected a higher LOD. Heat now scores every selected vertex with numeric same/neighbor-cell cross-activity pair counts, assigns one score/color per activity, and colors the existing route layer directly. This deliberately allows recording density and shared-route length to contribute to “hotness”; own-route vertices are subtracted, logarithmic temperature controls saturation, and no heat geometry is generated.
-- Viewport rendering now follows Lonboard's useful boundary without adding Lonboard as a runtime dependency: Arrow coordinate values and offsets feed deck.gl's binary layer contract directly. DuckDB-Wasm currently returns the canonical `list<fixed_size_list<float64>[2]>` as `List<List<Float64>>`; the browser validates the two-value inner offsets and retains the flat values buffer. Worker-to-main transfer moves `ArrayBuffer` ownership without structured-cloning coordinates. deck.gl requires route-varying attributes to match the vertex layout, so the browser creates a compact RGBA `Uint8Array` while keeping coordinates untouched and declaring the XY position format explicitly. This is zero-intermediate-copy for geometry, not literal end-to-end zero-copy: DuckDB's Arrow result construction and the required GPU upload still copy bytes.
-- A bounded in-memory LRU retains successfully encountered binary viewport batches regardless of whether Parquet came from local handles or HTTP. Its ceiling is 512 MiB for fine pointers and 128 MiB for coarse pointers. Exact dataset/selection/clean/LOD/bounds keys avoid serving spatially stale data, while a contained viewport can reuse a cached broader batch. Overlap-aware activity or fragment caching is deferred until a benchmark can justify its indexing and deduplication complexity.
-- System resolution is a local device preference, separate from published query/tab state. Low, Medium, and High cap planned visible geometry at 250k, 750k, and 1.25M vertices; coarse pointers default Low and fine pointers Medium. Zoom remains the fidelity ceiling. The single canonical-file candidates were rejected because they slowed the controlled local dense query. Schema 1.4 instead retains canonical family shards and adds one derived, spatially ordered GeoParquet per render resolution. This mirrors the useful level-selection idea in geoparquet-io's overview/PMTiles pyramid without adopting aggregate cells or PMTiles: Squiggles trajectories remain GeoArrow LineStrings selected through the normal RenderPlan.
-- A DuckDB-Wasm COI/pthread trial was reverted rather than shipped behind a fallback: the threaded runtime could not load the required published Parquet extension because of a shared-memory linkage mismatch. The app retains the simpler EH/MVP path until upstream support can run the same dataset and produce a real before/after benchmark.
-# 2026-08-23 — Serverless authentication control-plane API
+## Infrastructure
 
-The first authenticated application endpoint uses API Gateway HTTP API, its Cognito JWT authorizer, one 256 MiB Lambda, and the existing on-demand DynamoDB table. This preserves authorization before metadata access and remains scale-to-zero. There is no meaningful idle compute cost; usage is covered by request-based service pricing and the existing development budget alarms.
+- Pulumi owns persistent AWS resources except documented bootstrap prerequisites.
+- Prefer serverless/scale-to-zero services.
+- No NAT Gateway, RDS/Aurora, EKS, OpenSearch, ElastiCache, or always-on compute without a new decision.
+- Development infrastructure target: under $50/month.
+- AWS Budget alerts are monitoring, not a hard cap.
 
-# 2026-08-24 — Filter Strava exports before hosted intake
+## Engineering
 
-The browser accepts the familiar Strava ZIP but creates and uploads a second archive containing only `activities.csv` and `activities/**`. The original archive and media never leave the device. Quarantine storage expires after two days, incomplete uploads abort after one day, and accepted source remains `pending` until a separately accepted processor exists. This adds request-based S3 storage only and no idle compute; the temporary cap and lifecycle remain within the development budget.
-
-# 2026-08-24 — Run shared ingestion as an AWS Batch Fargate job
-
-Each verified source upload submits one Fargate job with 40 GiB ephemeral storage and a four-hour hard timeout. The image is immutable per Git commit in ECR, limited to five retained images, and executes the same Python compiler used locally. Fargate uses a public subnet rather than a NAT Gateway and scales to zero between jobs. The job writes to a private ingested bucket that is not part of the current public CloudFront data origin. This creates per-job compute and temporary storage charges but no meaningful idle compute; the existing monthly budget alarms remain the cost boundary.
-
-The first full archive showed that 2 vCPUs left ingestion far behind local performance. Subsequent jobs request 8 vCPUs and 16 GiB, while the compute environment is capped at 8 aggregate vCPUs, enforcing one concurrent ingestion job. Jobs remain scale-to-zero, single-attempt, and four-hour bounded. Fargate charges only while tasks run; the larger task trades parallel hourly cost for shorter wall time under the existing budget alarms. Compiler progress is persisted to the upload record every five seconds as completed and total activities so the web account drawer can report useful progress without CloudWatch access.
-
-Stable published-view metadata reuses the existing DynamoDB table, Lambda, and HTTP API. One mutable share record per user stores tabs, SQL, camera/render settings, and an optional eligible hosted dataset identifier; theme and units remain personal system settings. Public reads increment a raw view counter. This adds request-based charges only and no new persistent service or idle compute. It does not publish private curated activity objects.
-
-Dataset-ready email was removed because SES sandbox recipient verification creates a confusing second approval flow. The upload view remains the source of truth and polls persisted job progress through `ready` or `failed`. The protected SES identities remain dormant temporarily so their removal can occur through a deliberate Pulumi unprotect/delete migration; ingestion has no send permission or email configuration.
-
-# 2026-08-25 — Publish immutable dataset builds behind a stable manifest
-
-Hosted dataset URLs and published map links retain their stable dataset UUID. Each compiler deployment publishes complete artifacts beneath a distinct `builds/<build-id>/` prefix, validates them, and replaces the root `dataset.json` only after every immutable object exists. The manifest records build identity and contains build-qualified artifact paths. DynamoDB retains the active build, previous build, and one record per historical build; rollback copies a historical manifest to the stable root and does not rerun ingestion. The root manifest bypasses CloudFront caching while Parquet remains cacheable for one year.
-
-Derived-only migrations rebuild render pyramids from canonical GeoParquet. Full source ingestion is reserved for parser, cleaning, or canonical-schema changes. The administration command can enqueue all datasets across the public and private ingested buckets; the existing eight-vCPU compute ceiling deliberately serializes those jobs to preserve the development budget. Historical build cleanup remains an explicit administrative action so no lifecycle rule can accidentally delete an active or rollback build.
+- Ray + Arrow/Pandera drive ingestion.
+- Canonical publication stays Arrow-native.
+- Performance changes require before/after measurement.
+- Conventional Commit squash titles drive semantic releases.
