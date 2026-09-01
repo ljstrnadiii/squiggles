@@ -2,6 +2,7 @@ import type { BinaryRouteBatch, HeatPalette, MapState, RouteActivity } from "./c
 
 type Color = [number, number, number, number];
 type Cell = { x: number; y: number; total: number };
+type WorldPoint = { x: number; y: number };
 export type HeatResult = { scores: Map<string, number>; sourceVertices: number; cellCount: number; maxScore: number; durationMs: number };
 
 export type CooperativeHeatResult = HeatResult & { yieldCount: number; maxSliceMs: number };
@@ -24,10 +25,31 @@ export function colorForWeight(weight: number, maximum: number, palette: HeatPal
   return colors[lower].map((value, index) => Math.round(value + (colors[upper][index] - value) * ratio)) as Color;
 }
 
+function worldPoint(longitude: number, rawLatitude: number, worldSize: number): WorldPoint {
+  const latitude = Math.max(-85.051129, Math.min(85.051129, rawLatitude)) * Math.PI / 180;
+  return {
+    x: (longitude + 180) / 360 * worldSize,
+    y: (1 - Math.log(Math.tan(latitude) + 1 / Math.cos(latitude)) / Math.PI) / 2 * worldSize,
+  };
+}
+
+function visibleWorldPoint(point: WorldPoint, view: MapState, width: number, height: number, worldSize: number, marginPixels: number): boolean {
+  const center = worldPoint(view.longitude, view.latitude, worldSize);
+  const directX = Math.abs(point.x - center.x);
+  const wrappedX = Math.min(directX, worldSize - directX);
+  return wrappedX <= width / 2 + marginPixels && Math.abs(point.y - center.y) <= height / 2 + marginPixels;
+}
+
+function heatCell(longitude: number, latitude: number, view: MapState, width: number, height: number, worldSize: number, cellPixels: number): Cell | null {
+  const point = worldPoint(longitude, latitude, worldSize);
+  if (!visibleWorldPoint(point, view, width, height, worldSize, cellPixels)) return null;
+  return { x: Math.floor(point.x / cellPixels), y: Math.floor(point.y / cellPixels), total: 0 };
+}
+
 /**
- * Score complete viewport-selected routes without changing their geometry.
- * A score is the number of cross-activity vertex pairs in the route's cell or
- * eight neighboring screen cells. Own-route vertices never create heat.
+ * Score complete routes from only the settled visible viewport. Geometry may
+ * come from an enclosing viewport cache entry; off-screen cached vertices do
+ * not affect heat scores or the color-scale maximum.
  */
 export function buildHeatData(activities: RouteActivity[], view: MapState, width: number, height: number, cellPixels = 8): HeatResult {
   const started = performance.now();
@@ -35,26 +57,20 @@ export function buildHeatData(activities: RouteActivity[], view: MapState, width
   if (!width || !height || !activities.length) return { ...empty, durationMs: performance.now() - started };
   const worldSize = 512 * 2 ** view.zoom;
   const key = (x: number, y: number) => `${x}:${y}`;
-  const cellFor = ([longitude, rawLatitude]: [number, number]) => {
-    const latitude = Math.max(-85.051129, Math.min(85.051129, rawLatitude)) * Math.PI / 180;
-    return {
-      x: Math.floor(((longitude + 180) / 360 * worldSize) / cellPixels),
-      y: Math.floor(((1 - Math.log(Math.tan(latitude) + 1 / Math.cos(latitude)) / Math.PI) / 2 * worldSize) / cellPixels),
-    };
-  };
   const globalCells = new Map<string, Cell>();
   const activityCells: Map<string, number>[] = [];
   let sourceVertices = 0;
   for (const activity of activities) {
     const ownCells = new Map<string, number>();
-    sourceVertices += activity.path.length;
     for (const position of activity.path) {
-      const { x, y } = cellFor(position);
-      const cellKey = key(x, y);
-      const cell = globalCells.get(cellKey);
-      if (cell) cell.total += 1;
-      else globalCells.set(cellKey, { x, y, total: 1 });
+      const cell = heatCell(position[0], position[1], view, width, height, worldSize, cellPixels);
+      if (!cell) continue;
+      const cellKey = key(cell.x, cell.y);
+      const existing = globalCells.get(cellKey);
+      if (existing) existing.total += 1;
+      else globalCells.set(cellKey, { ...cell, total: 1 });
       ownCells.set(cellKey, (ownCells.get(cellKey) ?? 0) + 1);
+      sourceVertices += 1;
     }
     activityCells.push(ownCells);
   }
@@ -100,15 +116,14 @@ export function buildBinaryHeatData(batches: BinaryRouteBatch[], view: MapState,
       const end = batch.startIndices[segment + 1];
       for (let point = start; point < end; point += 1) {
         const longitude = batch.positions[point * 2];
-        const rawLatitude = batch.positions[point * 2 + 1];
-        if (!Number.isFinite(longitude) || !Number.isFinite(rawLatitude)) continue;
-        const latitude = Math.max(-85.051129, Math.min(85.051129, rawLatitude)) * Math.PI / 180;
-        const x = Math.floor(((longitude + 180) / 360 * worldSize) / cellPixels);
-        const y = Math.floor(((1 - Math.log(Math.tan(latitude) + 1 / Math.cos(latitude)) / Math.PI) / 2 * worldSize) / cellPixels);
-        const cellKey = key(x, y);
-        const cell = globalCells.get(cellKey);
-        if (cell) cell.total += 1;
-        else globalCells.set(cellKey, { x, y, total: 1 });
+        const latitude = batch.positions[point * 2 + 1];
+        if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) continue;
+        const cell = heatCell(longitude, latitude, view, width, height, worldSize, cellPixels);
+        if (!cell) continue;
+        const cellKey = key(cell.x, cell.y);
+        const existing = globalCells.get(cellKey);
+        if (existing) existing.total += 1;
+        else globalCells.set(cellKey, { ...cell, total: 1 });
         ownCells.set(cellKey, (ownCells.get(cellKey) ?? 0) + 1);
         sourceVertices += 1;
       }
@@ -142,10 +157,9 @@ function yieldToBrowser(): Promise<void> {
 }
 
 /**
- * Score the same binary coordinates as buildBinaryHeatData while periodically
- * yielding the main thread. This deliberately retains the current buffers: a
- * worker transfer would detach them from deck.gl and a clone would double the
- * dominant memory allocation.
+ * Score the settled visible viewport from retained binary coordinates while
+ * periodically yielding the main thread. Cached geometry outside the viewport
+ * is ignored rather than allowed to influence the current heat scale.
  */
 export async function buildBinaryHeatDataCooperative(
   batches: BinaryRouteBatch[],
@@ -189,17 +203,17 @@ export async function buildBinaryHeatDataCooperative(
       const end = batch.startIndices[segment + 1];
       for (let point = start; point < end; point += 1) {
         const longitude = batch.positions[point * 2];
-        const rawLatitude = batch.positions[point * 2 + 1];
-        if (Number.isFinite(longitude) && Number.isFinite(rawLatitude)) {
-          const latitude = Math.max(-85.051129, Math.min(85.051129, rawLatitude)) * Math.PI / 180;
-          const x = Math.floor(((longitude + 180) / 360 * worldSize) / cellPixels);
-          const y = Math.floor(((1 - Math.log(Math.tan(latitude) + 1 / Math.cos(latitude)) / Math.PI) / 2 * worldSize) / cellPixels);
-          const cellKey = key(x, y);
-          const cell = globalCells.get(cellKey);
-          if (cell) cell.total += 1;
-          else globalCells.set(cellKey, { x, y, total: 1 });
-          ownCells.set(cellKey, (ownCells.get(cellKey) ?? 0) + 1);
-          sourceVertices += 1;
+        const latitude = batch.positions[point * 2 + 1];
+        if (Number.isFinite(longitude) && Number.isFinite(latitude)) {
+          const cell = heatCell(longitude, latitude, view, width, height, worldSize, cellPixels);
+          if (cell) {
+            const cellKey = key(cell.x, cell.y);
+            const existing = globalCells.get(cellKey);
+            if (existing) existing.total += 1;
+            else globalCells.set(cellKey, { ...cell, total: 1 });
+            ownCells.set(cellKey, (ownCells.get(cellKey) ?? 0) + 1);
+            sourceVertices += 1;
+          }
         }
         operations += 1;
         if ((operations & 4095) === 0 && !await cooperate()) return null;

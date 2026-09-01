@@ -21,7 +21,7 @@ describe("buildHeatData", () => {
     expect(result.sourceVertices).toBe(3);
   });
 
-  it("scores all chosen vertices without rewriting the route", () => {
+  it("scores all chosen visible vertices without rewriting the route", () => {
     const path: [number, number][] = Array.from({ length: 1000 }, (_, index) => [-105 + index / 1_000_000, 40]);
     const result = buildHeatData([route("a", path), route("b", path)], { longitude: -105, latitude: 40, zoom: 15 }, 800, 600);
     expect(result.sourceVertices).toBe(2000);
@@ -49,6 +49,29 @@ describe("buildHeatData", () => {
     expect(result.sourceVertices).toBe(3);
     expect(result.scores.get("a")).toBe(2);
     expect(result.scores.get("b")).toBe(2);
+  });
+
+  it("recomputes heat from the visible viewport even when the binary batch is reused", () => {
+    const batch: BinaryRouteBatch = {
+      activities: [route("a", []), route("b", []), route("c", []), route("d", []), route("e", [])],
+      positions: new Float64Array([
+        -105, 40,
+        -105, 40,
+        -104.5, 40,
+        -104.5, 40,
+        -104.5, 40,
+      ]),
+      startIndices: new Uint32Array([0, 1, 2, 3, 4, 5]),
+      segmentActivityIndices: new Uint32Array([0, 1, 2, 3, 4]),
+    };
+    const west = buildBinaryHeatData([batch], { longitude: -105, latitude: 40, zoom: 12 }, 800, 600);
+    const east = buildBinaryHeatData([batch], { longitude: -104.5, latitude: 40, zoom: 12 }, 800, 600);
+    expect(west.sourceVertices).toBe(2);
+    expect(west.maxScore).toBe(1);
+    expect(west.scores.get("c") ?? 0).toBe(0);
+    expect(east.sourceVertices).toBe(3);
+    expect(east.maxScore).toBe(2);
+    expect(east.scores.get("a") ?? 0).toBe(0);
   });
 
   it("cooperatively scores the same binary coordinates and yields between slices", async () => {
