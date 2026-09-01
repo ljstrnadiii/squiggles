@@ -1,8 +1,10 @@
 export const QUERY_SCHEMA = `Squiggles DuckDB query contract (schema 1.4.0)
 
-Return requirement:
-- Every selection query must return an activity_id column.
+Query rules:
+- Return a SELECT query whose result includes activity_id.
 - Query only the logical relation named activities.
+- A trailing semicolon is unnecessary; Squiggles normalizes one if present.
+- The query acts as a selection relation. Additional returned columns are allowed, but Squiggles ultimately uses activity_id to determine which activities are rendered and summarized.
 
 activities columns:
 activity_id VARCHAR NOT NULL
@@ -87,4 +89,4 @@ WHERE lower(sport_type) LIKE '%run%'
     SELECT 1
     FROM unnest(track_points) AS points(point)
     WHERE point.elevation_m >= 3657.6
-  );`;
+  )`;
