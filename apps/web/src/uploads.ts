@@ -6,7 +6,7 @@ export type UploadRecord = { id: string; filename: string; byteSize: number; sta
 const terminalUploadStatuses = new Set(["ready", "failed"]);
 
 export function reconcileUploadStatuses(uploads: UploadRecord[], datasetCount: number): UploadRecord[] {
-  let remaining = Math.max(0, datasetCount - uploads.filter(upload => upload.status === "ready").length);
+  const remaining = Math.max(0, datasetCount - uploads.filter(upload => upload.status === "ready").length);
   const promote = new Set(
     uploads
       .filter(upload => !terminalUploadStatuses.has(upload.status))
