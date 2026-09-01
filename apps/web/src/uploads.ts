@@ -3,6 +3,20 @@ import { authFetch, type AuthSession, type RuntimeConfig } from "./auth";
 
 export type UploadRecord = { id: string; filename: string; byteSize: number; status: string; statusDetail: string; progressCompleted: number; progressTotal: number; createdAt: string };
 
+const terminalUploadStatuses = new Set(["ready", "failed"]);
+
+export function reconcileUploadStatuses(uploads: UploadRecord[], datasetCount: number): UploadRecord[] {
+  let remaining = Math.max(0, datasetCount - uploads.filter(upload => upload.status === "ready").length);
+  const promote = new Set(
+    uploads
+      .filter(upload => !terminalUploadStatuses.has(upload.status))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .slice(0, remaining)
+      .map(upload => upload.id),
+  );
+  return uploads.map(upload => promote.has(upload.id) ? { ...upload, status: "ready", statusDetail: "Compiled dataset ready." } : upload);
+}
+
 export function selectStravaEntries(names: string[]) {
   const selected = names.filter(name => name === "activities.csv" || name.startsWith("activities/"));
   if (!selected.includes("activities.csv") || !selected.some(name => name.startsWith("activities/") && !name.endsWith("/"))) throw new Error("This archive must contain activities.csv and the activities directory.");
