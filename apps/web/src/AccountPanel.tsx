@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { listAdminUsers, setAdminUserAccess, type AdminUser } from "./admin";
 import "./admin.css";
 import { beginGoogleLogin, clearSession, deleteAccount, finishLogin, getProfile, identityFromSession, loadRuntimeConfig, loadSession, type AuthSession, type RuntimeConfig, type UserProfile } from "./auth";
-import { filterStravaArchive, listUploads, uploadArchive, type UploadRecord } from "./uploads";
+import { filterStravaArchive, listUploads, reconcileUploadStatuses, uploadArchive, type UploadRecord } from "./uploads";
 
 export function AccountPanel({ onClose, onIdentityChange, view = "account" }: { onClose: () => void; onIdentityChange: () => void; view?: "account" | "upload" | "login" }) {
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
@@ -29,7 +29,7 @@ export function AccountPanel({ onClose, onIdentityChange, view = "account" }: { 
           const next = { ...await getProfile(runtime, authenticated), ...identityFromSession(authenticated) };
           setProfile(next);
           onIdentityChange();
-          if (next.status === "approved") setUploads(await listUploads(runtime, authenticated));
+          if (next.status === "approved") setUploads(reconcileUploadStatuses(await listUploads(runtime, authenticated), next.stats?.datasetCount ?? 0));
           if (next.role === "admin") setAdminUsers(await listAdminUsers(runtime, authenticated));
         }
       } catch (reason) {
@@ -41,7 +41,13 @@ export function AccountPanel({ onClose, onIdentityChange, view = "account" }: { 
 
   useEffect(() => {
     if (!config || !session || profile?.status !== "approved") return;
-    const timer = window.setInterval(() => { void listUploads(config, session).then(setUploads).catch(() => undefined); }, 5000);
+    const timer = window.setInterval(() => {
+      void Promise.all([getProfile(config, session), listUploads(config, session)]).then(([nextProfile, nextUploads]) => {
+        const next = { ...nextProfile, ...identityFromSession(session) };
+        setProfile(next);
+        setUploads(reconcileUploadStatuses(nextUploads, next.stats?.datasetCount ?? 0));
+      }).catch(() => undefined);
+    }, 5000);
     return () => window.clearInterval(timer);
   }, [config, session, profile?.status]);
 
@@ -59,7 +65,7 @@ export function AccountPanel({ onClose, onIdentityChange, view = "account" }: { 
     catch (reason) { setError(reason instanceof Error ? reason.message : "Account deletion failed."); }
   };
   const bytes = (value: number) => value < 1024 ** 2 ? `${Math.round(value / 1024)} KB` : value < 1024 ** 3 ? `${(value / 1024 ** 2).toFixed(1)} MB` : `${(value / 1024 ** 3).toFixed(1)} GB`;
-  const selectArchive = async (file?: File) => { if (!file || !config || !session) return; setUploading(true); setPausedUpload(null); setError(""); setProgress(0); try { const filtered = await filterStravaArchive(file); const resume = uploads.find(upload => upload.status === "uploading" && upload.filename === file.name && upload.byteSize === filtered.size); await uploadArchive(config, session, file.name, filtered, setProgress, resume?.id); setUploads(await listUploads(config, session)); } catch (reason) { setPausedUpload(file.name); setError(reason instanceof Error ? reason.message : "Upload paused. Select the archive again to resume."); } finally { setUploading(false); } };
+  const selectArchive = async (file?: File) => { if (!file || !config || !session) return; setUploading(true); setPausedUpload(null); setError(""); setProgress(0); try { const filtered = await filterStravaArchive(file); const resume = uploads.find(upload => upload.status === "uploading" && upload.filename === file.name && upload.byteSize === filtered.size); await uploadArchive(config, session, file.name, filtered, setProgress, resume?.id); const next = await getProfile(config, session); setProfile({ ...next, ...identityFromSession(session) }); setUploads(reconcileUploadStatuses(await listUploads(config, session), next.stats?.datasetCount ?? 0)); } catch (reason) { setPausedUpload(file.name); setError(reason instanceof Error ? reason.message : "Upload paused. Select the archive again to resume."); } finally { setUploading(false); } };
   const changeAccess = async (user: AdminUser, status: AdminUser["status"]) => {
     if (!config || !session || user.status === status) return;
     setAdminLoading(true); setError("");
