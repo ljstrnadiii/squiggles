@@ -1,81 +1,134 @@
-section.rich-stats[aria-label="Detailed selection statistics"]:not([data-panel-expanded]),
-section.activity-table[aria-label="Activity table"]:not([data-panel-expanded]) {
+section.rich-stats[aria-label="Detailed selection statistics"] {
   top: 66px;
   right: 12px;
   bottom: auto;
   left: auto;
-  max-height: calc(100vh - 78px);
+  width: min(440px, calc(100vw - 24px));
+  height: auto;
+  max-height: calc(100dvh - 78px);
+  overflow: auto;
   border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: 0 18px 55px var(--shadow);
 }
 
-section.rich-stats[aria-label="Detailed selection statistics"]:not([data-panel-expanded]) {
-  width: min(440px, calc(100vw - 24px));
+section.activity-table[aria-label="Activity table"]:not([data-panel-expanded]) {
+  top: 66px;
+  right: 12px;
+  bottom: auto;
+  left: auto;
+  width: min(920px, calc(100vw - 24px));
+  height: auto;
+  max-height: min(52dvh, 560px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 18px 55px var(--shadow);
+}
+
+section.activity-table[aria-label="Activity table"]:not([data-panel-expanded]) .table-scroll {
+  min-height: 0;
+  max-height: 420px;
   overflow: auto;
 }
 
-section.activity-table[aria-label="Activity table"]:not([data-panel-expanded]) {
-  width: min(920px, calc(100vw - 24px));
-  display: flex;
-  flex-direction: column;
-}
-
-section.activity-table[aria-label="Activity table"]:not([data-panel-expanded]) tbody tr:nth-child(n + 11) {
-  display: none;
-}
-
-section.rich-stats[aria-label="Detailed selection statistics"][data-panel-expanded],
-section.activity-table[aria-label="Activity table"][data-panel-expanded] {
+section.activity-table[aria-label="Activity table"][data-panel-expanded],
+section.toolbar[aria-label="Query and map settings"][data-panel-expanded] {
   top: 54px;
   right: 0;
-  bottom: 0;
+  bottom: auto;
   left: 0;
-  width: auto;
+  width: 100vw;
+  height: calc(100dvh - 54px);
   max-height: none;
+  border: 0;
   border-radius: 0;
-}
-
-section.rich-stats[aria-label="Detailed selection statistics"][data-panel-expanded] {
-  overflow: auto;
+  box-shadow: none;
 }
 
 section.activity-table[aria-label="Activity table"][data-panel-expanded] {
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
-section.activity-table[aria-label="Activity table"] .table-scroll {
+section.activity-table[aria-label="Activity table"][data-panel-expanded] .table-scroll {
   min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+section.toolbar[aria-label="Query and map settings"][data-panel-expanded] {
+  overflow: auto;
 }
 
 .panel-expand {
   order: 2;
   margin-left: auto !important;
-  padding: 2px 7px !important;
-  background: transparent !important;
-  border: 0 !important;
-  font-size: 17px !important;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0 !important;
+  background: var(--input) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 7px !important;
+  color: var(--text) !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
 }
 
-section.rich-stats[aria-label="Detailed selection statistics"] header > button[aria-label^="Close"],
-section.activity-table[aria-label="Activity table"] header > button[aria-label^="Close"] {
+section.activity-table[aria-label="Activity table"] header > button[aria-label^="Close"],
+section.toolbar[aria-label="Query and map settings"] header > button[aria-label^="Close"] {
   order: 3;
   margin-left: 0 !important;
 }
 
 @media (max-width: 700px) {
-  section.rich-stats[aria-label="Detailed selection statistics"]:not([data-panel-expanded]),
+  section.rich-stats[aria-label="Detailed selection statistics"] {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: auto;
+    max-height: calc(100dvh - 66px);
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 10px 10px 0 0;
+  }
+
   section.activity-table[aria-label="Activity table"]:not([data-panel-expanded]) {
     top: auto;
     right: 0;
     bottom: 0;
     left: 0;
     width: 100%;
-    max-height: calc(100vh - 66px);
+    height: auto;
+    max-height: 48dvh;
     border-right: 0;
     border-bottom: 0;
     border-left: 0;
     border-radius: 10px 10px 0 0;
+  }
+
+  section.activity-table[aria-label="Activity table"]:not([data-panel-expanded]) .table-scroll {
+    max-height: calc(48dvh - 58px);
+    overflow: auto;
+  }
+
+  section.activity-table[aria-label="Activity table"][data-panel-expanded],
+  section.toolbar[aria-label="Query and map settings"][data-panel-expanded] {
+    top: 54px;
+    right: 0;
+    bottom: auto;
+    left: 0;
+    width: 100%;
+    height: calc(100dvh - 54px);
+    max-height: none;
+    border-radius: 0;
   }
 }
