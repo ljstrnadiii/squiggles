@@ -23,10 +23,19 @@ let database: duckdb.AsyncDuckDB | null = null;
 let connection: duckdb.AsyncDuckDBConnection | null = null;
 let supportsClean = false;
 let cleanViewEnabled = false;
+let selectionIsAll = false;
 let registeredFiles: RegisteredFile[] = [];
 let registeredRenderLevels = new Map<Lod, RegisteredFile>();
 const scalar = (value: unknown) => typeof value === "bigint" ? Number(value) : value;
 const coordinates = (value: unknown): [number, number][] => value == null ? [] : Array.from(value as Iterable<Iterable<number>>, pair => Array.from(pair) as [number, number]);
+
+export function isUniversalSelection(sql: string): boolean {
+  return /^select\s+activity_id\s+from\s+activities$/i.test(sql.trim());
+}
+
+function selectionJoin(): string {
+  return selectionIsAll ? "" : " SEMI JOIN current_selection s USING(activity_id)";
+}
 
 function distanceMeters(a: [number, number], b: [number, number]): number {
   const radians = Math.PI / 180;
@@ -78,11 +87,6 @@ function metadataAt(columns: Map<string, ArrowVector>, index: number): RouteMeta
   };
 }
 
-/**
- * Expose DuckDB's Arrow LineString buffers directly to deck.gl. The only new
- * arrays are compact segment/activity indices used for picking and deliberate
- * discontinuity breaks; coordinates are never expanded into JS point arrays.
- */
 export function binaryRouteBatches(table: ArrowTable, geometryName: string): BinaryRouteBatch[] {
   return table.batches.map(batch => {
     const names = ["activity_id", "name", "sport_type", "start_time", "distance_m", "elevation_gain_m", "max_elevation_m", "source_url"];
@@ -99,8 +103,6 @@ export function binaryRouteBatches(table: ArrowTable, geometryName: string): Bin
     if (!(offsets instanceof Int32Array) || !(values instanceof Float64Array) || (!fixedPairs && pairOffsets === null)) {
       throw new Error(`Viewport geometry must be a GeoArrow LineString coordinate buffer (received ${geometry.type?.toString() ?? "unknown"}; offsets ${offsets?.constructor?.name ?? "missing"}; coordinate stride ${fixedCoordinates?.stride ?? "missing"}; values ${values?.constructor?.name ?? "missing"})`);
     }
-    // Arrow slices adjust the offsets view itself, so offsets[0] is the first
-    // coordinate for this batch even when Data.offset is non-zero.
     const firstPoint = offsets[0];
     const lastPoint = offsets[batch.numRows];
     const firstValue = fixedPairs ? firstPoint * 2 : pairOffsets![firstPoint];
@@ -268,7 +270,8 @@ async function render(lod: Lod, budget: number, bounds?: Bounds, clean = false) 
     ...LOD_VERTEX_LIMITS.map((limit, index) => `coalesce(sum(least(a.${count},${limit})),0) lod${index}`),
     `coalesce(sum(a.${count}),0) lod4`,
   ].join(",");
-  const estimate = await connection!.query(`SELECT ${estimatesSql} FROM current_selection a WHERE ${viewportPredicate(bounds)}`);
+  const estimateSource = selectionIsAll ? "activities" : "current_selection";
+  const estimate = await connection!.query(`SELECT ${estimatesSql} FROM ${estimateSource} a WHERE ${viewportPredicate(bounds)}`);
   const estimates = estimate.toArray()[0] as unknown as Record<string, unknown>;
   const vertexEstimates = [0, 1, 2, 3, 4].map(index => Number(scalar(estimates[`lod${index}`])));
   const plannedLod = chooseLod(vertexEstimates, lod, budget);
@@ -285,7 +288,7 @@ async function render(lod: Lod, budget: number, bounds?: Bounds, clean = false) 
   const distance = clean ? "coalesce(a.clean_distance_m,a.distance_m)" : "a.distance_m";
   const gain = clean ? "coalesce(a.clean_elevation_gain_m,a.elevation_gain_m)" : "a.elevation_gain_m";
   const maximum = clean ? "coalesce(a.clean_max_elevation_m,a.max_elevation_m)" : "a.max_elevation_m";
-  const result = await connection!.query(`SELECT a.activity_id,a.name,a.sport_type,CAST(a.start_time AS VARCHAR) start_time,${distance} distance_m,${gain} elevation_gain_m,${maximum} max_elevation_m,a.source_url,a.${geometry} FROM ${relation} a SEMI JOIN current_selection s USING(activity_id) WHERE ${viewportPredicate(bounds, clean)}`);
+  const result = await connection!.query(`SELECT a.activity_id,a.name,a.sport_type,CAST(a.start_time AS VARCHAR) start_time,${distance} distance_m,${gain} elevation_gain_m,${maximum} max_elevation_m,a.source_url,a.${geometry} FROM ${relation} a${selectionJoin()} WHERE ${viewportPredicate(bounds, clean)}`);
   const batches = binaryRouteBatches(result, geometry);
   const vertexCount = batches.reduce((total, batch) => total + batch.positions.length / 2, 0);
   const geometryBufferBytes = batches.reduce((total, batch) => total + batch.positions.byteLength + batch.startIndices.byteLength + batch.segmentActivityIndices.byteLength, 0);
@@ -300,8 +303,8 @@ async function summarize(bounds: Bounds | undefined, clean: boolean) {
   const field = (cleanName: string, rawName: string) => clean ? `coalesce(a.${cleanName},a.${rawName})` : `a.${rawName}`;
   const dropped = supportsClean ? "sum(a.dropped_jump_points) dropped_jump_points,sum(a.dropped_elevation_points) dropped_elevation_points" : "0 dropped_jump_points,0 dropped_elevation_points";
   const where = viewportContainmentPredicate(bounds, clean);
-  const summaries = await connection!.query(`SELECT count(*) activity_count,coalesce(sum(${field("clean_distance_m", "distance_m")}),0) distance_m,coalesce(sum(a.elapsed_seconds),0) elapsed_seconds,coalesce(sum(a.moving_seconds),0) moving_seconds,coalesce(sum(${field("clean_elevation_gain_m", "elevation_gain_m")}),0) elevation_gain_m,coalesce(sum(${field("clean_elevation_loss_m", "elevation_loss_m")}),0) elevation_loss_m,min(${field("clean_min_elevation_m", "min_elevation_m")}) min_elevation_m,max(${field("clean_max_elevation_m", "max_elevation_m")}) max_elevation_m,max(${field("clean_distance_m", "distance_m")}) max_distance_m,count(DISTINCT substr(CAST(a.start_time AS VARCHAR),1,10)) active_days,${dropped},CAST(min(a.start_time) AS VARCHAR) first_activity,CAST(max(a.start_time) AS VARCHAR) last_activity FROM ${relation} a SEMI JOIN current_selection s USING(activity_id) WHERE ${where}`);
-  const sports = await connection!.query(`SELECT a.activity_family sport,count(*) activity_count FROM ${relation} a SEMI JOIN current_selection s USING(activity_id) WHERE ${where} GROUP BY a.activity_family ORDER BY activity_count DESC,sport`);
+  const summaries = await connection!.query(`SELECT count(*) activity_count,coalesce(sum(${field("clean_distance_m", "distance_m")}),0) distance_m,coalesce(sum(a.elapsed_seconds),0) elapsed_seconds,coalesce(sum(a.moving_seconds),0) moving_seconds,coalesce(sum(${field("clean_elevation_gain_m", "elevation_gain_m")}),0) elevation_gain_m,coalesce(sum(${field("clean_elevation_loss_m", "elevation_loss_m")}),0) elevation_loss_m,min(${field("clean_min_elevation_m", "min_elevation_m")}) min_elevation_m,max(${field("clean_max_elevation_m", "max_elevation_m")}) max_elevation_m,max(${field("clean_distance_m", "distance_m")}) max_distance_m,count(DISTINCT substr(CAST(a.start_time AS VARCHAR),1,10)) active_days,${dropped},CAST(min(a.start_time) AS VARCHAR) first_activity,CAST(max(a.start_time) AS VARCHAR) last_activity FROM ${relation} a${selectionJoin()} WHERE ${where}`);
+  const sports = await connection!.query(`SELECT a.activity_family sport,count(*) activity_count FROM ${relation} a${selectionJoin()} WHERE ${where} GROUP BY a.activity_family ORDER BY activity_count DESC,sport`);
   const row = summaries.toArray()[0] as unknown as Record<string, unknown>;
   const sportCounts = sports.toArray().map(item => { const sport = item as unknown as Record<string, unknown>; return { sport: String(sport.sport), count: Number(scalar(sport.activity_count)) }; });
   return { activityCount: Number(scalar(row.activity_count)), distanceM: Number(scalar(row.distance_m)), elapsedSeconds: Number(scalar(row.elapsed_seconds)), movingSeconds: Number(scalar(row.moving_seconds)), elevationGainM: Number(scalar(row.elevation_gain_m)), elevationLossM: Number(scalar(row.elevation_loss_m)), minElevationM: scalar(row.min_elevation_m) as number | null, maxElevationM: scalar(row.max_elevation_m) as number | null, maxDistanceM: scalar(row.max_distance_m) as number | null, activeDays: Number(scalar(row.active_days)), droppedJumpPoints: Number(scalar(row.dropped_jump_points)), droppedElevationPoints: Number(scalar(row.dropped_elevation_points)), sportCounts, firstActivity: row.first_activity?.toString() ?? null, lastActivity: row.last_activity?.toString() ?? null };
@@ -314,6 +317,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     if (request.type === "open") {
       registeredFiles = request.files;
       registeredRenderLevels = new Map(request.renderLevels.map(level => [level.lod, level.file]));
+      selectionIsAll = false;
       for (const file of [...request.files, ...request.renderLevels.map(level => level.file)]) {
         if (file.buffer) await db.registerFileBuffer(file.name, new Uint8Array(file.buffer));
         else if (file.url) await db.registerFileURL(file.name, file.url, duckdb.DuckDBDataProtocol.HTTP, false);
@@ -349,7 +353,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       const { files } = viewportScan(request.bounds);
       const relation = viewportRelation(files, clean);
       if (!relation) { self.postMessage({ id: request.id, ok: true, value: [] }); return; }
-      const table = await connection!.query(`SELECT a.activity_id,a.name,a.sport_type,CAST(a.start_time AS VARCHAR) start_time,${field("clean_distance_m", "distance_m")} distance_m,${field("clean_elevation_gain_m", "elevation_gain_m")} elevation_gain_m,${field("clean_max_elevation_m", "max_elevation_m")} max_elevation_m,a.source_url,a.${prefix}xmin xmin,a.${prefix}ymin ymin,a.${prefix}xmax xmax,a.${prefix}ymax ymax FROM ${relation} a SEMI JOIN current_selection s USING(activity_id) WHERE ${viewportContainmentPredicate(request.bounds, clean)}`);
+      const table = await connection!.query(`SELECT a.activity_id,a.name,a.sport_type,CAST(a.start_time AS VARCHAR) start_time,${field("clean_distance_m", "distance_m")} distance_m,${field("clean_elevation_gain_m", "elevation_gain_m")} elevation_gain_m,${field("clean_max_elevation_m", "max_elevation_m")} max_elevation_m,a.source_url,a.${prefix}xmin xmin,a.${prefix}ymin ymin,a.${prefix}xmax xmax,a.${prefix}ymax ymax FROM ${relation} a${selectionJoin()} WHERE ${viewportContainmentPredicate(request.bounds, clean)}`);
       const activities = table.toArray().map(value => {
         const row = value as unknown as Record<string, unknown>;
         return { activityId: String(scalar(row.activity_id)), name: String(row.name), sportType: String(row.sport_type), startTime: row.start_time?.toString() ?? null, distanceM: scalar(row.distance_m) as number | null, elevationGainM: scalar(row.elevation_gain_m) as number | null, maxElevationM: scalar(row.max_elevation_m) as number | null, sourceUrl: row.source_url as string | null, bounds: [Number(scalar(row.xmin)), Number(scalar(row.ymin)), Number(scalar(row.xmax)), Number(scalar(row.ymax))] };
@@ -364,12 +368,18 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     }
     if (request.clean && !supportsClean) throw new Error("Clean view requires dataset schema 1.2.0 or newer; recompile this dataset first");
     await configureActivitiesView(request.clean);
-    const probe = await connection!.query(`WITH selected AS (${request.sql}) SELECT * FROM selected LIMIT 0`);
-    if (!probe.schema.fields.some(field => field.name === "activity_id")) throw new Error("SQL must return an activity_id column");
-    await connection!.query("DROP TABLE IF EXISTS current_selection");
-    await connection!.query(`CREATE TEMP TABLE current_selection AS WITH selected AS (${request.sql}) SELECT DISTINCT CAST(a.activity_id AS VARCHAR) activity_id,a.point_count,a.xmin,a.ymin,a.xmax,a.ymax FROM activities a SEMI JOIN selected s USING(activity_id)`);
-    const selected = await connection!.query("SELECT activity_id FROM current_selection");
-    const ids = selected.toArray().map(row => String((row as unknown as Record<string, unknown>).activity_id));
+    selectionIsAll = isUniversalSelection(request.sql);
+    if (selectionIsAll) {
+      await connection!.query("DROP TABLE IF EXISTS current_selection");
+      await connection!.query("DROP VIEW IF EXISTS current_selection");
+    } else {
+      const probe = await connection!.query(`WITH selected AS (${request.sql}) SELECT * FROM selected LIMIT 0`);
+      if (!probe.schema.fields.some(field => field.name === "activity_id")) throw new Error("SQL must return an activity_id column");
+      await connection!.query("DROP VIEW IF EXISTS current_selection");
+      await connection!.query("DROP TABLE IF EXISTS current_selection");
+      await connection!.query(`CREATE TEMP TABLE current_selection AS WITH selected AS (${request.sql}) SELECT DISTINCT CAST(a.activity_id AS VARCHAR) activity_id,a.point_count,a.xmin,a.ymin,a.xmax,a.ymax FROM activities a SEMI JOIN selected s USING(activity_id)`);
+    }
+    const ids = selectionIsAll ? [] : (await connection!.query("SELECT activity_id FROM current_selection")).toArray().map(row => String((row as unknown as Record<string, unknown>).activity_id));
     const clean = request.clean && supportsClean;
     const summary = await summarize(undefined, clean);
     const viewport = await render(request.lod, request.budget, request.bounds, clean);
