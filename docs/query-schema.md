@@ -1,8 +1,19 @@
-# DuckDB query schema for AI assistants
+# DuckDB query schema
 
-Give this contract to a natural-language SQL assistant when asking it to generate an Activity Map query. The same text is available from **AI Skills → Copy for your AI** in the application.
+Use this contract with an AI/SQL assistant.
 
-Every selection query must return an `activity_id` column and query only the logical `activities` relation. Distances and elevations use meters, durations use seconds, coordinates are CRS84 longitude/latitude, and timestamps are UTC.
+## Query rules
+
+- Query only the logical relation `activities`.
+- Return an `activity_id` column.
+- Additional columns are allowed but rendering selection is driven by `activity_id`.
+- A trailing semicolon is unnecessary.
+- Distances/elevations are meters.
+- Durations are seconds.
+- Coordinates are CRS84 longitude/latitude.
+- Timestamps are UTC.
+
+## Relation
 
 ```text
 activities
@@ -17,9 +28,9 @@ activities
   sport_type VARCHAR NOT NULL
   start_time TIMESTAMPTZ
   end_time TIMESTAMPTZ
-  start_year BIGINT NOT NULL                   -- scalar column with Parquet statistics
-  start_month BIGINT NOT NULL                  -- 1 through 12
-  activity_family VARCHAR NOT NULL             -- Hive partition: run, ride, ski, foot, water, other
+  start_year BIGINT NOT NULL
+  start_month BIGINT NOT NULL                  -- 1..12
+  activity_family VARCHAR NOT NULL             -- run, ride, ski, foot, water, other
   original_start_time VARCHAR
   source_url VARCHAR
   distance_m DOUBLE
@@ -50,12 +61,12 @@ activities
   distance_source VARCHAR NOT NULL
   moving_time_source VARCHAR NOT NULL
   elevation_source VARCHAR NOT NULL
-  geometry DOUBLE[2][] NOT NULL                -- full LineString
-  geometry_lod0 DOUBLE[2][] NOT NULL           -- at most 40 vertices
-  geometry_lod1 DOUBLE[2][] NOT NULL           -- at most 100 vertices
-  geometry_lod2 DOUBLE[2][] NOT NULL           -- at most 400 vertices
-  geometry_lod3 DOUBLE[2][] NOT NULL           -- at most 2000 vertices
-  geometry_clean DOUBLE[2][] NOT NULL          -- conservative cleaned full route
+  geometry DOUBLE[2][] NOT NULL
+  geometry_lod0 DOUBLE[2][] NOT NULL           -- <= 40 vertices
+  geometry_lod1 DOUBLE[2][] NOT NULL           -- <= 100
+  geometry_lod2 DOUBLE[2][] NOT NULL           -- <= 400
+  geometry_lod3 DOUBLE[2][] NOT NULL           -- <= 2000
+  geometry_clean DOUBLE[2][] NOT NULL
   geometry_clean_lod0 DOUBLE[2][] NOT NULL
   geometry_clean_lod1 DOUBLE[2][] NOT NULL
   geometry_clean_lod2 DOUBLE[2][] NOT NULL
@@ -69,21 +80,26 @@ activities
     heart_rate DOUBLE,
     cadence DOUBLE,
     power DOUBLE,
-    clean BOOLEAN                              -- retained by conservative cleaner
+    clean BOOLEAN
   )[] NOT NULL
 ```
 
-Raw geometry, telemetry, and summaries remain canonical. The `clean_*` columns are derived alternatives. When Clean is enabled and the query is run, the worker projects clean geometry, bounds, summaries, point count, and filtered `track_points` into the normal column names before executing the unchanged user SQL. This reversible view reconnects valid neighbors around an isolated excluded sample, but it does not rewrite GeoParquet or fabricate replacement telemetry.
+## Clean mode
 
-Example: runs containing any recorded point above 12,000 feet (3,657.6 meters):
+- Raw fields remain canonical.
+- Clean mode projects derived clean geometry, bounds, metrics, point count, and filtered telemetry onto the normal logical names before the same SQL executes.
+- GeoParquet is not rewritten.
+
+## Example
+
+Activities containing any recorded point above 3,657.6 m:
 
 ```sql
 SELECT activity_id
 FROM activities
-WHERE lower(sport_type) LIKE '%run%'
-  AND EXISTS (
-    SELECT 1
-    FROM unnest(track_points) AS points(point)
-    WHERE point.elevation_m >= 3657.6
-  );
+WHERE EXISTS (
+  SELECT 1
+  FROM unnest(track_points) AS points(point)
+  WHERE point.elevation_m >= 3657.6
+)
 ```
