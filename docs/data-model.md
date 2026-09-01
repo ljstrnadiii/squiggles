@@ -1,17 +1,75 @@
 # Data model
 
-Core objects are `Dataset`, `Activity`, `QueryTab`, `QueryResult`, `SummaryStats`, `RenderPlan`, and `Share`.
+## Canonical dataset
 
-Summary fields are activity count, distance, moving time, elevation gain, maximum elevation, first activity, and last activity. Distances and elevations use meters; durations use seconds; timestamps are UTC at system boundaries.
+- Format: GeoParquet.
+- One row per activity.
+- Logical browser relation: `activities`.
+- Canonical units: metres and seconds.
+- Activity IDs are stable within a compiled dataset.
 
-The canonical `activities` relation has one row per spatial activity: identity and provenance, normalized summaries, bbox covering columns, a native GeoArrow CRS84 LineString, four simplified LineString LODs, and nested track-point structs with sequence, UTC timestamp, coordinates, elevation, heart rate, cadence, and power. Schema 1.2 also stores conservative derived clean geometry/LOD/bbox/summary columns and a `track_points.clean` flag. Raw samples remain intact and canonical.
+Core fields include:
 
-The cleaner removes only isolated interior anomalies. A GPS point must create implausible legs on both sides (over 1 km and over 80 m/s, or over 20 km when timestamps are absent) while the direct neighboring leg is plausible. An elevation sample must be an isolated same-direction spike over 150 m on both sides with over 10 m/s vertical rate (or over 500 m without timestamps) while its neighbors remain within 100 m. Drop counts are stored per activity for diagnostics. In the browser, Clean changes the logical `activities` projection before SQL execution: normal geometry, metric, bbox, point-count, and `track_points` names expose their clean equivalents. This is a reversible view operation; raw columns in GeoParquet are never rewritten and no replacement telemetry values are fabricated.
+- identifiers and source metadata
+- activity name and sport type
+- start/end time
+- distance and duration
+- elevation summary
+- point counts and cleaning counters
+- route geometry
+- simplified LOD geometries
+- route bbox
+- track-point telemetry
 
-Schema 1.3 files are Hive-partitioned only by coarse `activity_family`; families normalize to `run`, `ride`, `ski`, `foot`, `water`, and `other`. `start_year` and `start_month` are canonical integer columns with Parquet statistics. Within each family, all years are ordered together by the route bbox center's deterministic 16-bit Morton key and chunked into configurable 512-row fragments containing 128-row Parquet row groups. This keeps repeated visits to one mountain near each other instead of scattering them across one physical partition per year. The larger defaults favor the common broad-view path by reducing URL, footer, and range-request fan-out; four groups per full shard retain coarse spatial and scalar pruning. `dataset.json` records each fragment's route-covering bbox and each row group's row count/covering bbox in addition to versions, aggregate extents/counts, checksums, and paths. This metadata is calculated from the same validated Arrow tables passed to the direct Ray datasink; finalization does not reread or rewrite activity Parquet. Covering boxes are conservative for long routes: they may read an extra fragment or row group but cannot hide a route crossing the viewport. `rejections.parquet` is diagnostic metadata, not canonical activity data.
+## Clean view
 
-Schema 1.4 retains those canonical files and adds five derived render-only GeoParquet files. Each contains the same spatially ordered activity rows, only the metadata needed to draw and pick routes, and one raw/clean geometry pair for its resolution. Row-group boundaries are calculated independently at each level against one million combined raw-plus-clean vertices, the dominant payload proxy; coarse levels naturally need fewer and larger row groups while detailed levels use more row groups with approximately comparable compressed payloads. Manifest row groups record their actual row count and bounding box plus exact raw/clean vertex sum, minimum, and maximum. The browser materializes selected IDs, effective bounds, and point counts once from canonical SQL, chooses a resolution in memory on later pans, and reads geometry only from the selected render file. These files are replaceable RenderPlans, not canonical activity data.
+Compiled datasets may include cleaned equivalents for:
 
-FIT record messages are normalized by timestamp before creating track points. This matters for devices that emit position and elevation/telemetry in separate record messages at the same instant. The compiler merges their non-null fields, prefers `enhanced_altitude`, and falls back to legacy `altitude`; it does not invent elevation when neither field exists.
+- geometry
+- distance/elevation summaries
+- point count
+- bbox
+- track-point filtering
 
-The complete DuckDB-facing relation contract and nested-point query examples are documented in [query-schema.md](query-schema.md). Browser heat cells and elevation-profile samples are derived render data, not additional canonical relations.
+Clean mode projects those values into the normal logical `activities` columns. Canonical files are not rewritten in the browser.
+
+## Storage layout
+
+- Canonical shards are Hive-partitioned by `activity_family`.
+- Rows are spatially ordered within partitions.
+- Parquet row groups record conservative route bboxes.
+- `start_year` and `start_month` remain queryable columns.
+
+## Render pyramid
+
+Each dataset contains render levels for:
+
+- LOD0: ~40 vertices/activity
+- LOD1: ~100
+- LOD2: ~400
+- LOD3: ~2,000
+- LOD4: raw
+
+Render files carry lightweight route metadata, bbox information, and geometry for direct viewport rendering.
+
+## Manifest
+
+`dataset.json` includes:
+
+- schema version
+- activity/rejection counts
+- dataset bbox
+- canonical shard metadata
+- render-level metadata
+- file sizes
+- row counts
+- row-group bboxes
+- vertex statistics where available
+
+## Source adapters
+
+The normalized model is independent of source provider.
+
+- Current adapter: Strava export archive.
+- Supported activity file types today: FIT, GPX, TCX, including gzip variants.
+- Future adapters should emit the same canonical schema.

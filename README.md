@@ -5,78 +5,88 @@
   <img src="apps/web/public/logo-light.png" alt="Squiggles logo" width="180" />
 </picture>
 
-A local-first Strava explorer. Compile an export into GeoParquet, open it directly in a Chromium browser, render routes, and use DuckDB SQL to create persistent map tabs. Local mode keeps activity data on the machine; the optional hosted path publishes an explicitly selected compiled dataset for unlisted sharing.
+A local-first explorer for large personal activity archives.
 
-## Intent
+- Compile an archive to GeoParquet.
+- Query activities with DuckDB SQL.
+- Explore routes with viewport-aware LOD rendering.
+- Save and publish selected map views.
+- Keep canonical activity data columnar and portable.
 
-Squiggles is for understanding and telling the story of a large activity archive—not planning a route, navigating, coaching a workout, or recreating a social feed. It aims to stay interactive at a scale that is difficult to inspect activity-by-activity in Strava or to import as thousands of individual GPX files into route-planning experiences such as Caltopo.
-
-The project is a success if it helps someone discover years of movement and eventually hear: “No, Grandpa, I don't want to see your heatmap again.” Click or hover the application logo for the in-app version of this story.
+The current importer supports Strava exports containing FIT, GPX, and TCX activities. The archive model is provider-agnostic and intended to support additional sources later.
 
 ## Requirements
 
-- Python 3.12 or 3.13 and `uv`
-- Node.js 22+ and `pnpm` 11.22
+- Python 3.12 or 3.13 + `uv`
+- Node.js 22+ + `pnpm` 11.22
+- Chrome or Edge for local directory access
 
-## Compile
-
-ZIP archives and extracted exports are accepted. Do not use an archive that is still downloading.
+## Compile an archive
 
 ```bash
-uv run squiggles compile-strava ../mvmt/data/export_10947978_extracted --output data/local/mvmt
-uv run squiggles validate data/local/mvmt
+uv run squiggles compile-strava /path/to/export --output data/local/archive
+uv run squiggles validate data/local/archive
 ```
 
-FIT, GPX, and TCX files, including gzip variants, are supported. Recoverable failures go to `rejections.parquet`; output under `data/local/` is ignored by Git.
+Output includes canonical GeoParquet shards, a spatial render pyramid, `dataset.json`, and rejection records.
 
-The default output Hive-partitions by `activity_family`; `start_year` and `start_month` remain available to DuckDB as normal columns. Inside each family, the compiler Morton-orders route bbox centers across all years, writes 128-row Parquet groups inside 512-row spatial shards, and records both shard and row-group conservative bboxes in the manifest. The larger files and groups minimize mobile URL/footer/range-request fan-out while DuckDB still prunes four spatial groups in a full shard. Use `--target-shard-rows` and `--row-group-rows` to tune the two levels independently.
-
-## Explore locally
+## Run locally
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-Open the local URL in Chrome or Edge, choose **Dataset**, and select `data/local/mvmt`. No API server or map key is required. Streets, topographic, and imagery basemaps use public network tile services; choose **Blank / offline** to make no basemap requests. The query toolbar is hidden by default; click the active tab to show or hide it. Cmd/Ctrl+Enter runs SQL, and new tabs open the toolbar automatically. Pan and zoom query intersecting route bboxes and select an overview under both a zoom fidelity ceiling and a system resolution budget. Low, Medium, and High permit 250k, 750k, and 1.25M visible vertices; coarse-pointer devices default to Low and desktops to Medium. LOD transitions occur at zooms 8, 12, 14, and 16, and dense views downgrade automatically. Normal, heat, hover, and selected strokes thin continuously after zoom 12 so they do not obscure streets and trail corners at maximum zoom. Hover any query parameter for its short explanation.
+Then open the app and select the compiled dataset directory.
 
-Route heat is computed on demand from the current query and viewport without changing the geometry chosen by the LOD planner. Every selected vertex contributes to a screen-space grid; each route receives one score from cross-activity vertex pairs in its cell and the eight neighboring cells, then keeps one color along its complete path. Own-route vertices cannot heat themselves. Choose Sunset, Viridis, Fire, or Ice and adjust Temperature: higher values make moderately shared routes saturate sooner on the logarithmic scale. Hovering emphasizes an entire route; selecting it opens its elevation profile, and hovering the profile traces the corresponding position on the map.
-
-The application accent, default route, elevation trace, and profile marker use blue `#476BCC`. Heat palettes retain their semantic multi-color ramps. Existing tabs that still contain one of the former built-in accent colors migrate automatically; intentional custom route colors are preserved. The header, statistics, README, and browser icon choose the blue logo in light mode and the white logo in dark mode.
-
-The shared desktop/mobile header contains the current-query dropdown and a right-aligned state dot. That dropdown selects and creates saved queries and opens Query settings, **Statistics**, **Table**, **Rendering**, Dataset, AI Skills, and System settings. Statistics, Table, and Rendering open as resizable right drawers on desktop and resizable bottom sheets on mobile. Statistics shows totals, averages, activity days, cleaning counts, and activity-family counts. Table loads lightweight metadata and bounds for every activity in the current SQL selection, sorts by activity, sport, date, distance, gain, or maximum elevation, and zooms to a route before opening its full detail. Rendering reports candidate/total shards, the actual LOD/raw representation, zoom, route and vertex counts, geometry latency, line width, heat work, data view, and basemap. Theme and units persist locally; display units default to miles unless a stored preference or deep link selects kilometres. Canonical SQL units remain metres and seconds.
-
-The SQL editor provides syntax highlighting, activity-column autocomplete with Ctrl+Space, line editing, and starter queries for common activity, time, distance, and elevation selections. It remains ordinary editable DuckDB SQL. Switching saved tabs executes the new tab's SQL; clicking the active tab only toggles the sectioned query/settings drawer. Visual controls apply immediately, Clean automatically refreshes the last applied SQL, and an edited SQL draft changes results only through the visible Run button. The editor is loaded only when query controls are opened, and neither SQL nor schema completion leaves the browser.
-
-Use **AI Skills** to copy the complete relation contract into a natural-language SQL assistant, or read [the query schema](docs/query-schema.md). The included **Runs above 12k ft** example tab demonstrates filtering nested track points. When **Clean** changes, the worker automatically projects the precompiled clean geometry, summaries, bounds, point count, and filtered telemetry into the normal `activities` columns before rerunning the last applied SQL; an unsaved SQL draft remains untouched. It reconnects valid neighbors around isolated spikes without fabricating telemetry or changing the canonical files. Independently, the renderer refuses to draw a straight segment across a coordinate gap over 20 km.
-
-During development, an ignored dataset under `data/local/` can be opened through Vite with HTTP range reads by naming its directory in the URL:
+Development datasets under `data/local/` can also be opened through Vite:
 
 ```text
-http://localhost:5173/?dataset=mvmt&tab=example-high-runs
+http://localhost:5173/?dataset=archive
 ```
 
-For the current local acceptance dataset, use `?dataset=strava`. **Copy tab link** preserves the active local tab, camera, basemap, heat palette/temperature, cleaning state, route color, and display units. Map movement updates these URL parameters without adding browser-history entries. Custom tab SQL must already exist in that browser because SQL and activity data are deliberately excluded from the URL; this is local deep-linking, not hosted sharing. The developer dataset route is available only from Vite and does not bundle or copy the dataset.
+## Query model
 
-All activity reads, SQL, summaries, viewport pruning, LOD planning, and detail lookup run in DuckDB-Wasm in a Web Worker. Heat preparation and route rendering run in the browser with deck.gl/WebGL; there is no application API or persistent process to host. A static deployment only needs the application assets and GeoParquet files with byte-range support. Network basemaps are the sole runtime third-party requests, and Blank / offline removes those too.
+- SQL engine: DuckDB-Wasm in a Web Worker.
+- Logical relation: `activities`.
+- Every selection query returns `activity_id`.
+- Canonical units: metres and seconds.
+- A trailing semicolon is unnecessary but accepted.
+- Extra projected columns are allowed; `activity_id` determines the selected routes.
 
-## Hosted deployment
+Example:
 
-The first hosted slice uses Pulumi-managed private S3 origins and one CloudFront distribution for the static Vite application and `/datasets/*`. The selected public hostname is `squiggles.io`; the generated CloudFront hostname remains available during DNS rollout. DuckDB and rendering remain in the browser, and `/m/<dataset-uuid>` opens the manually uploaded developer dataset. Authentication and managed uploads intentionally follow later.
-
-Use native Pulumi commands for infrastructure—there are no Make or pnpm deployment wrappers:
-
-```zsh
-cd infra/aws
-AWS_PROFILE=squiggle-dev pulumi preview --stack dev
-AWS_PROFILE=squiggle-dev pulumi up --stack dev
+```sql
+SELECT activity_id
+FROM activities
+WHERE distance_m >= 20000
 ```
 
-See [the AWS runbook](infra/aws/README.md) for one-time local Pulumi/AWS setup, budget email configuration, manual dataset upload, range-request acceptance, and destruction safety. No cloud resources are created by installation, build, test, or preview-free development commands.
+See [query schema](docs/query-schema.md).
 
-Pull requests and pushes to `main` run Python, web, infrastructure, and secret checks. A successful `main` build deploys through GitHub OIDC without stored AWS access keys, then semantic-release derives a GitHub release from Conventional Commit messages. The deployment role cannot change its own trust or permissions; those bootstrap changes require a reviewed local Pulumi update.
+## Rendering
 
-The scale path is deliberately columnar: the compiler turns many source files into partitioned GeoParquet; DuckDB-Wasm scans only required Parquet columns and viewport rows; and interleaved GeoArrow coordinate buffers transfer directly into deck.gl's binary `PathLayer` without a GeoJSON or per-point JavaScript-object expansion. Successfully encountered viewport batches stay in an adaptive 256 MiB–1 GiB in-memory LRU and are reused when the same view returns. GPU upload is still required, but the large intermediate object graph is gone. That division lets a user's browser interact with many millions of recorded points without uploading the archive or asking a route planner to manage thousands of independent GPX layers.
+- GeoArrow buffers move directly from DuckDB to deck.gl.
+- Viewport bbox pruning limits candidate files and row groups.
+- LOD is selected from zoom plus a vertex budget.
+- Render pyramid targets: 40, 100, 400, 2,000 vertices, then raw geometry.
+- Resolution budgets: Low 250k, Medium 750k, High 1.25M visible vertices.
+- Desktop geometry cache: up to 512 MiB; coarse-pointer devices: 128 MiB.
+- Small viewport moves can reuse enclosing cached geometry.
+- Heat rendering is computed in the browser from selected geometry.
+
+## Hosted architecture
+
+- Static app + datasets: private S3 origins behind CloudFront.
+- Browser query/render path remains DuckDB-Wasm + deck.gl.
+- Auth: Cognito; Google federation when configured.
+- Control plane: Lambda + API Gateway + DynamoDB.
+- Ingest jobs: AWS Batch/Fargate.
+- Infrastructure: Pulumi.
+- CI/deploy: GitHub Actions with AWS OIDC.
+- Development budget target: under $50/month.
+
+See [architecture](docs/architecture.md) and [AWS runbook](infra/aws/README.md).
 
 ## Verify
 
@@ -90,4 +100,12 @@ pnpm typecheck
 pnpm build
 ```
 
-See [architecture](docs/architecture.md), [data model](docs/data-model.md), and [decisions](docs/decisions.md).
+## Project docs
+
+- [Architecture](docs/architecture.md)
+- [Data model](docs/data-model.md)
+- [Query schema](docs/query-schema.md)
+- [Security](docs/security.md)
+- [Auth](docs/auth.md)
+- [Benchmarks](docs/benchmarks.md)
+- [Decisions](docs/decisions.md)
