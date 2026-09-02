@@ -12,166 +12,24 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: fix/spatial-filter-streaming
-      - name: Apply retained spatial and picking fixes
+      - name: Apply retained fixes
         run: |
           python - <<'PY'
+          import base64
           from pathlib import Path
-
-          spatial = '''import type { SpatialFilter } from "./contracts";
-
-function number(value: number) {
-  if (!Number.isFinite(value)) throw new Error("Spatial filter coordinates must be finite");
-  return Number(value.toFixed(7)).toString();
-}
-
-export function polygonBounds(polygon: readonly [number, number][]): [number, number, number, number] {
-  if (polygon.length < 3) throw new Error("Spatial filter needs at least three vertices");
-  const xs = polygon.map(point => point[0]);
-  const ys = polygon.map(point => point[1]);
-  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
-}
-
-const cross = (ax: string, ay: string, bx: string, by: string, cx: string, cy: string) =>
-  `((${bx})-(${ax}))*((${cy})-(${ay}))-((${by})-(${ay}))*((${cx})-(${ax}))`;
-
-function polygonEdges(polygon: readonly [number, number][]) {
-  return polygon.map((point, index) => ({ point, next: polygon[(index + 1) % polygon.length] }));
-}
-
-function pointInside(point: string, polygon: readonly [number, number][]) {
-  const crossings = polygonEdges(polygon).map(({ point: edge, next }) => {
-    const x1 = number(edge[0]);
-    const y1 = number(edge[1]);
-    const x2 = number(next[0]);
-    const y2 = number(next[1]);
-    return `CASE WHEN ((${y1} > ${point}.latitude) != (${y2} > ${point}.latitude)) AND ${point}.longitude < (${x2}-${x1})*(${point}.latitude-${y1})/nullif(${y2}-${y1},0)+${x1} THEN 1 ELSE 0 END`;
-  });
-  return `((${crossings.join("+")}) % 2 = 1)`;
-}
-
-function segmentCrossesEdge(a: string, b: string, edge: [number, number], next: [number, number]) {
-  const x1 = number(edge[0]);
-  const y1 = number(edge[1]);
-  const x2 = number(next[0]);
-  const y2 = number(next[1]);
-  const polygonSideA = cross(x1, y1, x2, y2, `${a}.longitude`, `${a}.latitude`);
-  const polygonSideB = cross(x1, y1, x2, y2, `${b}.longitude`, `${b}.latitude`);
-  const routeSideA = cross(`${a}.longitude`, `${a}.latitude`, `${b}.longitude`, `${b}.latitude`, x1, y1);
-  const routeSideB = cross(`${a}.longitude`, `${a}.latitude`, `${b}.longitude`, `${b}.latitude`, x2, y2);
-  return `(greatest(${a}.longitude,${b}.longitude) >= least(${x1},${x2})
-    AND least(${a}.longitude,${b}.longitude) <= greatest(${x1},${x2})
-    AND greatest(${a}.latitude,${b}.latitude) >= least(${y1},${y2})
-    AND least(${a}.latitude,${b}.latitude) <= greatest(${y1},${y2})
-    AND (${polygonSideA}) * (${polygonSideB}) <= 0
-    AND (${routeSideA}) * (${routeSideB}) <= 0)`;
-}
-
-function segmentCrossesPolygon(a: string, b: string, polygon: readonly [number, number][]) {
-  return `(${polygonEdges(polygon).map(({ point, next }) => segmentCrossesEdge(a, b, point, next)).join(" OR ")})`;
-}
-
-function anyPointInside(track: string, polygon: readonly [number, number][]) {
-  return `list_contains(list_transform(${track},p -> ${pointInside("p", polygon)}),true)`;
-}
-
-function anyPointOutside(track: string, polygon: readonly [number, number][]) {
-  return `list_contains(list_transform(${track},p -> NOT ${pointInside("p", polygon)}),true)`;
-}
-
-function anySegmentCrosses(track: string, polygon: readonly [number, number][]) {
-  const current = `list_extract(${track},i)`;
-  const next = `list_extract(${track},i + 1)`;
-  return `list_contains(list_transform(range(1,array_length(${track})),i -> ${segmentCrossesPolygon(current, next, polygon)}),true)`;
-}
-
-export function applySpatialFilterSql(sql: string, filter?: SpatialFilter): string {
-  if (!filter || filter.polygon.length < 3) return sql;
-  const [xmin, ymin, xmax, ymax] = polygonBounds(filter.polygon);
-  const track = "a.track_points";
-  const insideAny = anyPointInside(track, filter.polygon);
-  const outsideAny = anyPointOutside(track, filter.polygon);
-  const crosses = anySegmentCrosses(track, filter.polygon);
-  const predicate = filter.predicate === "within"
-    ? `NOT ${outsideAny} AND NOT ${crosses}`
-    : `${insideAny} OR ${crosses}`;
-  return `WITH spatial_user_selection AS (
-${sql}
-),
-spatial_candidate_ids AS MATERIALIZED (
-  SELECT a.activity_id
-  FROM activities a
-  SEMI JOIN spatial_user_selection s USING(activity_id)
-  WHERE a.xmax >= ${number(xmin)} AND a.xmin <= ${number(xmax)}
-    AND a.ymax >= ${number(ymin)} AND a.ymin <= ${number(ymax)}
-)
-SELECT a.activity_id
-FROM activities a
-SEMI JOIN spatial_candidate_ids c USING(activity_id)
-WHERE ${predicate}`;
-}
-'''
-          Path('apps/web/src/spatialSql.ts').write_text(spatial)
-
-          tests = '''import { describe, expect, it } from "vitest";
-import { applySpatialFilterSql, polygonBounds } from "./spatialSql";
-
-const polygon: [number, number][] = [[-105.3, 39.9], [-105.1, 39.9], [-105.2, 40.1]];
-
-describe("drawn spatial filters", () => {
-  it("leaves SQL unchanged without a completed polygon", () => {
-    const sql = "SELECT activity_id FROM activities";
-    expect(applySpatialFilterSql(sql)).toBe(sql);
-    expect(applySpatialFilterSql(sql, { predicate: "intersects", polygon: polygon.slice(0, 2), visible: false })).toBe(sql);
-  });
-
-  it("materializes only bbox-pruned candidate ids before exact geometry checks", () => {
-    const result = applySpatialFilterSql("SELECT activity_id FROM activities WHERE start_year = 2026", { predicate: "intersects", polygon, visible: false });
-    expect(result).toContain("spatial_user_selection");
-    expect(result).toContain("SEMI JOIN spatial_user_selection");
-    expect(result).toContain("spatial_candidate_ids AS MATERIALIZED");
-    expect(result).toContain("SELECT a.activity_id\\n  FROM activities a");
-    expect(result).not.toContain("SELECT a.activity_id,a.track_points");
-    expect(result).toContain("a.xmax >= -105.3");
-    expect(result).toContain("a.xmin <= -105.1");
-  });
-
-  it("keeps exact point and segment tests row-local without unnesting routes", () => {
-    const result = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "intersects", polygon, visible: false });
-    expect(result).toContain("list_transform(a.track_points,p ->");
-    expect(result).toContain("list_transform(range(1,array_length(a.track_points)),i ->");
-    expect(result).toContain("list_extract(a.track_points,i + 1)");
-    expect(result).not.toContain("unnest(");
-    expect(result).not.toContain("CROSS JOIN polygon_edges");
-  });
-
-  it("does not let display visibility change selection SQL", () => {
-    const hidden = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "intersects", polygon, visible: false });
-    const shown = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "intersects", polygon, visible: true });
-    expect(shown).toBe(hidden);
-  });
-
-  it("uses the stricter within predicate", () => {
-    const result = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "within", polygon, visible: true });
-    expect(result).toContain("WHERE NOT list_contains");
-    expect(result).toContain("AND NOT list_contains");
-  });
-
-  it("calculates polygon bounds", () => {
-    expect(polygonBounds(polygon)).toEqual([-105.3, 39.9, -105.1, 40.1]);
-  });
-});
-'''
-          Path('apps/web/src/spatialSql.test.ts').write_text(tests)
-
+          spatial = "aW1wb3J0IHR5cGUgeyBTcGF0aWFsRmlsdGVyIH0gZnJvbSAiLi9jb250cmFjdHMiOwoKZnVuY3Rpb24gbnVtYmVyKHZhbHVlOiBudW1iZXIpIHsKICBpZiAoIU51bWJlci5pc0Zpbml0ZSh2YWx1ZSkpIHRocm93IG5ldyBFcnJvcigiU3BhdGlhbCBmaWx0ZXIgY29vcmRpbmF0ZXMgbXVzdCBiZSBmaW5pdGUiKTsKICByZXR1cm4gTnVtYmVyKHZhbHVlLnRvRml4ZWQoNykpLnRvU3RyaW5nKCk7Cn0KCmV4cG9ydCBmdW5jdGlvbiBwb2x5Z29uQm91bmRzKHBvbHlnb246IHJlYWRvbmx5IFtudW1iZXIsIG51bWJlcl1bXSk6IFtudW1iZXIsIG51bWJlciwgbnVtYmVyLCBudW1iZXJdIHsKICBpZiAocG9seWdvbi5sZW5ndGggPCAzKSB0aHJvdyBuZXcgRXJyb3IoIlNwYXRpYWwgZmlsdGVyIG5lZWRzIGF0IGxlYXN0IHRocmVlIHZlcnRpY2VzIik7CiAgY29uc3QgeHMgPSBwb2x5Z29uLm1hcChwb2ludCA9PiBwb2ludFswXSk7CiAgY29uc3QgeXMgPSBwb2x5Z29uLm1hcChwb2ludCA9PiBwb2ludFsxXSk7CiAgcmV0dXJuIFtNYXRoLm1pbiguLi54cyksIE1hdGgubWluKC4uLnlzKSwgTWF0aC5tYXgoLi4ueHMpLCBNYXRoLm1heCguLi55cyldOwp9Cgpjb25zdCBjcm9zcyA9IChheDogc3RyaW5nLCBheTogc3RyaW5nLCBieDogc3RyaW5nLCBieTogc3RyaW5nLCBjeDogc3RyaW5nLCBjeTogc3RyaW5nKSA9PgogIGAoKCR7Ynh9KS0oJHtheH0pKSooKCR7Y3l9KS0oJHtheX0pKS0oKCR7Ynl9KS0oJHtheX0pKSooKCR7Y3h9KS0oJHtheH0pKWA7CgpmdW5jdGlvbiBwb2x5Z29uRWRnZXMocG9seWdvbjogcmVhZG9ubHkgW251bWJlciwgbnVtYmVyXVtdKSB7CiAgcmV0dXJuIHBvbHlnb24ubWFwKChwb2ludCwgaW5kZXgpID0+ICh7IHBvaW50LCBuZXh0OiBwb2x5Z29uWyhpbmRleCArIDEpICUgcG9seWdvbi5sZW5ndGhdIH0pKTsKfQoKZnVuY3Rpb24gcG9pbnRJbnNpZGUocG9pbnQ6IHN0cmluZywgcG9seWdvbjogcmVhZG9ubHkgW251bWJlciwgbnVtYmVyXVtdKSB7CiAgY29uc3QgY3Jvc3NpbmdzID0gcG9seWdvbkVkZ2VzKHBvbHlnb24pLm1hcCgoeyBwb2ludDogZWRnZSwgbmV4dCB9KSA9PiB7CiAgICBjb25zdCB4MSA9IG51bWJlcihlZGdlWzBdKTsKICAgIGNvbnN0IHkxID0gbnVtYmVyKGVkZ2VbMV0pOwogICAgY29uc3QgeDIgPSBudW1iZXIobmV4dFswXSk7CiAgICBjb25zdCB5MiA9IG51bWJlcihuZXh0WzFdKTsKICAgIHJldHVybiBgQ0FTRSBXSEVOICgoJHt5MX0gPiAke3BvaW50fS5sYXRpdHVkZSkgIT0gKCR7eTJ9ID4gJHtwb2ludH0ubGF0aXR1ZGUpKSBBTkQgJHtwb2ludH0ubG9uZ2l0dWRlIDwgKCR7eDJ9LSR7eDF9KSooJHtwb2ludH0ubGF0aXR1ZGUtJHt5MX0pL251bGxpZigke3kyfS0ke3kxfSwwKSske3gxfSBUSEVOIDEgRUxTRSAwIEVORGA7CiAgfSk7CiAgcmV0dXJuIGAoKCR7Y3Jvc3NpbmdzLmpvaW4oIisiKX0pICUgMiA9IDEpYDsKfQoKZnVuY3Rpb24gc2VnbWVudENyb3NzZXNFZGdlKGE6IHN0cmluZywgYjogc3RyaW5nLCBlZGdlOiBbbnVtYmVyLCBudW1iZXJdLCBuZXh0OiBbbnVtYmVyLCBudW1iZXJdKSB7CiAgY29uc3QgeDEgPSBudW1iZXIoZWRnZVswXSk7CiAgY29uc3QgeTEgPSBudW1iZXIoZWRnZVsxXSk7CiAgY29uc3QgeDIgPSBudW1iZXIobmV4dFswXSk7CiAgY29uc3QgeTIgPSBudW1iZXIobmV4dFsxXSk7CiAgY29uc3QgcG9seWdvblNpZGVBID0gY3Jvc3MoeDEsIHkxLCB4MiwgeTIsIGAke2F9LmxvbmdpdHVkZWAsIGAke2F9LmxhdGl0dWRlYCk7CiAgY29uc3QgcG9seWdvblNpZGVCID0gY3Jvc3MoeDEsIHkxLCB4MiwgeTIsIGAke2J9LmxvbmdpdHVkZWAsIGAke2J9LmxhdGl0dWRlYCk7CiAgY29uc3Qgcm91dGVTaWRlQSA9IGNyb3NzKGAke2F9LmxvbmdpdHVkZWAsIGAke2F9LmxhdGl0dWRlYCwgYCR7Yn0ubG9uZ2l0dWRlYCwgYCR7Yn0ubGF0aXR1ZGVgLCB4MSwgeTEpOwogIGNvbnN0IHJvdXRlU2lkZUIgPSBjcm9zcyhgJHthfS5sb25naXR1ZGVgLCBgJHthfS5sYXRpdHVkZWAsIGAke2J9LmxvbmdpdHVkZWAsIGAke2J9LmxhdGl0dWRlYCwgeDIsIHkyKTsKICByZXR1cm4gYChncmVhdGVzdCgke2F9LmxvbmdpdHVkZSwke2J9LmxvbmdpdHVkZSkgPj0gbGVhc3QoJHt4MX0sJHt4Mn0pCiAgICBBTkQgbGVhc3QoJHthfS5sb25naXR1ZGUsJHtifS5sb25naXR1ZGUpIDw9IGdyZWF0ZXN0KCR7eDF9LCR7eDJ9KQogICAgQU5EIGdyZWF0ZXN0KCR7YX0ubGF0aXR1ZGUsJHtifS5sYXRpdHVkZSkgPj0gbGVhc3QoJHt5MX0sJHt5Mn0pCiAgICBBTkQgbGVhc3QoJHthfS5sYXRpdHVkZSwke2J9LmxhdGl0dWRlKSA8PSBncmVhdGVzdCgke3kxfSwke3kyfSkKICAgIEFORCAoJHtwb2x5Z29uU2lkZUF9KSAqICgke3BvbHlnb25TaWRlQn0pIDw9IDAKICAgIEFORCAoJHtyb3V0ZVNpZGVBfSkgKiAoJHtyb3V0ZVNpZGVCfSkgPD0gMClgOwp9CgpmdW5jdGlvbiBzZWdtZW50Q3Jvc3Nlc1BvbHlnb24oYTogc3RyaW5nLCBiOiBzdHJpbmcsIHBvbHlnb246IHJlYWRvbmx5IFtudW1iZXIsIG51bWJlcl1bXSkgewogIHJldHVybiBgKCR7cG9seWdvbkVkZ2VzKHBvbHlnb24pLm1hcCgoeyBwb2ludCwgbmV4dCB9KSA9PiBzZWdtZW50Q3Jvc3Nlc0VkZ2UoYSwgYiwgcG9pbnQsIG5leHQpKS5qb2luKCIgT1IgIil9KWA7Cn0KCmZ1bmN0aW9uIGFueVBvaW50SW5zaWRlKHRyYWNrOiBzdHJpbmcsIHBvbHlnb246IHJlYWRvbmx5IFtudW1iZXIsIG51bWJlcl1bXSkgewogIHJldHVybiBgbGlzdF9jb250YWlucyhsaXN0X3RyYW5zZm9ybSgke3RyYWNrfSxwIC0+ICR7cG9pbnRJbnNpZGUoInAiLCBwb2x5Z29uKX0pLHRydWUpYDsKfQoKZnVuY3Rpb24gYW55UG9pbnRPdXRzaWRlKHRyYWNrOiBzdHJpbmcsIHBvbHlnb246IHJlYWRvbmx5IFtudW1iZXIsIG51bWJlcl1bXSkgewogIHJldHVybiBgbGlzdF9jb250YWlucyhsaXN0X3RyYW5zZm9ybSgke3RyYWNrfSxwIC0+IE5PVCAke3BvaW50SW5zaWRlKCJwIiwgcG9seWdvbil9KSx0cnVlKWA7Cn0KCmZ1bmN0aW9uIGFueVNlZ21lbnRDcm9zc2VzKHRyYWNrOiBzdHJpbmcsIHBvbHlnb246IHJlYWRvbmx5IFtudW1iZXIsIG51bWJlcl1bXSkgewogIGNvbnN0IGN1cnJlbnQgPSBgbGlzdF9leHRyYWN0KCR7dHJhY2t9LGkpYDsKICBjb25zdCBuZXh0ID0gYGxpc3RfZXh0cmFjdCgke3RyYWNrfSxpICsgMSlgOwogIHJldHVybiBgbGlzdF9jb250YWlucyhsaXN0X3RyYW5zZm9ybShyYW5nZSgxLGFycmF5X2xlbmd0aCgke3RyYWNrfSkpLGkgLT4gJHtzZWdtZW50Q3Jvc3Nlc1BvbHlnb24oY3VycmVudCwgbmV4dCwgcG9seWdvbil9KSx0cnVlKWA7Cn0KCmV4cG9ydCBmdW5jdGlvbiBhcHBseVNwYXRpYWxGaWx0ZXJTcWwoc3FsOiBzdHJpbmcsIGZpbHRlcj86IFNwYXRpYWxGaWx0ZXIpOiBzdHJpbmcgewogIGlmICghZmlsdGVyIHx8IGZpbHRlci5wb2x5Z29uLmxlbmd0aCA8IDMpIHJldHVybiBzcWw7CiAgY29uc3QgW3htaW4sIHltaW4sIHhtYXgsIHltYXhdID0gcG9seWdvbkJvdW5kcyhmaWx0ZXIucG9seWdvbik7CiAgY29uc3QgdHJhY2sgPSAiYS50cmFja19wb2ludHMiOwogIGNvbnN0IGluc2lkZUFueSA9IGFueVBvaW50SW5zaWRlKHRyYWNrLCBmaWx0ZXIucG9seWdvbik7CiAgY29uc3Qgb3V0c2lkZUFueSA9IGFueVBvaW50T3V0c2lkZSh0cmFjaywgZmlsdGVyLnBvbHlnb24pOwogIGNvbnN0IGNyb3NzZXMgPSBhbnlTZWdtZW50Q3Jvc3Nlcyh0cmFjaywgZmlsdGVyLnBvbHlnb24pOwogIGNvbnN0IHByZWRpY2F0ZSA9IGZpbHRlci5wcmVkaWNhdGUgPT09ICJ3aXRoaW4iCiAgICA/IGBOT1QgJHtvdXRzaWRlQW55fSBBTkQgTk9UICR7Y3Jvc3Nlc31gCiAgICA6IGAke2luc2lkZUFueX0gT1IgJHtjcm9zc2VzfWA7CiAgcmV0dXJuIGBXSVRIIHNwYXRpYWxfdXNlcl9zZWxlY3Rpb24gQVMgKAoke3NxbH0KKSwKc3BhdGlhbF9jYW5kaWRhdGVfaWRzIEFTIE1BVEVSSUFMSVpFRCAoCiAgU0VMRUNUIGEuYWN0aXZpdHlfaWQKICBGUk9NIGFjdGl2aXRpZXMgYQogIFNFTUkgSk9JTiBzcGF0aWFsX3VzZXJfc2VsZWN0aW9uIHMgVVNJTkcoYWN0aXZpdHlfaWQpCiAgV0hFUkUgYS54bWF4ID49ICR7bnVtYmVyKHhtaW4pfSBBTkQgYS54bWluIDw9ICR7bnVtYmVyKHhtYXgpfQogICAgQU5EIGEueW1heCA+PSAke251bWJlcih5bWluKX0gQU5EIGEueW1pbiA8PSAke251bWJlcih5bWF4KX0KKQpTRUxFQ1QgYS5hY3Rpdml0eV9pZApGUk9NIGFjdGl2aXRpZXMgYQpTRU1JIEpPSU4gc3BhdGlhbF9jYW5kaWRhdGVfaWRzIGMgVVNJTkcoYWN0aXZpdHlfaWQpCldIRVJFICR7cHJlZGljYXRlfWA7Cn0K"
+          tests = "aW1wb3J0IHsgZGVzY3JpYmUsIGV4cGVjdCwgaXQgfSBmcm9tICJ2aXRlc3QiOwppbXBvcnQgeyBhcHBseVNwYXRpYWxGaWx0ZXJTcWwsIHBvbHlnb25Cb3VuZHMgfSBmcm9tICIuL3NwYXRpYWxTcWwiOwoKY29uc3QgcG9seWdvbjogW251bWJlciwgbnVtYmVyXVtdID0gW1stMTA1LjMsIDM5LjldLCBbLTEwNS4xLCAzOS45XSwgWy0xMDUuMiwgNDAuMV1dOwoKZGVzY3JpYmUoImRyYXduIHNwYXRpYWwgZmlsdGVycyIsICgpID0+IHsKICBpdCgibGVhdmVzIFNRTCB1bmNoYW5nZWQgd2l0aG91dCBhIGNvbXBsZXRlZCBwb2x5Z29uIiwgKCkgPT4gewogICAgY29uc3Qgc3FsID0gIlNFTEVDVCBhY3Rpdml0eV9pZCBGUk9NIGFjdGl2aXRpZXMiOwogICAgZXhwZWN0KGFwcGx5U3BhdGlhbEZpbHRlclNxbChzcWwpKS50b0JlKHNxbCk7CiAgICBleHBlY3QoYXBwbHlTcGF0aWFsRmlsdGVyU3FsKHNxbCwgeyBwcmVkaWNhdGU6ICJpbnRlcnNlY3RzIiwgcG9seWdvbjogcG9seWdvbi5zbGljZSgwLCAyKSwgdmlzaWJsZTogZmFsc2UgfSkpLnRvQmUoc3FsKTsKICB9KTsKCiAgaXQoIm1hdGVyaWFsaXplcyBvbmx5IGJib3gtcHJ1bmVkIGNhbmRpZGF0ZSBpZHMgYmVmb3JlIGV4YWN0IGdlb21ldHJ5IGNoZWNrcyIsICgpID0+IHsKICAgIGNvbnN0IHJlc3VsdCA9IGFwcGx5U3BhdGlhbEZpbHRlclNxbCgiU0VMRUNUIGFjdGl2aXR5X2lkIEZST00gYWN0aXZpdGllcyBXSEVSRSBzdGFydF95ZWFyID0gMjAyNiIsIHsgcHJlZGljYXRlOiAiaW50ZXJzZWN0cyIsIHBvbHlnb24sIHZpc2libGU6IGZhbHNlIH0pOwogICAgZXhwZWN0KHJlc3VsdCkudG9Db250YWluKCJzcGF0aWFsX3VzZXJfc2VsZWN0aW9uIik7CiAgICBleHBlY3QocmVzdWx0KS50b0NvbnRhaW4oIlNFTUkgSk9JTiBzcGF0aWFsX3VzZXJfc2VsZWN0aW9uIik7CiAgICBleHBlY3QocmVzdWx0KS50b0NvbnRhaW4oInNwYXRpYWxfY2FuZGlkYXRlX2lkcyBBUyBNQVRFUklBTElaRUQiKTsKICAgIGV4cGVjdChyZXN1bHQpLnRvQ29udGFpbigiU0VMRUNUIGEuYWN0aXZpdHlfaWRcbiAgRlJPTSBhY3Rpdml0aWVzIGEiKTsKICAgIGV4cGVjdChyZXN1bHQpLm5vdC50b0NvbnRhaW4oIlNFTEVDVCBhLmFjdGl2aXR5X2lkLGEudHJhY2tfcG9pbnRzIik7CiAgICBleHBlY3QocmVzdWx0KS50b0NvbnRhaW4oImEueG1heCA+PSAtMTA1LjMiKTsKICAgIGV4cGVjdChyZXN1bHQpLnRvQ29udGFpbigiYS54bWluIDw9IC0xMDUuMSIpOwogIH0pOwoKICBpdCgia2VlcHMgZXhhY3QgcG9pbnQgYW5kIHNlZ21lbnQgdGVzdHMgcm93LWxvY2FsIHdpdGhvdXQgdW5uZXN0aW5nIHJvdXRlcyIsICgpID0+IHsKICAgIGNvbnN0IHJlc3VsdCA9IGFwcGx5U3BhdGlhbEZpbHRlclNxbCgiU0VMRUNUIGFjdGl2aXR5X2lkIEZST00gYWN0aXZpdGllcyIsIHsgcHJlZGljYXRlOiAiaW50ZXJzZWN0cyIsIHBvbHlnb24sIHZpc2libGU6IGZhbHNlIH0pOwogICAgZXhwZWN0KHJlc3VsdCkudG9Db250YWluKCJsaXN0X3RyYW5zZm9ybShhLnRyYWNrX3BvaW50cyxwIC0+Iik7CiAgICBleHBlY3QocmVzdWx0KS50b0NvbnRhaW4oImxpc3RfdHJhbnNmb3JtKHJhbmdlKDEsYXJyYXlfbGVuZ3RoKGEudHJhY2tfcG9pbnRzKSksaSAtPiIpOwogICAgZXhwZWN0KHJlc3VsdCkudG9Db250YWluKCJsaXN0X2V4dHJhY3QoYS50cmFja19wb2ludHMsaSArIDEpIik7CiAgICBleHBlY3QocmVzdWx0KS5ub3QudG9Db250YWluKCJ1bm5lc3QoIik7CiAgICBleHBlY3QocmVzdWx0KS5ub3QudG9Db250YWluKCJDUk9TUyBKT0lOIHBvbHlnb25fZWRnZXMiKTsKICB9KTsKCiAgaXQoImRvZXMgbm90IGxldCBkaXNwbGF5IHZpc2liaWxpdHkgY2hhbmdlIHNlbGVjdGlvbiBTUUwiLCAoKSA9PiB7CiAgICBjb25zdCBoaWRkZW4gPSBhcHBseVNwYXRpYWxGaWx0ZXJTcWwoIlNFTEVDVCBhY3Rpdml0eV9pZCBGUk9NIGFjdGl2aXRpZXMiLCB7IHByZWRpY2F0ZTogImludGVyc2VjdHMiLCBwb2x5Z29uLCB2aXNpYmxlOiBmYWxzZSB9KTsKICAgIGNvbnN0IHNob3duID0gYXBwbHlTcGF0aWFsRmlsdGVyU3FsKCJTRUxFQ1QgYWN0aXZpdHlfaWQgRlJPTSBhY3Rpdml0aWVzIiwgeyBwcmVkaWNhdGU6ICJpbnRlcnNlY3RzIiwgcG9seWdvbiwgdmlzaWJsZTogdHJ1ZSB9KTsKICAgIGV4cGVjdChzaG93bikudG9CZShoaWRkZW4pOwogIH0pOwoKICBpdCgidXNlcyB0aGUgc3RyaWN0ZXIgd2l0aGluIHByZWRpY2F0ZSIsICgpID0+IHsKICAgIGNvbnN0IHJlc3VsdCA9IGFwcGx5U3BhdGlhbEZpbHRlclNxbCgiU0VMRUNUIGFjdGl2aXR5X2lkIEZST00gYWN0aXZpdGllcyIsIHsgcHJlZGljYXRlOiAid2l0aGluIiwgcG9seWdvbiwgdmlzaWJsZTogdHJ1ZSB9KTsKICAgIGV4cGVjdChyZXN1bHQpLnRvQ29udGFpbigiV0hFUkUgTk9UIGxpc3RfY29udGFpbnMiKTsKICAgIGV4cGVjdChyZXN1bHQpLnRvQ29udGFpbigiQU5EIE5PVCBsaXN0X2NvbnRhaW5zIik7CiAgfSk7CgogIGl0KCJjYWxjdWxhdGVzIHBvbHlnb24gYm91bmRzIiwgKCkgPT4gewogICAgZXhwZWN0KHBvbHlnb25Cb3VuZHMocG9seWdvbikpLnRvRXF1YWwoWy0xMDUuMywgMzkuOSwgLTEwNS4xLCA0MC4xXSk7CiAgfSk7Cn0pOwo="
+          Path('apps/web/src/spatialSql.ts').write_bytes(base64.b64decode(spatial))
+          Path('apps/web/src/spatialSql.test.ts').write_bytes(base64.b64decode(tests))
           p = Path('apps/web/src/App.tsx')
           text = p.read_text()
           old = 'onClick: (info: PickingInfo) => { if (spatialDrawing) return; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (item) void openActivity(item); } })'
           new = 'onClick: (info: PickingInfo) => { if (spatialDrawing) return false; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item) return false; void openActivity(item); return true; } })'
-          if old not in text: raise SystemExit('route hit-target click marker missing')
+          if old not in text: raise SystemExit('route hit-target marker missing')
           text = text.replace(old, new, 1)
           old = 'if (!info.object) { setSelected(null); setProfileHover(null); } }} />'
           new = 'if (!info.layer) { setSelected(null); setProfileHover(null); } }} />'
-          if old not in text: raise SystemExit('deck background click marker missing')
+          if old not in text: raise SystemExit('background click marker missing')
           p.write_text(text.replace(old, new, 1))
           PY
       - name: Commit
