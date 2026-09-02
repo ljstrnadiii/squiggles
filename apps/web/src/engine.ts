@@ -1,6 +1,7 @@
 import type { ActivityListItem,BinaryRouteBatch,Dataset,DatasetManifest,DatasetSource,ExecutionEngine,QueryResult,QueryTab,RouteActivity,SystemResolution,ViewportBounds,ViewportResult } from "./contracts";
 import { RESOLUTION_VERTEX_BUDGETS } from "./lod";
 import { normalizeSelectionSql } from "./querySql";
+import { applySpatialFilterSql } from "./spatialSql";
 type Result<T>={id:number;ok:true;value:T}|{id:number;ok:false;error:string};
 type WorkerViewportResult=Omit<ViewportResult,"cache">;
 type CacheEntry={result:WorkerViewportResult;bytes:number;bounds?:ViewportBounds;lod:ReturnType<typeof lodForZoom>};
@@ -61,7 +62,8 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   async execute(tab:QueryTab,zoom:number,bounds?:ViewportBounds):Promise<QueryResult&ViewportResult>{
     const started=performance.now();
     const nextClean=tab.style.cleanEnabled;
-    const sql=normalizeSelectionSql(tab.sql);
+    const baseSql=normalizeSelectionSql(tab.sql);
+    const sql=applySpatialFilterSql(baseSql,tab.spatialFilter);
     const result=await this.networkRequest<QueryResult&WorkerViewportResult>({type:"execute",sql,lod:lodForZoom(zoom),budget:RESOLUTION_VERTEX_BUDGETS[this.resolution],bounds,clean:nextClean});
     this.clean=nextClean;this.selectionKey=`${this.datasetRevision}|${this.clean?1:0}|${sql}`;
     perf("selection-execute",{totalMs:Math.round(performance.now()-started),zoom:Number(zoom.toFixed(2)),requestedLod:lodForZoom(zoom),plannedLod:result.lod,selected:result.summary.activityCount,rendered:result.activityCount,vertices:result.vertexCount,geometryBytes:result.geometryBufferBytes,candidateBytes:result.scan.candidateBytes,expectedRowGroups:result.scan.expectedRowGroupCount});
