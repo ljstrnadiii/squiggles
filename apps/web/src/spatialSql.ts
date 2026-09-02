@@ -44,10 +44,6 @@ function anyPointOutside(track: string, polygon: readonly [number, number][]) {
   return `list_contains(list_transform(${track},lambda p : NOT ${pointInside(lambdaPoint("p"), polygon)}),true)`;
 }
 
-function polygonEdgeList(polygon: readonly [number, number][]) {
-  return `[${polygonEdges(polygon).map(({ point, next }) => `{'x1':${number(point[0])},'y1':${number(point[1])},'x2':${number(next[0])},'y2':${number(next[1])}}`).join(",")}]`;
-}
-
 function routeSegmentList(track: string) {
   const current = `list_extract(${track},i)`;
   const next = `list_extract(${track},i + 1)`;
@@ -58,9 +54,13 @@ function field(name: string, key: string) {
   return `struct_extract(${name},'${key}')`;
 }
 
+function segmentMacroCall(segment: string, edge: [number, number], next: [number, number]) {
+  return `squiggles_segments_intersect(${field(segment, "x1")},${field(segment, "y1")},${field(segment, "x2")},${field(segment, "y2")},${number(edge[0])},${number(edge[1])},${number(next[0])},${number(next[1])})`;
+}
+
 function anySegmentCrosses(track: string, polygon: readonly [number, number][]) {
-  const crossesEdge = `squiggles_segments_intersect(${field("s", "x1")},${field("s", "y1")},${field("s", "x2")},${field("s", "y2")},${field("e", "x1")},${field("e", "y1")},${field("e", "x2")},${field("e", "y2")})`;
-  return `list_contains(list_transform(${routeSegmentList(track)},lambda s : list_contains(list_transform(${polygonEdgeList(polygon)},lambda e : ${crossesEdge}),true)),true)`;
+  const crosses = polygonEdges(polygon).map(({ point, next }) => segmentMacroCall("s", point, next)).join(" OR ");
+  return `list_contains(list_transform(${routeSegmentList(track)},lambda s : (${crosses})),true)`;
 }
 
 export function applySpatialFilterSql(sql: string, filter?: SpatialFilter): string {
