@@ -8,7 +8,7 @@ import { applySpatialFilterSql } from "./spatialSql";
 
 const require = createRequire(import.meta.url);
 const duckdbDist = path.dirname(require.resolve("@duckdb/duckdb-wasm"));
-const bundles = {
+const bundles: duckdb.DuckDBBundles = {
   mvp: { mainModule: path.resolve(duckdbDist, "duckdb-mvp.wasm"), mainWorker: "" },
   eh: { mainModule: path.resolve(duckdbDist, "duckdb-eh.wasm"), mainWorker: "" },
 };
@@ -26,7 +26,7 @@ type BlockingDatabase = {
 type BlockingModule = {
   NODE_RUNTIME: unknown;
   createDuckDB(
-    bundles: typeof bundles,
+    bundles: duckdb.DuckDBBundles,
     logger: unknown,
     runtime: unknown,
   ): Promise<BlockingDatabase>;
