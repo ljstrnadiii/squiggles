@@ -27,12 +27,13 @@ describe("drawn spatial filters", () => {
 
   it("keeps exact point and segment tests row-local without unnesting routes", () => {
     const result = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "intersects", polygon, visible: false });
-    expect(result).toContain("list_transform(a.track_points,p ->");
-    expect(result).toContain("list_transform(range(1,array_length(a.track_points)),i ->");
+    expect(result).toContain("list_transform(a.track_points,lambda p :");
+    expect(result).toContain("list_transform(range(1,array_length(a.track_points)),lambda i :");
+    expect(result).toContain("struct_extract(p,'longitude')");
     expect(result).toContain("struct_extract(list_extract(a.track_points,i),'longitude')");
     expect(result).toContain("struct_extract(list_extract(a.track_points,i + 1),'latitude')");
-    expect(result).not.toContain("list_extract(a.track_points,i)).longitude");
-    expect(result).not.toContain("list_extract(a.track_points,i).longitude");
+    expect(result).not.toContain("p ->");
+    expect(result).not.toContain("i ->");
     expect(result).not.toContain("unnest(");
     expect(result).not.toContain("CROSS JOIN polygon_edges");
   });
