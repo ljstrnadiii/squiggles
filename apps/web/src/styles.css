@@ -700,6 +700,16 @@ button:disabled {
   border-radius: 7px;
   box-shadow: 0 8px 30px var(--shadow);
 }
+.global-error button {
+  flex: none;
+  margin-left: auto;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+}
 .schema-panel {
   position: fixed;
   right: 0;
@@ -1251,6 +1261,9 @@ button:disabled {
     box-shadow: 0 -18px 55px var(--shadow);
     animation: drawer-bottom 160ms ease-out;
   }
+  .account-panel {
+    max-height: calc(100dvh - 50px);
+  }
   .schema-panel {
     top: auto;
     left: 0;
@@ -1374,6 +1387,8 @@ button:disabled {
 @keyframes drawer-bottom {
   from { transform: translateY(24px); opacity: 0; }
 }
+.account-panel { overflow-y: auto; }
+.account-panel > header { position: sticky; top: 0; z-index: 2; background: var(--panel); }
 .account-panel p { margin: 0; line-height: 1.5; color: var(--muted); }
 .account-panel .account-primary { width: 100%; font-weight: 700; }
 .account-panel .account-error { color: #d95c5c; }

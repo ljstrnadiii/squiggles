@@ -657,7 +657,7 @@ export function App() {
       <section className="toolbar-section sql-section"><div className="section-heading"><div><h3>SQL</h3><p>{draft === tab.sql ? "Current query is applied" : "Draft changed · run to apply"}</p></div><button className="run" title="Run this DuckDB SQL query" disabled={busy || !ready.current} onClick={() => void run()}>▶ Run <kbd>⌘↵</kbd></button></div><Suspense fallback={<div className="sql-loading">Loading SQL editor…</div>}><SqlEditor value={draft} dark={effectiveTheme === "dark"} onChange={setDraft} /></Suspense></section>
       <section className="toolbar-section tab-actions"><h3>Tab</h3><div><button title="Copy a link with this tab, camera, and map settings" onClick={() => void copyTabLink()}>{linkCopied ? "Link copied" : "Copy tab link"}</button><button title="Duplicate this query and its map settings" onClick={duplicate}>Duplicate</button><button title="Delete this saved query" onClick={remove} disabled={tabs.length === 1}>Delete</button></div></section>
     </section>}
-    {error && <div className="error global-error"><strong>Something needs attention</strong><span>{error}</span></div>}
+    {error && <div className="error global-error"><strong>Something needs attention</strong><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
 
     <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
       <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />
