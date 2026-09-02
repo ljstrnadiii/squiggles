@@ -102,6 +102,7 @@ jobs:
           push: true
           tags: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/squiggles-ingest:${{ github.sha }}
       - uses: pulumi/actions@v7
+        id: pulumi
         with:
           command: up
           stack-name: dev
@@ -114,6 +115,14 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           INGEST_IMAGE: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/squiggles-ingest:${{ github.sha }}
+      - name: Rebuild stale render pyramids
+        env:
+          METADATA_TABLE_NAME: ${{ steps.pulumi.outputs.metadataTableName }}
+          INGEST_JOB_QUEUE: ${{ steps.pulumi.outputs.ingestJobQueue }}
+          INGEST_JOB_DEFINITION: ${{ steps.pulumi.outputs.ingestJobDefinition }}
+          DATA_BUCKET_NAME: ${{ steps.pulumi.outputs.dataBucketName }}
+          RENDER_PYRAMID_VERSION: "2"
+        run: python scripts/rebuild_render_pyramids.py
 
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
