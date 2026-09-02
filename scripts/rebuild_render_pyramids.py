@@ -6,8 +6,6 @@ import subprocess
 from datetime import UTC, datetime
 from typing import Any
 
-from activity_map_ingest.render_lod import RENDER_PYRAMID_VERSION
-
 
 def required(name: str) -> str:
     value = os.environ.get(name)
@@ -63,20 +61,20 @@ def main() -> None:
     queue = required("INGEST_JOB_QUEUE")
     definition = required("INGEST_JOB_DEFINITION")
     bucket = required("DATA_BUCKET_NAME")
+    render_version = required("RENDER_PYRAMID_VERSION")
     stale = [
-        item
-        for item in registry_items(table_name)
-        if value(item, "renderVersion") != RENDER_PYRAMID_VERSION
+        item for item in registry_items(table_name) if value(item, "renderVersion") != render_version
     ]
     if not stale:
-        print(f"All datasets already use render pyramid v{RENDER_PYRAMID_VERSION}.")
+        print(f"All datasets already use render pyramid v{render_version}.")
         return
     timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+    enqueued = 0
     for item in stale:
         dataset_id = value(item, "datasetId")
         if not dataset_id:
             continue
-        build_id = f"render-v{RENDER_PYRAMID_VERSION}-{timestamp}-{dataset_id[:8]}"
+        build_id = f"render-v{render_version}-{timestamp}-{dataset_id[:8]}"
         environment = {
             "JOB_MODE": "derived",
             "TABLE_NAME": table_name,
@@ -93,7 +91,7 @@ def main() -> None:
             "batch",
             "submit-job",
             "--job-name",
-            f"render-{dataset_id[:8]}-v{RENDER_PYRAMID_VERSION}",
+            f"render-{dataset_id[:8]}-v{render_version}",
             "--job-queue",
             queue,
             "--job-definition",
@@ -103,8 +101,9 @@ def main() -> None:
                 {"environment": [{"name": name, "value": val} for name, val in environment.items()]}
             ),
         )
+        enqueued += 1
         print(f"Enqueued {dataset_id} -> {build_id}")
-    print(f"Enqueued {len(stale)} stale dataset render rebuild(s).")
+    print(f"Enqueued {enqueued} stale dataset render rebuild(s).")
 
 
 if __name__ == "__main__":
