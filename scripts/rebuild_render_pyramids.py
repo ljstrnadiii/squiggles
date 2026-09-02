@@ -38,9 +38,9 @@ def registry_items(table_name: str) -> list[dict[str, Any]]:
             "--expression-attribute-values",
             json.dumps({":registry": {"S": "datasetRegistry"}}),
             "--projection-expression",
-            "datasetId,activeBuild,#owner,renderVersion",
+            "datasetId,activeBuild,#owner,#bucket,renderVersion",
             "--expression-attribute-names",
-            json.dumps({"#owner": "owner"}),
+            json.dumps({"#owner": "owner", "#bucket": "bucket"}),
         ]
         if start_key:
             arguments.extend(["--exclusive-start-key", json.dumps(start_key)])
@@ -60,7 +60,6 @@ def main() -> None:
     table_name = required("METADATA_TABLE_NAME")
     queue = required("INGEST_JOB_QUEUE")
     definition = required("INGEST_JOB_DEFINITION")
-    bucket = required("DATA_BUCKET_NAME")
     render_version = required("RENDER_PYRAMID_VERSION")
     stale = [
         item for item in registry_items(table_name) if value(item, "renderVersion") != render_version
@@ -72,7 +71,9 @@ def main() -> None:
     enqueued = 0
     for item in stale:
         dataset_id = value(item, "datasetId")
-        if not dataset_id:
+        bucket = value(item, "bucket")
+        if not dataset_id or not bucket:
+            print("Skipping registry row without datasetId/bucket")
             continue
         build_id = f"render-v{render_version}-{timestamp}-{dataset_id[:8]}"
         environment = {
