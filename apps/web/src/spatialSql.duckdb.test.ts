@@ -2,7 +2,6 @@ import path from "node:path";
 import { createRequire } from "node:module";
 
 import * as duckdb from "@duckdb/duckdb-wasm";
-import * as duckdbBlocking from "@duckdb/duckdb-wasm/dist/duckdb-node-blocking";
 import { describe, expect, it } from "vitest";
 
 import { applySpatialFilterSql } from "./spatialSql";
@@ -13,6 +12,27 @@ const bundles = {
   mvp: { mainModule: path.resolve(duckdbDist, "duckdb-mvp.wasm"), mainWorker: "" },
   eh: { mainModule: path.resolve(duckdbDist, "duckdb-eh.wasm"), mainWorker: "" },
 };
+
+type BlockingConnection = {
+  query(sql: string): { numRows: number };
+  close(): void;
+};
+
+type BlockingDatabase = {
+  instantiate(): Promise<void>;
+  connect(): BlockingConnection;
+};
+
+type BlockingModule = {
+  NODE_RUNTIME: unknown;
+  createDuckDB(
+    bundles: typeof bundles,
+    logger: unknown,
+    runtime: unknown,
+  ): Promise<BlockingDatabase>;
+};
+
+const duckdbBlocking = require("@duckdb/duckdb-wasm/dist/duckdb-node-blocking.cjs") as BlockingModule;
 
 const polygon: [number, number][] = [
   [-105.3019681, 39.98],
