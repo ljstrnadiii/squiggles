@@ -80,12 +80,29 @@ function metadataAt(columns: Map<string, ArrowVector>, index: number): RouteMeta
   };
 }
 
+function materializedRouteBatch(batch: ArrowBatch, geometry: ArrowVector, columns: Map<string, ArrowVector>): BinaryRouteBatch {
+  const positions: number[] = [];
+  const starts: number[] = [];
+  const owners: number[] = [];
+  for (let activityIndex = 0; activityIndex < batch.numRows; activityIndex += 1) {
+    const route = coordinates(geometry.get(activityIndex));
+    if (!route.length) continue;
+    starts.push(positions.length / 2); owners.push(activityIndex);
+    for (let point = 0; point < route.length; point += 1) {
+      if (point > 0 && distanceMeters(route[point - 1], route[point]) > 20_000) { starts.push(positions.length / 2); owners.push(activityIndex); }
+      positions.push(route[point][0], route[point][1]);
+    }
+  }
+  starts.push(positions.length / 2);
+  return { activities: Array.from({ length: batch.numRows }, (_, index) => metadataAt(columns, index)), positions: Float64Array.from(positions), startIndices: Uint32Array.from(starts), segmentActivityIndices: Uint32Array.from(owners) };
+}
+
 export function binaryRouteBatches(table: ArrowTable, geometryName: string): BinaryRouteBatch[] {
   return table.batches.map(batch => {
     const names = ["activity_id", "name", "sport_type", "start_time", "distance_m", "elevation_gain_m", "max_elevation_m", "source_url"];
     const columns = new Map(names.map(name => [name, column(batch, name)]));
     const geometry = column(batch, geometryName);
-    if (geometry.data.length !== 1) throw new Error("Viewport GeoArrow batch unexpectedly contains multiple chunks");
+    if (geometry.data.length !== 1) return materializedRouteBatch(batch, geometry, columns);
     const lineData = geometry.data[0];
     const offsets = lineData.valueOffsets;
     const fixedCoordinates = lineData.children[0];
@@ -94,7 +111,7 @@ export function binaryRouteBatches(table: ArrowTable, geometryName: string): Bin
     const pairOffsets = fixedCoordinates?.valueOffsets instanceof Int32Array ? fixedCoordinates.valueOffsets : null;
     const fixedPairs = fixedCoordinates?.stride === 2;
     if (!(offsets instanceof Int32Array) || !(values instanceof Float64Array) || (!fixedPairs && pairOffsets === null)) {
-      throw new Error(`Viewport geometry must be a GeoArrow LineString coordinate buffer (received ${geometry.type?.toString() ?? "unknown"}; offsets ${offsets?.constructor?.name ?? "missing"}; coordinate stride ${fixedCoordinates?.stride ?? "missing"}; values ${values?.constructor?.name ?? "missing"})`);
+      return materializedRouteBatch(batch, geometry, columns);
     }
     const firstPoint = offsets[0];
     const lastPoint = offsets[batch.numRows];

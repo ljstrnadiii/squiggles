@@ -13,7 +13,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   private worker=new Worker(new URL("./duckdb.worker.ts",import.meta.url),{type:"module"}); private id=0; private clean=false; private pending=new Map<number,{resolve:(value:unknown)=>void;reject:(error:Error)=>void}>();
   private datasetRevision=0; private selectionKey=""; private cache=new Map<string,CacheEntry>(); private cacheBytes=0; private cacheEvictions=0;
   private resolution:SystemResolution="medium";
-  private readonly cacheBudget=cacheBudget();
+  private get cacheBudget(){return cacheBudget(this.resolution);}
   constructor(){this.worker.onmessage=(event:MessageEvent<Result<unknown>>)=>{const call=this.pending.get(event.data.id);if(!call)return;this.pending.delete(event.data.id);if(event.data.ok)call.resolve(event.data.value);else call.reject(new Error(event.data.error));};}
   setResolution(resolution:SystemResolution){if(this.resolution===resolution)return;this.resolution=resolution;this.cache.clear();this.cacheBytes=0;}
   private request<T>(body:object,transfer:Transferable[]=[]):Promise<T>{const id=++this.id;return new Promise((resolve,reject)=>{this.pending.set(id,{resolve:resolve as (value:unknown)=>void,reject});this.worker.postMessage({id,...body},transfer);});}
@@ -101,6 +101,6 @@ function binaryBytes(batches:BinaryRouteBatch[]):number{
 
 function boundsContains(outer:ViewportBounds,inner:ViewportBounds):boolean{return outer[0]<=outer[2]&&inner[0]<=inner[2]&&outer[0]<=inner[0]&&outer[1]<=inner[1]&&outer[2]>=inner[2]&&outer[3]>=inner[3];}
 
-export function cacheBudget(mobile=typeof matchMedia==="function"&&matchMedia("(pointer: coarse)").matches):number{return (mobile?128:512)*MEBIBYTE;}
+export function cacheBudget(resolution:SystemResolution="medium"):number{return ({low:128,medium:256,high:512} as const)[resolution]*MEBIBYTE;}
 
 function isTransientNetworkError(error:unknown):boolean{return error instanceof Error&&/(NetworkError|Failed to load|XMLHttpRequest)/i.test(error.message);}
