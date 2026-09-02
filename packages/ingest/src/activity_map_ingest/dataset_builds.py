@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 
 from .compiler import COMPILER_VERSION, validate_dataset
 from .geoparquet_sink import write_render_pyramid
+from .render_lod import RENDER_PYRAMID_VERSION
 from .schema import SCHEMA_VERSION
 
 BUILD_ID = re.compile(r"^[a-z0-9][a-z0-9.-]{0,79}$")
@@ -71,6 +72,7 @@ def rebuild_derived_dataset(source: Path, output: Path) -> dict[str, Any]:
         **{key: value for key, value in manifest.items() if key not in {"build", "render_levels"}},
         "schema_version": SCHEMA_VERSION,
         "compiler_version": COMPILER_VERSION,
+        "render_pyramid_version": RENDER_PYRAMID_VERSION,
         "shards": normalized_shards,
         "render_levels": render_levels,
         "derived_from_schema_version": manifest.get("schema_version"),

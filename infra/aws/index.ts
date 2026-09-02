@@ -547,7 +547,7 @@ const deployPolicy = aws.iam.getPolicyDocumentOutput({ statements: [
   {
     sid: "ControlPlaneInfrastructure",
     effect: "Allow",
-    actions: ["cognito-idp:*", "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:Describe*", "dynamodb:List*", "dynamodb:TagResource", "dynamodb:UntagResource", "dynamodb:Update*", "apigateway:*", "lambda:AddPermission", "lambda:CreateFunction", "lambda:DeleteFunction", "lambda:Get*", "lambda:List*", "lambda:RemovePermission", "lambda:TagResource", "lambda:UntagResource", "lambda:Update*", "logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:DescribeLogGroups", "logs:ListTagsForResource", "logs:PutRetentionPolicy", "logs:TagResource", "logs:UntagResource", "iam:AttachRolePolicy", "iam:CreateRole", "iam:DeleteRole", "iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:PassRole", "iam:PutRolePolicy", "iam:TagRole", "iam:UntagRole", "iam:UpdateAssumeRolePolicy"],
+    actions: ["cognito-idp:*", "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:Describe*", "dynamodb:List*", "dynamodb:GetItem", "dynamodb:Scan", "dynamodb:TagResource", "dynamodb:UntagResource", "dynamodb:Update*", "apigateway:*", "lambda:AddPermission", "lambda:CreateFunction", "lambda:DeleteFunction", "lambda:Get*", "lambda:List*", "lambda:RemovePermission", "lambda:TagResource", "lambda:UntagResource", "lambda:Update*", "logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:DescribeLogGroups", "logs:ListTagsForResource", "logs:PutRetentionPolicy", "logs:TagResource", "logs:UntagResource", "iam:AttachRolePolicy", "iam:CreateRole", "iam:DeleteRole", "iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:PassRole", "iam:PutRolePolicy", "iam:TagRole", "iam:UntagRole", "iam:UpdateAssumeRolePolicy"],
     resources: ["*"],
   },
 ] });
@@ -566,4 +566,6 @@ export const userPoolClientId = userPoolClient.id;
 export const loginDomain = pulumi.interpolate`https://${userPoolDomain.domain}.auth.${aws.getRegionOutput().name}.amazoncognito.com`;
 export const googleOauthRedirectUrl = pulumi.interpolate`https://${userPoolDomain.domain}.auth.${aws.getRegionOutput().name}.amazoncognito.com/oauth2/idpresponse`;
 export const metadataTableName = metadataTable.name;
+export const ingestJobQueue = ingestQueue.arn;
+export const ingestJobDefinition = ingestDefinition.arn;
 export const controlPlaneApiUrl = controlPlaneApi.apiEndpoint;

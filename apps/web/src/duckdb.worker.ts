@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import * as duckdb from "@duckdb/duckdb-wasm";
 
-import { chooseLod, LOD_VERTEX_LIMITS, type Lod } from "./lod";
+import { type Lod } from "./lod";
 import { isUniversalSelectionSql } from "./selection";
 import type { BinaryRouteBatch, RouteMetadata } from "./contracts";
 
@@ -274,39 +274,63 @@ function manifestVertexEstimate(level: Lod, bounds: Bounds | undefined, clean: b
   return total;
 }
 
-async function preciseVertexEstimates(bounds: Bounds | undefined): Promise<number[]> {
-  const count = "point_count";
-  const estimatesSql = [
-    ...LOD_VERTEX_LIMITS.map((limit, index) => `coalesce(sum(least(a.${count},${limit})),0) lod${index}`),
-    `coalesce(sum(a.${count}),0) lod4`,
-  ].join(",");
-  const estimateSource = selectionAll ? "activities a" : "current_selection a";
-  const estimate = await connection!.query(`SELECT ${estimatesSql} FROM ${estimateSource} WHERE ${viewportPredicate(bounds)}`);
-  const estimates = estimate.toArray()[0] as unknown as Record<string, unknown>;
-  return [0, 1, 2, 3, 4].map(index => Number(scalar(estimates[`lod${index}`])));
+function availableRenderLods(): Lod[] {
+  return [...registeredRenderLevels.keys()].sort((left, right) => left - right);
+}
+
+function clampAvailableLod(requested: Lod): Lod {
+  const levels = availableRenderLods();
+  if (!levels.length) return Math.min(requested, 4) as Lod;
+  return levels.filter(level => level <= requested).at(-1) ?? levels[0];
+}
+
+function previousAvailableLod(current: Lod): Lod | null {
+  return availableRenderLods().filter(level => level < current).at(-1) ?? null;
+}
+
+async function exactVertexEstimate(level: Lod, bounds: Bounds | undefined, clean: boolean): Promise<number> {
+  const file = registeredRenderLevels.get(level);
+  if (!file) return Number.POSITIVE_INFINITY;
+  const geometryCount = clean ? "clean_vertex_count" : "vertex_count";
+  const relation = `read_parquet('${file.name.replaceAll("'", "''")}')`;
+  const estimate = await connection!.query(`SELECT coalesce(sum(a.${geometryCount}),0) total FROM ${relation} a${selectionJoin()} WHERE ${viewportPredicate(bounds, clean)}`);
+  const row = estimate.toArray()[0] as unknown as Record<string, unknown>;
+  return Number(scalar(row.total));
+}
+
+async function planRenderLod(requested: Lod, budget: number, bounds: Bounds | undefined, clean: boolean): Promise<{ lod: Lod; estimate: number }> {
+  let level = clampAvailableLod(requested);
+  while (true) {
+    const cheap = selectionAll ? manifestVertexEstimate(level, bounds, clean) : null;
+    const estimate = cheap != null && cheap <= budget ? cheap : await exactVertexEstimate(level, bounds, clean);
+    if (estimate <= budget) return { lod: level, estimate };
+    const previous = previousAvailableLod(level);
+    if (previous == null) return { lod: level, estimate };
+    level = previous;
+  }
+}
+
+async function rawVertexEstimate(bounds: Bounds | undefined, fallback: number): Promise<number> {
+  const levels = availableRenderLods();
+  const full = levels.at(-1);
+  if (selectionAll && full != null) return manifestVertexEstimate(full, bounds, false) ?? fallback;
+  if (selectionAll) return fallback;
+  const estimate = await connection!.query(`SELECT coalesce(sum(a.point_count),0) total FROM current_selection a WHERE ${viewportPredicate(bounds)}`);
+  const row = estimate.toArray()[0] as unknown as Record<string, unknown>;
+  return Number(scalar(row.total));
 }
 
 async function render(lod: Lod, budget: number, bounds?: Bounds, clean = false) {
-  let vertexEstimates: number[] | null = null;
-  if (selectionAll) {
-    const estimates = [0, 1, 2, 3, 4].map(level => manifestVertexEstimate(level as Lod, bounds, clean));
-    if (estimates.every(value => value != null)) {
-      const manifestEstimates = estimates as number[];
-      // Row-group sums are a cheap upper bound. They are trustworthy when the
-      // requested LOD fits, but a small viewport can intersect a large row-group
-      // bbox and make the bound far too conservative. Refine before downshifting.
-      if (chooseLod(manifestEstimates, lod, budget) === lod) vertexEstimates = manifestEstimates;
-    }
-  }
-  if (!vertexEstimates) vertexEstimates = await preciseVertexEstimates(bounds);
-  const plannedLod = chooseLod(vertexEstimates, lod, budget);
+  const plan = await planRenderLod(lod, budget, bounds, clean);
+  const plannedLod = plan.lod;
   const renderFile = registeredRenderLevels.get(plannedLod);
   const scan = viewportScan(bounds, renderFile ? [renderFile] : registeredFiles);
-  if (scan.files.length === 0) return { lod: plannedLod, batches: [], activityCount: 0, geometryBufferBytes: 0, vertexCount: 0, plannedVertexEstimate: vertexEstimates[plannedLod], rawVertexEstimate: vertexEstimates[4], vertexBudget: budget, scan: scan.metrics };
+  const rawEstimate = await rawVertexEstimate(bounds, plan.estimate);
+  if (scan.files.length === 0) return { lod: plannedLod, batches: [], activityCount: 0, geometryBufferBytes: 0, vertexCount: 0, plannedVertexEstimate: plan.estimate, rawVertexEstimate: rawEstimate, vertexBudget: budget, scan: scan.metrics };
   const relation = renderFile
     ? `read_parquet('${renderFile.name.replaceAll("'", "''")}')`
     : viewportRelation(scan.files, clean);
-  if (!relation) return { lod, batches: [], activityCount: 0, geometryBufferBytes: 0, vertexCount: 0, plannedVertexEstimate: 0, rawVertexEstimate: 0, vertexBudget: budget, scan: scan.metrics };
+  if (!relation) return { lod: plannedLod, batches: [], activityCount: 0, geometryBufferBytes: 0, vertexCount: 0, plannedVertexEstimate: 0, rawVertexEstimate: rawEstimate, vertexBudget: budget, scan: scan.metrics };
   const geometry = renderFile
     ? (clean ? "geometry_clean" : "geometry")
     : plannedLod === 4 ? (clean ? "geometry_clean" : "geometry") : `geometry_${clean ? "clean_" : ""}lod${plannedLod}`;
@@ -318,7 +342,7 @@ async function render(lod: Lod, budget: number, bounds?: Bounds, clean = false) 
   const vertexCount = batches.reduce((total, batch) => total + batch.positions.length / 2, 0);
   const geometryBufferBytes = batches.reduce((total, batch) => total + batch.positions.byteLength + batch.startIndices.byteLength + batch.segmentActivityIndices.byteLength, 0);
   const activityCount = batches.reduce((total, batch) => total + batch.activities.length, 0);
-  return { lod: plannedLod, batches, activityCount, geometryBufferBytes, vertexCount, plannedVertexEstimate: vertexEstimates[plannedLod], rawVertexEstimate: vertexEstimates[4], vertexBudget: budget, scan: { ...scan.metrics, keptRowCount: activityCount } };
+  return { lod: plannedLod, batches, activityCount, geometryBufferBytes, vertexCount, plannedVertexEstimate: plan.estimate, rawVertexEstimate: rawEstimate, vertexBudget: budget, scan: { ...scan.metrics, keptRowCount: activityCount } };
 }
 
 async function summarize(bounds: Bounds | undefined, clean: boolean) {

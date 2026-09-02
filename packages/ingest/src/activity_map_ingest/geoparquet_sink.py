@@ -15,6 +15,7 @@ from ray.data.block import Block, BlockAccessor
 from ray.data.datasource import Datasink
 from ray.data.datasource.datasink import WriteResult
 
+from .render_lod import RENDER_TOLERANCES_M, simplify_coordinates_meters
 from .schema import (
     ActivitySchema,
     RenderActivitySchema,
@@ -27,13 +28,6 @@ from .schema import (
 )
 
 ShardMetadata = dict[str, Any]
-RENDER_LEVELS = {
-    0: ("geometry_lod0", "geometry_clean_lod0"),
-    1: ("geometry_lod1", "geometry_clean_lod1"),
-    2: ("geometry_lod2", "geometry_clean_lod2"),
-    3: ("geometry_lod3", "geometry_clean_lod3"),
-    4: ("geometry", "geometry_clean"),
-}
 RENDER_ROW_GROUP_TARGET_VERTICES = 1_000_000
 RENDER_SCALARS = [
     "activity_id",
@@ -89,51 +83,42 @@ def _table_bounds(table: pa.Table) -> list[float]:
     ]
 
 
+def _render_geometry(column: pa.ChunkedArray, tolerance_m: float | None) -> pa.Array | pa.ChunkedArray:
+    if tolerance_m is None:
+        return column
+    return pa.array(
+        [simplify_coordinates_meters(value, tolerance_m) for value in column.to_pylist()],
+        type=column.type,
+    )
+
+
 def write_render_pyramid(table: pa.Table, path: Path) -> list[ShardMetadata]:
-    """Write immutable render artifacts from an already canonical activity table."""
+    """Write immutable render artifacts from full canonical geometry."""
     path.mkdir(parents=True, exist_ok=True)
     combined = table.sort_by([("spatial_order", "ascending"), ("activity_id", "ascending")])
     levels = []
-    for lod, (geometry, clean_geometry) in RENDER_LEVELS.items():
+    for lod, tolerance_m in enumerate(RENDER_TOLERANCES_M):
+        geometry = _render_geometry(combined["geometry"], tolerance_m)
+        clean_geometry = _render_geometry(combined["geometry_clean"], tolerance_m)
         arrays = [combined[name] for name in RENDER_SCALARS]
-        arrays.extend(
-            [
-                pc.cast(pc.list_value_length(combined[geometry]), pa.int64()),
-                pc.cast(pc.list_value_length(combined[clean_geometry]), pa.int64()),
-                combined[geometry],
-                combined[clean_geometry],
-            ]
-        )
-        render = cast(
-            Table[RenderActivitySchema],
-            pa.Table.from_arrays(arrays, schema=render_arrow_schema()),
-        )
+        arrays.extend([
+            pc.cast(pc.list_value_length(geometry), pa.int64()),
+            pc.cast(pc.list_value_length(clean_geometry), pa.int64()),
+            geometry,
+            clean_geometry,
+        ])
+        render = cast(Table[RenderActivitySchema], pa.Table.from_arrays(arrays, schema=render_arrow_schema()))
         render = validate_render_table(render)
-        render = cast(
-            Table[RenderActivitySchema],
-            render.replace_schema_metadata(
-                {**(render.schema.metadata or {}), **render_geo_metadata(_table_bounds(render))}
-            ),
-        )
+        render = cast(Table[RenderActivitySchema], render.replace_schema_metadata({**(render.schema.metadata or {}), **render_geo_metadata(_table_bounds(render))}))
         payload_groups = _render_row_groups(render)
         row_groups = []
         for group in payload_groups:
-            row_groups.append(
-                {
-                    "row_count": group.num_rows,
-                    "bbox": _table_bounds(group),
-                    "vertex_count": {
-                        "sum": pc.sum(group["vertex_count"]).as_py(),
-                        "min": pc.min(group["vertex_count"]).as_py(),
-                        "max": pc.max(group["vertex_count"]).as_py(),
-                    },
-                    "clean_vertex_count": {
-                        "sum": pc.sum(group["clean_vertex_count"]).as_py(),
-                        "min": pc.min(group["clean_vertex_count"]).as_py(),
-                        "max": pc.max(group["clean_vertex_count"]).as_py(),
-                    },
-                }
-            )
+            row_groups.append({
+                "row_count": group.num_rows,
+                "bbox": _table_bounds(group),
+                "vertex_count": {"sum": pc.sum(group["vertex_count"]).as_py(), "min": pc.min(group["vertex_count"]).as_py(), "max": pc.max(group["vertex_count"]).as_py()},
+                "clean_vertex_count": {"sum": pc.sum(group["clean_vertex_count"]).as_py(), "min": pc.min(group["clean_vertex_count"]).as_py(), "max": pc.max(group["clean_vertex_count"]).as_py()},
+            })
         target = path / f"lod-{lod}.parquet"
         output = pa.BufferOutputStream()
         with pq.ParquetWriter(output, render.schema, compression="zstd") as writer:
@@ -142,18 +127,17 @@ def write_render_pyramid(table: pa.Table, path: Path) -> list[ShardMetadata]:
         payload = output.getvalue()
         with target.open("wb") as handle:
             handle.write(memoryview(payload))
-        levels.append(
-            {
-                "lod": lod,
-                "path": f"render/{target.name}",
-                "row_count": render.num_rows,
-                "byte_size": payload.size,
-                "sha256": hashlib.sha256(payload).hexdigest(),
-                "bbox": _table_bounds(render),
-                "row_group_count": len(row_groups),
-                "row_groups": row_groups,
-            }
-        )
+        levels.append({
+            "lod": lod,
+            "tolerance_m": tolerance_m,
+            "path": f"render/{target.name}",
+            "row_count": render.num_rows,
+            "byte_size": payload.size,
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "bbox": _table_bounds(render),
+            "row_group_count": len(row_groups),
+            "row_groups": row_groups,
+        })
     return levels
 
 
