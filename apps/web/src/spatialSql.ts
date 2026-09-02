@@ -34,12 +34,12 @@ function segmentCrossesEdges(a: string, b: string) {
   return `EXISTS (
         SELECT 1
         FROM unnest(c.track_points) WITH ORDINALITY p1(point, i)
-        JOIN unnest(c.track_points) WITH ORDINALITY p2(point, j) ON p2.j = p1.i + 1
         CROSS JOIN polygon_edges e
-        WHERE greatest(p1.point.longitude,p2.point.longitude) >= least(e.x1,e.x2)
-          AND least(p1.point.longitude,p2.point.longitude) <= greatest(e.x1,e.x2)
-          AND greatest(p1.point.latitude,p2.point.latitude) >= least(e.y1,e.y2)
-          AND least(p1.point.latitude,p2.point.latitude) <= greatest(e.y1,e.y2)
+        WHERE p1.i < array_length(c.track_points)
+          AND greatest(p1.point.longitude,${b}.longitude) >= least(e.x1,e.x2)
+          AND least(p1.point.longitude,${b}.longitude) <= greatest(e.x1,e.x2)
+          AND greatest(p1.point.latitude,${b}.latitude) >= least(e.y1,e.y2)
+          AND least(p1.point.latitude,${b}.latitude) <= greatest(e.y1,e.y2)
           AND (${polygonSideA}) * (${polygonSideB}) <= 0
           AND (${routeSideA}) * (${routeSideB}) <= 0
       )`;
@@ -50,7 +50,8 @@ export function applySpatialFilterSql(sql: string, filter?: SpatialFilter): stri
   const [xmin, ymin, xmax, ymax] = polygonBounds(filter.polygon);
   const insideAny = `EXISTS (SELECT 1 FROM unnest(c.track_points) p(point) WHERE ${pointInside("p.point")})`;
   const outsideAny = `EXISTS (SELECT 1 FROM unnest(c.track_points) p(point) WHERE NOT ${pointInside("p.point")})`;
-  const crosses = segmentCrossesEdges("p1.point", "p2.point");
+  const nextPoint = `(list_extract(c.track_points,p1.i + 1))`;
+  const crosses = segmentCrossesEdges("p1.point", nextPoint);
   const predicate = filter.predicate === "within"
     ? `NOT ${outsideAny} AND NOT ${crosses}`
     : `${insideAny} OR ${crosses}`;
@@ -58,7 +59,7 @@ export function applySpatialFilterSql(sql: string, filter?: SpatialFilter): stri
 ${sql}
 ),
 polygon_edges(x1,y1,x2,y2) AS (VALUES ${edgesSql(filter.polygon)}),
-spatial_candidates AS (
+spatial_candidates AS MATERIALIZED (
   SELECT a.activity_id,a.track_points
   FROM activities a
   SEMI JOIN spatial_user_selection s USING(activity_id)
