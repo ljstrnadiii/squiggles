@@ -1,29 +1,42 @@
 import { describe, expect, it } from "vitest";
 
-import { chooseLod, RESOLUTION_VERTEX_BUDGETS } from "./lod";
+import { chooseLod, lodForZoom, RESOLUTION_VERTEX_BUDGETS } from "./lod";
+
+describe("lodForZoom", () => {
+  it("advances one tolerance level every two zooms", () => {
+    expect(lodForZoom(6, "medium")).toBe(0);
+    expect(lodForZoom(8, "medium")).toBe(1);
+    expect(lodForZoom(10, "medium")).toBe(2);
+    expect(lodForZoom(12, "medium")).toBe(3);
+    expect(lodForZoom(14, "medium")).toBe(4);
+    expect(lodForZoom(16, "medium")).toBe(5);
+    expect(lodForZoom(18, "medium")).toBe(6);
+    expect(lodForZoom(20, "medium")).toBe(7);
+  });
+
+  it("shifts low and high by one lod", () => {
+    expect(lodForZoom(12, "low")).toBe(2);
+    expect(lodForZoom(12, "medium")).toBe(3);
+    expect(lodForZoom(12, "high")).toBe(4);
+    expect(lodForZoom(2, "low")).toBe(0);
+    expect(lodForZoom(22, "high")).toBe(7);
+  });
+});
 
 describe("chooseLod", () => {
+  const estimates = [20_000, 50_000, 120_000, 300_000, 700_000, 1_600_000, 3_500_000, 8_000_000];
+
   it("keeps zoom as a fidelity ceiling even when finer detail fits", () => {
-    expect(chooseLod([3200, 8000, 32000, 146044, 900000], 1, RESOLUTION_VERTEX_BUDGETS.low)).toBe(1);
+    expect(chooseLod(estimates, 2, RESOLUTION_VERTEX_BUDGETS.high)).toBe(2);
   });
 
-  it("uses a balanced level for the full export", () => {
-    expect(chooseLod([126494, 317136, 1259440, 5708384, 13255105], 0, RESOLUTION_VERTEX_BUDGETS.medium)).toBe(0);
+  it("falls back one level at a time until the budget fits", () => {
+    expect(chooseLod(estimates, 7, RESOLUTION_VERTEX_BUDGETS.low)).toBe(2);
+    expect(chooseLod(estimates, 7, RESOLUTION_VERTEX_BUDGETS.medium)).toBe(4);
+    expect(chooseLod(estimates, 7, RESOLUTION_VERTEX_BUDGETS.high)).toBe(4);
   });
 
-  it("falls back to the lowest available level when every estimate exceeds budget", () => {
-    expect(chooseLod([6000000, 15000000, 60000000, 250000000, 500000000], 0, RESOLUTION_VERTEX_BUDGETS.high)).toBe(0);
-  });
-
-  it("uses full geometry at close zoom when it fits the viewport budget", () => {
-    expect(chooseLod([100, 250, 1000, 5000, 24000], 4, RESOLUTION_VERTEX_BUDGETS.low)).toBe(4);
-    expect(chooseLod([100, 250, 1000, 5000, 24000], 3, RESOLUTION_VERTEX_BUDGETS.low)).toBe(3);
-  });
-
-  it("does not read raw geometry for an over-budget dense close view", () => {
-    expect(chooseLod([51400, 128500, 514000, 2200000, 4761806], 4, RESOLUTION_VERTEX_BUDGETS.low)).toBe(1);
-    expect(chooseLod([51400, 128500, 514000, 2200000, 4761806], 4, RESOLUTION_VERTEX_BUDGETS.medium)).toBe(2);
-    expect(chooseLod([98000, 247100, 988400, 4440000, 8700000], 4, RESOLUTION_VERTEX_BUDGETS.medium)).toBe(1);
-    expect(chooseLod([98000, 247100, 988400, 4440000, 8700000], 4, RESOLUTION_VERTEX_BUDGETS.high)).toBe(2);
+  it("keeps requested detail when it fits", () => {
+    expect(chooseLod(estimates, 4, RESOLUTION_VERTEX_BUDGETS.medium)).toBe(4);
   });
 });
