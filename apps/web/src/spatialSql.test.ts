@@ -20,21 +20,18 @@ describe("drawn spatial filters", () => {
     expect(result).toContain("SEMI JOIN spatial_user_selection");
     expect(result).toContain("spatial_candidate_ids AS MATERIALIZED");
     expect(result).toContain("SELECT a.activity_id\n  FROM activities a");
-    expect(result).not.toContain("SELECT a.activity_id,a.track_points");
     expect(result).toContain("a.xmax >= -105.3");
     expect(result).toContain("a.xmin <= -105.1");
   });
 
-  it("keeps exact point and segment tests row-local without unnesting routes", () => {
+  it("uses one polygon geometry and DuckDB Spatial for exact checks", () => {
     const result = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "intersects", polygon, visible: false });
-    expect(result).toContain("list_transform(a.track_points,p ->");
-    expect(result).toContain("list_transform(range(1,array_length(a.track_points)),i ->");
-    expect(result).toContain("struct_extract(list_extract(a.track_points,i),'longitude')");
-    expect(result).toContain("struct_extract(list_extract(a.track_points,i + 1),'latitude')");
-    expect(result).not.toContain("list_extract(a.track_points,i)).longitude");
-    expect(result).not.toContain("list_extract(a.track_points,i).longitude");
+    expect(result).toContain("ST_GeomFromText('POLYGON((");
+    expect(result).toContain("ST_Intersects(");
+    expect(result).toContain("ST_MakeLine(list_transform(a.geometry, lambda p : ST_Point(");
+    expect(result).not.toContain("track_points");
+    expect(result).not.toContain("squiggles_segments_intersect");
     expect(result).not.toContain("unnest(");
-    expect(result).not.toContain("CROSS JOIN polygon_edges");
   });
 
   it("emits balanced SQL for both spatial predicates", () => {
@@ -50,10 +47,10 @@ describe("drawn spatial filters", () => {
     expect(shown).toBe(hidden);
   });
 
-  it("uses the stricter within predicate", () => {
+  it("uses ST_Within for the stricter predicate", () => {
     const result = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "within", polygon, visible: true });
-    expect(result).toContain("WHERE NOT list_contains");
-    expect(result).toContain("AND NOT list_contains");
+    expect(result).toContain("WHERE ST_Within(");
+    expect(result).not.toContain("WHERE ST_Intersects(");
   });
 
   it("calculates polygon bounds", () => {
