@@ -10,14 +10,21 @@ describe("drawn spatial filters", () => {
     expect(applySpatialFilterSql(sql, { predicate: "intersects", polygon: polygon.slice(0, 2), visible: false })).toBe(sql);
   });
 
-  it("wraps the user query and prunes candidates by polygon bounds", () => {
+  it("wraps the user query and materializes bbox-pruned candidates", () => {
     const result = applySpatialFilterSql("SELECT activity_id FROM activities WHERE start_year = 2026", { predicate: "intersects", polygon, visible: false });
     expect(result).toContain("spatial_user_selection");
     expect(result).toContain("SEMI JOIN spatial_user_selection");
+    expect(result).toContain("spatial_candidates AS MATERIALIZED");
     expect(result).toContain("a.xmax >= -105.3");
     expect(result).toContain("a.xmin <= -105.1");
     expect(result).toContain("WITH ORDINALITY");
     expect(result).toContain("OR EXISTS");
+  });
+
+  it("unnests each candidate route only once when testing segment crossings", () => {
+    const result = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "intersects", polygon, visible: false });
+    expect(result).toContain("list_extract(c.track_points,p1.i + 1)");
+    expect(result).not.toContain("JOIN unnest(c.track_points) WITH ORDINALITY p2");
   });
 
   it("does not let display visibility change selection SQL", () => {
