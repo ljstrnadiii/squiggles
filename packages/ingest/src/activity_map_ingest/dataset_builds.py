@@ -5,9 +5,9 @@ import hashlib
 import json
 import re
 import shutil
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from collections.abc import Callable
 from typing import Any
 
 import pyarrow as pa
