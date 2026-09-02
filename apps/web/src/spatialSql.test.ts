@@ -20,6 +20,12 @@ describe("drawn spatial filters", () => {
     expect(result).toContain("OR EXISTS");
   });
 
+  it("does not let display visibility change selection SQL", () => {
+    const hidden = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "intersects", polygon, visible: false });
+    const shown = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "intersects", polygon, visible: true });
+    expect(shown).toBe(hidden);
+  });
+
   it("uses the stricter within predicate", () => {
     const result = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "within", polygon, visible: true });
     expect(result).toContain("WHERE NOT EXISTS");
