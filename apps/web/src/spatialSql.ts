@@ -1,5 +1,7 @@
 import type { SpatialFilter } from "./contracts";
 
+type PointSql = { longitude: string; latitude: string };
+
 function number(value: number) {
   if (!Number.isFinite(value)) throw new Error("Spatial filter coordinates must be finite");
   return Number(value.toFixed(7)).toString();
@@ -30,24 +32,24 @@ function pointInside(point: string, polygon: readonly [number, number][]) {
   return `((${crossings.join("+")}) % 2 = 1)`;
 }
 
-function segmentCrossesEdge(a: string, b: string, edge: [number, number], next: [number, number]) {
+function segmentCrossesEdge(a: PointSql, b: PointSql, edge: [number, number], next: [number, number]) {
   const x1 = number(edge[0]);
   const y1 = number(edge[1]);
   const x2 = number(next[0]);
   const y2 = number(next[1]);
-  const polygonSideA = cross(x1, y1, x2, y2, `${a}.longitude`, `${a}.latitude`);
-  const polygonSideB = cross(x1, y1, x2, y2, `${b}.longitude`, `${b}.latitude`);
-  const routeSideA = cross(`${a}.longitude`, `${a}.latitude`, `${b}.longitude`, `${b}.latitude`, x1, y1);
-  const routeSideB = cross(`${a}.longitude`, `${a}.latitude`, `${b}.longitude`, `${b}.latitude`, x2, y2);
-  return `(greatest(${a}.longitude,${b}.longitude) >= least(${x1},${x2})
-    AND least(${a}.longitude,${b}.longitude) <= greatest(${x1},${x2})
-    AND greatest(${a}.latitude,${b}.latitude) >= least(${y1},${y2})
-    AND least(${a}.latitude,${b}.latitude) <= greatest(${y1},${y2})
+  const polygonSideA = cross(x1, y1, x2, y2, a.longitude, a.latitude);
+  const polygonSideB = cross(x1, y1, x2, y2, b.longitude, b.latitude);
+  const routeSideA = cross(a.longitude, a.latitude, b.longitude, b.latitude, x1, y1);
+  const routeSideB = cross(a.longitude, a.latitude, b.longitude, b.latitude, x2, y2);
+  return `(greatest(${a.longitude},${b.longitude}) >= least(${x1},${x2})
+    AND least(${a.longitude},${b.longitude}) <= greatest(${x1},${x2})
+    AND greatest(${a.latitude},${b.latitude}) >= least(${y1},${y2})
+    AND least(${a.latitude},${b.latitude}) <= greatest(${y1},${y2})
     AND (${polygonSideA}) * (${polygonSideB}) <= 0
     AND (${routeSideA}) * (${routeSideB}) <= 0)`;
 }
 
-function segmentCrossesPolygon(a: string, b: string, polygon: readonly [number, number][]) {
+function segmentCrossesPolygon(a: PointSql, b: PointSql, polygon: readonly [number, number][]) {
   return `(${polygonEdges(polygon).map(({ point, next }) => segmentCrossesEdge(a, b, point, next)).join(" OR ")})`;
 }
 
@@ -59,9 +61,17 @@ function anyPointOutside(track: string, polygon: readonly [number, number][]) {
   return `list_contains(list_transform(${track},p -> NOT ${pointInside("p", polygon)}),true)`;
 }
 
+function extractedPoint(track: string, index: string): PointSql {
+  const point = `list_extract(${track},${index})`;
+  return {
+    longitude: `struct_extract(${point},'longitude')`,
+    latitude: `struct_extract(${point},'latitude')`,
+  };
+}
+
 function anySegmentCrosses(track: string, polygon: readonly [number, number][]) {
-  const current = `(list_extract(${track},i))`;
-  const next = `(list_extract(${track},i + 1))`;
+  const current = extractedPoint(track, "i");
+  const next = extractedPoint(track, "i + 1");
   return `list_contains(list_transform(range(1,array_length(${track})),i -> ${segmentCrossesPolygon(current, next, polygon)}),true)`;
 }
 
