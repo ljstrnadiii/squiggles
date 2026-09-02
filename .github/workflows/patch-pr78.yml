@@ -1,0 +1,183 @@
+name: Refresh PR 78
+on:
+  push:
+    branches: [fix/spatial-filter-streaming]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/spatial-filter-streaming
+      - name: Apply retained spatial and picking fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          spatial = '''import type { SpatialFilter } from "./contracts";
+
+function number(value: number) {
+  if (!Number.isFinite(value)) throw new Error("Spatial filter coordinates must be finite");
+  return Number(value.toFixed(7)).toString();
+}
+
+export function polygonBounds(polygon: readonly [number, number][]): [number, number, number, number] {
+  if (polygon.length < 3) throw new Error("Spatial filter needs at least three vertices");
+  const xs = polygon.map(point => point[0]);
+  const ys = polygon.map(point => point[1]);
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+}
+
+const cross = (ax: string, ay: string, bx: string, by: string, cx: string, cy: string) =>
+  `((${bx})-(${ax}))*((${cy})-(${ay}))-((${by})-(${ay}))*((${cx})-(${ax}))`;
+
+function polygonEdges(polygon: readonly [number, number][]) {
+  return polygon.map((point, index) => ({ point, next: polygon[(index + 1) % polygon.length] }));
+}
+
+function pointInside(point: string, polygon: readonly [number, number][]) {
+  const crossings = polygonEdges(polygon).map(({ point: edge, next }) => {
+    const x1 = number(edge[0]);
+    const y1 = number(edge[1]);
+    const x2 = number(next[0]);
+    const y2 = number(next[1]);
+    return `CASE WHEN ((${y1} > ${point}.latitude) != (${y2} > ${point}.latitude)) AND ${point}.longitude < (${x2}-${x1})*(${point}.latitude-${y1})/nullif(${y2}-${y1},0)+${x1} THEN 1 ELSE 0 END`;
+  });
+  return `((${crossings.join("+")}) % 2 = 1)`;
+}
+
+function segmentCrossesEdge(a: string, b: string, edge: [number, number], next: [number, number]) {
+  const x1 = number(edge[0]);
+  const y1 = number(edge[1]);
+  const x2 = number(next[0]);
+  const y2 = number(next[1]);
+  const polygonSideA = cross(x1, y1, x2, y2, `${a}.longitude`, `${a}.latitude`);
+  const polygonSideB = cross(x1, y1, x2, y2, `${b}.longitude`, `${b}.latitude`);
+  const routeSideA = cross(`${a}.longitude`, `${a}.latitude`, `${b}.longitude`, `${b}.latitude`, x1, y1);
+  const routeSideB = cross(`${a}.longitude`, `${a}.latitude`, `${b}.longitude`, `${b}.latitude`, x2, y2);
+  return `(greatest(${a}.longitude,${b}.longitude) >= least(${x1},${x2})
+    AND least(${a}.longitude,${b}.longitude) <= greatest(${x1},${x2})
+    AND greatest(${a}.latitude,${b}.latitude) >= least(${y1},${y2})
+    AND least(${a}.latitude,${b}.latitude) <= greatest(${y1},${y2})
+    AND (${polygonSideA}) * (${polygonSideB}) <= 0
+    AND (${routeSideA}) * (${routeSideB}) <= 0)`;
+}
+
+function segmentCrossesPolygon(a: string, b: string, polygon: readonly [number, number][]) {
+  return `(${polygonEdges(polygon).map(({ point, next }) => segmentCrossesEdge(a, b, point, next)).join(" OR ")})`;
+}
+
+function anyPointInside(track: string, polygon: readonly [number, number][]) {
+  return `list_contains(list_transform(${track},p -> ${pointInside("p", polygon)}),true)`;
+}
+
+function anyPointOutside(track: string, polygon: readonly [number, number][]) {
+  return `list_contains(list_transform(${track},p -> NOT ${pointInside("p", polygon)}),true)`;
+}
+
+function anySegmentCrosses(track: string, polygon: readonly [number, number][]) {
+  const current = `list_extract(${track},i)`;
+  const next = `list_extract(${track},i + 1)`;
+  return `list_contains(list_transform(range(1,array_length(${track})),i -> ${segmentCrossesPolygon(current, next, polygon)}),true)`;
+}
+
+export function applySpatialFilterSql(sql: string, filter?: SpatialFilter): string {
+  if (!filter || filter.polygon.length < 3) return sql;
+  const [xmin, ymin, xmax, ymax] = polygonBounds(filter.polygon);
+  const track = "a.track_points";
+  const insideAny = anyPointInside(track, filter.polygon);
+  const outsideAny = anyPointOutside(track, filter.polygon);
+  const crosses = anySegmentCrosses(track, filter.polygon);
+  const predicate = filter.predicate === "within"
+    ? `NOT ${outsideAny} AND NOT ${crosses}`
+    : `${insideAny} OR ${crosses}`;
+  return `WITH spatial_user_selection AS (
+${sql}
+),
+spatial_candidate_ids AS MATERIALIZED (
+  SELECT a.activity_id
+  FROM activities a
+  SEMI JOIN spatial_user_selection s USING(activity_id)
+  WHERE a.xmax >= ${number(xmin)} AND a.xmin <= ${number(xmax)}
+    AND a.ymax >= ${number(ymin)} AND a.ymin <= ${number(ymax)}
+)
+SELECT a.activity_id
+FROM activities a
+SEMI JOIN spatial_candidate_ids c USING(activity_id)
+WHERE ${predicate}`;
+}
+'''
+          Path('apps/web/src/spatialSql.ts').write_text(spatial)
+
+          tests = '''import { describe, expect, it } from "vitest";
+import { applySpatialFilterSql, polygonBounds } from "./spatialSql";
+
+const polygon: [number, number][] = [[-105.3, 39.9], [-105.1, 39.9], [-105.2, 40.1]];
+
+describe("drawn spatial filters", () => {
+  it("leaves SQL unchanged without a completed polygon", () => {
+    const sql = "SELECT activity_id FROM activities";
+    expect(applySpatialFilterSql(sql)).toBe(sql);
+    expect(applySpatialFilterSql(sql, { predicate: "intersects", polygon: polygon.slice(0, 2), visible: false })).toBe(sql);
+  });
+
+  it("materializes only bbox-pruned candidate ids before exact geometry checks", () => {
+    const result = applySpatialFilterSql("SELECT activity_id FROM activities WHERE start_year = 2026", { predicate: "intersects", polygon, visible: false });
+    expect(result).toContain("spatial_user_selection");
+    expect(result).toContain("SEMI JOIN spatial_user_selection");
+    expect(result).toContain("spatial_candidate_ids AS MATERIALIZED");
+    expect(result).toContain("SELECT a.activity_id\\n  FROM activities a");
+    expect(result).not.toContain("SELECT a.activity_id,a.track_points");
+    expect(result).toContain("a.xmax >= -105.3");
+    expect(result).toContain("a.xmin <= -105.1");
+  });
+
+  it("keeps exact point and segment tests row-local without unnesting routes", () => {
+    const result = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "intersects", polygon, visible: false });
+    expect(result).toContain("list_transform(a.track_points,p ->");
+    expect(result).toContain("list_transform(range(1,array_length(a.track_points)),i ->");
+    expect(result).toContain("list_extract(a.track_points,i + 1)");
+    expect(result).not.toContain("unnest(");
+    expect(result).not.toContain("CROSS JOIN polygon_edges");
+  });
+
+  it("does not let display visibility change selection SQL", () => {
+    const hidden = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "intersects", polygon, visible: false });
+    const shown = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "intersects", polygon, visible: true });
+    expect(shown).toBe(hidden);
+  });
+
+  it("uses the stricter within predicate", () => {
+    const result = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "within", polygon, visible: true });
+    expect(result).toContain("WHERE NOT list_contains");
+    expect(result).toContain("AND NOT list_contains");
+  });
+
+  it("calculates polygon bounds", () => {
+    expect(polygonBounds(polygon)).toEqual([-105.3, 39.9, -105.1, 40.1]);
+  });
+});
+'''
+          Path('apps/web/src/spatialSql.test.ts').write_text(tests)
+
+          p = Path('apps/web/src/App.tsx')
+          text = p.read_text()
+          old = 'onClick: (info: PickingInfo) => { if (spatialDrawing) return; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (item) void openActivity(item); } })'
+          new = 'onClick: (info: PickingInfo) => { if (spatialDrawing) return false; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item) return false; void openActivity(item); return true; } })'
+          if old not in text: raise SystemExit('route hit-target click marker missing')
+          text = text.replace(old, new, 1)
+          old = 'if (!info.object) { setSelected(null); setProfileHover(null); } }} />'
+          new = 'if (!info.layer) { setSelected(null); setProfileHover(null); } }} />'
+          if old not in text: raise SystemExit('deck background click marker missing')
+          p.write_text(text.replace(old, new, 1))
+          PY
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/web/src/App.tsx apps/web/src/spatialSql.ts apps/web/src/spatialSql.test.ts
+          git commit -m 'fix: preserve route picks after spatial filters'
+          git push
