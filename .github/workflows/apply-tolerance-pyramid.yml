@@ -27,7 +27,6 @@ jobs:
                   raise SystemExit(f"expected one match in {path}: {old[:80]!r}, got {text.count(old)}")
               file.write_text(text.replace(old, new))
 
-          # DuckDB worker: estimate actual render-pyramid vertices instead of fixed per-activity caps.
           path = Path("apps/web/src/duckdb.worker.ts")
           text = path.read_text()
           text = text.replace('import { chooseLod, LOD_VERTEX_LIMITS, type Lod } from "./lod";', 'import { type Lod } from "./lod";')
@@ -69,10 +68,10 @@ jobs:
             }
           }
 
-          async function rawVertexEstimate(bounds: Bounds | undefined, clean: boolean, fallback: number): Promise<number> {
+          async function rawVertexEstimate(bounds: Bounds | undefined, fallback: number): Promise<number> {
             const levels = availableRenderLods();
             const full = levels.at(-1);
-            if (selectionAll && full != null) return manifestVertexEstimate(full, bounds, clean) ?? fallback;
+            if (selectionAll && full != null) return manifestVertexEstimate(full, bounds, false) ?? fallback;
             if (selectionAll) return fallback;
             const estimate = await connection!.query(`SELECT coalesce(sum(a.point_count),0) total FROM current_selection a WHERE ${viewportPredicate(bounds)}`);
             const row = estimate.toArray()[0] as unknown as Record<string, unknown>;
@@ -84,7 +83,7 @@ jobs:
             const plannedLod = plan.lod;
             const renderFile = registeredRenderLevels.get(plannedLod);
             const scan = viewportScan(bounds, renderFile ? [renderFile] : registeredFiles);
-            const rawEstimate = await rawVertexEstimate(bounds, clean, plan.estimate);
+            const rawEstimate = await rawVertexEstimate(bounds, plan.estimate);
             if (scan.files.length === 0) return { lod: plannedLod, batches: [], activityCount: 0, geometryBufferBytes: 0, vertexCount: 0, plannedVertexEstimate: plan.estimate, rawVertexEstimate: rawEstimate, vertexBudget: budget, scan: scan.metrics };
             const relation = renderFile
               ? `read_parquet('${renderFile.name.replaceAll("'", "''")}')`
@@ -107,7 +106,6 @@ jobs:
           '''
           path.write_text(text[:start] + block + text[end:])
 
-          # Render sink: build each level from a metric simplification tolerance.
           path = Path("packages/ingest/src/activity_map_ingest/geoparquet_sink.py")
           text = path.read_text()
           text = text.replace(
@@ -137,44 +135,24 @@ jobs:
                   geometry = _render_geometry(combined["geometry"], tolerance_m)
                   clean_geometry = _render_geometry(combined["geometry_clean"], tolerance_m)
                   arrays = [combined[name] for name in RENDER_SCALARS]
-                  arrays.extend(
-                      [
-                          pc.cast(pc.list_value_length(geometry), pa.int64()),
-                          pc.cast(pc.list_value_length(clean_geometry), pa.int64()),
-                          geometry,
-                          clean_geometry,
-                      ]
-                  )
-                  render = cast(
-                      Table[RenderActivitySchema],
-                      pa.Table.from_arrays(arrays, schema=render_arrow_schema()),
-                  )
+                  arrays.extend([
+                      pc.cast(pc.list_value_length(geometry), pa.int64()),
+                      pc.cast(pc.list_value_length(clean_geometry), pa.int64()),
+                      geometry,
+                      clean_geometry,
+                  ])
+                  render = cast(Table[RenderActivitySchema], pa.Table.from_arrays(arrays, schema=render_arrow_schema()))
                   render = validate_render_table(render)
-                  render = cast(
-                      Table[RenderActivitySchema],
-                      render.replace_schema_metadata(
-                          {**(render.schema.metadata or {}), **render_geo_metadata(_table_bounds(render))}
-                      ),
-                  )
+                  render = cast(Table[RenderActivitySchema], render.replace_schema_metadata({**(render.schema.metadata or {}), **render_geo_metadata(_table_bounds(render))}))
                   payload_groups = _render_row_groups(render)
                   row_groups = []
                   for group in payload_groups:
-                      row_groups.append(
-                          {
-                              "row_count": group.num_rows,
-                              "bbox": _table_bounds(group),
-                              "vertex_count": {
-                                  "sum": pc.sum(group["vertex_count"]).as_py(),
-                                  "min": pc.min(group["vertex_count"]).as_py(),
-                                  "max": pc.max(group["vertex_count"]).as_py(),
-                              },
-                              "clean_vertex_count": {
-                                  "sum": pc.sum(group["clean_vertex_count"]).as_py(),
-                                  "min": pc.min(group["clean_vertex_count"]).as_py(),
-                                  "max": pc.max(group["clean_vertex_count"]).as_py(),
-                              },
-                          }
-                      )
+                      row_groups.append({
+                          "row_count": group.num_rows,
+                          "bbox": _table_bounds(group),
+                          "vertex_count": {"sum": pc.sum(group["vertex_count"]).as_py(), "min": pc.min(group["vertex_count"]).as_py(), "max": pc.max(group["vertex_count"]).as_py()},
+                          "clean_vertex_count": {"sum": pc.sum(group["clean_vertex_count"]).as_py(), "min": pc.min(group["clean_vertex_count"]).as_py(), "max": pc.max(group["clean_vertex_count"]).as_py()},
+                      })
                   target = path / f"lod-{lod}.parquet"
                   output = pa.BufferOutputStream()
                   with pq.ParquetWriter(output, render.schema, compression="zstd") as writer:
@@ -183,24 +161,21 @@ jobs:
                   payload = output.getvalue()
                   with target.open("wb") as handle:
                       handle.write(memoryview(payload))
-                  levels.append(
-                      {
-                          "lod": lod,
-                          "tolerance_m": tolerance_m,
-                          "path": f"render/{target.name}",
-                          "row_count": render.num_rows,
-                          "byte_size": payload.size,
-                          "sha256": hashlib.sha256(payload).hexdigest(),
-                          "bbox": _table_bounds(render),
-                          "row_group_count": len(row_groups),
-                          "row_groups": row_groups,
-                      }
-                  )
+                  levels.append({
+                      "lod": lod,
+                      "tolerance_m": tolerance_m,
+                      "path": f"render/{target.name}",
+                      "row_count": render.num_rows,
+                      "byte_size": payload.size,
+                      "sha256": hashlib.sha256(payload).hexdigest(),
+                      "bbox": _table_bounds(render),
+                      "row_group_count": len(row_groups),
+                      "row_groups": row_groups,
+                  })
               return levels
           '''
           path.write_text(text[:start] + function + text[end:])
 
-          # Compiler/manifest versioning.
           replace_once(
               "packages/ingest/src/activity_map_ingest/compiler.py",
               "from .parsers import TrackPoint, checksum, clean_track, haversine_distance, parse_track, simplify\n",
@@ -229,7 +204,6 @@ jobs:
               '        "compiler_version": COMPILER_VERSION,\n        "render_pyramid_version": RENDER_PYRAMID_VERSION,\n        "shards": normalized_shards,',
           )
 
-          # Persist render version so release migration can identify stale datasets.
           path = Path("packages/ingest/src/activity_map_ingest/cloud_job.py")
           text = path.read_text()
           text = text.replace(
@@ -249,7 +223,6 @@ jobs:
           )
           path.write_text(text)
 
-          # Pulumi exports and deploy-role permission for migration scan.
           replace_once(
               "infra/aws/index.ts",
               '    actions: ["cognito-idp:*", "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:Describe*", "dynamodb:List*", "dynamodb:TagResource", "dynamodb:UntagResource", "dynamodb:Update*", "apigateway:*",',
@@ -260,25 +233,11 @@ jobs:
               "export const metadataTableName = metadataTable.name;\nexport const controlPlaneApiUrl = controlPlaneApi.apiEndpoint;",
               "export const metadataTableName = metadataTable.name;\nexport const ingestJobQueue = ingestQueue.arn;\nexport const ingestJobDefinition = ingestDefinition.arn;\nexport const controlPlaneApiUrl = controlPlaneApi.apiEndpoint;",
           )
-
-          # The deploy action exposes Pulumi outputs; enqueue only stale render versions after infra/image update.
-          path = Path(".github/workflows/ci.yml")
-          text = path.read_text()
-          text = text.replace(
-              "      - uses: pulumi/actions@v7\n        with:\n          command: up",
-              "      - uses: pulumi/actions@v7\n        id: pulumi\n        with:\n          command: up",
-              1,
-          )
-          marker = "          INGEST_IMAGE: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/squiggles-ingest:${{ github.sha }}\n\n  release:"
-          migration = """          INGEST_IMAGE: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/squiggles-ingest:${{ github.sha }}\n      - name: Rebuild stale render pyramids\n        env:\n          METADATA_TABLE_NAME: ${{ steps.pulumi.outputs.metadataTableName }}\n          INGEST_JOB_QUEUE: ${{ steps.pulumi.outputs.ingestJobQueue }}\n          INGEST_JOB_DEFINITION: ${{ steps.pulumi.outputs.ingestJobDefinition }}\n          DATA_BUCKET_NAME: ${{ steps.pulumi.outputs.dataBucketName }}\n          RENDER_PYRAMID_VERSION: \"2\"\n        run: python scripts/rebuild_render_pyramids.py\n\n  release:"""
-          if marker not in text:
-              raise SystemExit("deploy workflow marker not found")
-          path.write_text(text.replace(marker, migration, 1))
           PY
       - name: Commit implementation
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add apps/web/src/duckdb.worker.ts packages/ingest/src/activity_map_ingest/geoparquet_sink.py packages/ingest/src/activity_map_ingest/compiler.py packages/ingest/src/activity_map_ingest/dataset_builds.py packages/ingest/src/activity_map_ingest/cloud_job.py infra/aws/index.ts .github/workflows/ci.yml
-          git commit -m 'feat: build and migrate tolerance render pyramids'
+          git add apps/web/src/duckdb.worker.ts packages/ingest/src/activity_map_ingest/geoparquet_sink.py packages/ingest/src/activity_map_ingest/compiler.py packages/ingest/src/activity_map_ingest/dataset_builds.py packages/ingest/src/activity_map_ingest/cloud_job.py infra/aws/index.ts
+          git commit -m 'feat: build tolerance render pyramids'
           git push
