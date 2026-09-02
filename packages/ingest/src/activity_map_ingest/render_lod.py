@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 from shapely.geometry import LineString
 
@@ -43,7 +43,7 @@ def _unproject(x: float, y: float) -> tuple[float, float]:
 
 
 def simplify_coordinates_meters(
-    coordinates: Iterable[Iterable[float]], tolerance_m: float | None
+    coordinates: Iterable[Sequence[float]], tolerance_m: float | None
 ) -> list[list[float]]:
     points = [(float(point[0]), float(point[1])) for point in coordinates]
     if tolerance_m is None or tolerance_m <= 0 or len(points) <= 2:
