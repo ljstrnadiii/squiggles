@@ -22,13 +22,13 @@ const polygon: [number, number][] = [
 ];
 
 const segmentMacro = `
-CREATE OR REPLACE TEMP MACRO squiggles_segments_intersect(ax, ay, bx, by, cx, cy, dx, dy) AS (
-  greatest(ax,bx) >= least(cx,dx)
-  AND least(ax,bx) <= greatest(cx,dx)
-  AND greatest(ay,by) >= least(cy,dy)
-  AND least(ay,by) <= greatest(cy,dy)
-  AND ((dx-cx)*(ay-cy)-(dy-cy)*(ax-cx)) * ((dx-cx)*(by-cy)-(dy-cy)*(bx-cx)) <= 0
-  AND ((bx-ax)*(cy-ay)-(by-ay)*(cx-ax)) * ((bx-ax)*(dy-ay)-(by-ay)*(dx-ax)) <= 0
+CREATE OR REPLACE TEMP MACRO squiggles_segments_intersect(a_x, a_y, b_x, b_y, c_x, c_y, d_x, d_y) AS (
+  greatest(a_x,b_x) >= least(c_x,d_x)
+  AND least(a_x,b_x) <= greatest(c_x,d_x)
+  AND greatest(a_y,b_y) >= least(c_y,d_y)
+  AND least(a_y,b_y) <= greatest(c_y,d_y)
+  AND ((d_x-c_x)*(a_y-c_y)-(d_y-c_y)*(a_x-c_x)) * ((d_x-c_x)*(b_y-c_y)-(d_y-c_y)*(b_x-c_x)) <= 0
+  AND ((b_x-a_x)*(c_y-a_y)-(b_y-a_y)*(c_x-a_x)) * ((b_x-a_x)*(d_y-a_y)-(b_y-a_y)*(d_x-a_x)) <= 0
 )`;
 
 describe("drawn spatial filters in DuckDB", () => {
