@@ -1,5 +1,5 @@
 import type { ActivityListItem,BinaryRouteBatch,Dataset,DatasetManifest,DatasetSource,ExecutionEngine,QueryResult,QueryTab,RouteActivity,SystemResolution,ViewportBounds,ViewportResult } from "./contracts";
-import { RESOLUTION_VERTEX_BUDGETS } from "./lod";
+import { lodForZoom, RESOLUTION_VERTEX_BUDGETS } from "./lod";
 import { normalizeSelectionSql } from "./querySql";
 import { applySpatialFilterSql } from "./spatialSql";
 type Result<T>={id:number;ok:true;value:T}|{id:number;ok:false;error:string};
@@ -18,12 +18,13 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   setResolution(resolution:SystemResolution){if(this.resolution===resolution)return;this.resolution=resolution;this.cache.clear();this.cacheBytes=0;}
   private request<T>(body:object,transfer:Transferable[]=[]):Promise<T>{const id=++this.id;return new Promise((resolve,reject)=>{this.pending.set(id,{resolve:resolve as (value:unknown)=>void,reject});this.worker.postMessage({id,...body},transfer);});}
   private async networkRequest<T>(body:object):Promise<T>{for(let attempt=0;;attempt+=1)try{return await this.request<T>(body);}catch(error){if(attempt>=2||!isTransientNetworkError(error))throw error;perf("network-retry",{attempt:attempt+1,error:error instanceof Error?error.message:String(error)});await new Promise(resolve=>setTimeout(resolve,250*2**attempt));}}
-  private cacheKey(zoom:number,bounds:ViewportBounds|undefined){return `${this.selectionKey}|${lodForZoom(zoom)}|${bounds?.map(value=>value.toFixed(6)).join(",")??"all"}`;}
+  private requestedLod(zoom:number){return lodForZoom(zoom,this.resolution);}
+  private cacheKey(zoom:number,bounds:ViewportBounds|undefined){return `${this.selectionKey}|${this.requestedLod(zoom)}|${bounds?.map(value=>value.toFixed(6)).join(",")??"all"}`;}
   private cacheResult(result:WorkerViewportResult,key:string,hit:boolean,bounds:ViewportBounds|undefined,zoom:number):ViewportResult{
     if(!hit&&!this.cache.has(key)){
       const bytes=binaryBytes(result.batches);
       if(bytes<=this.cacheBudget){
-        const lod=lodForZoom(zoom);
+        const lod=this.requestedLod(zoom);
         for(const [cachedKey,entry] of this.cache)if(entry.lod===lod&&bounds&&entry.bounds&&boundsContains(bounds,entry.bounds)){this.cache.delete(cachedKey);this.cacheBytes-=entry.bytes;}
         this.cache.set(key,{result,bytes,bounds,lod});this.cacheBytes+=bytes;
         while(this.cacheBytes>this.cacheBudget&&this.cache.size>1){const oldest=this.cache.entries().next().value as [string,CacheEntry]|undefined;if(!oldest)break;this.cache.delete(oldest[0]);this.cacheBytes-=oldest[1].bytes;this.cacheEvictions+=1;}
@@ -31,7 +32,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     }
     return {...result,cache:{hit,bytes:this.cacheBytes,budgetBytes:this.cacheBudget,entries:this.cache.size,evictions:this.cacheEvictions}};
   }
-  private cached(key:string,bounds:ViewportBounds,zoom:number):ViewportResult|undefined{let matchedKey=key;let entry=this.cache.get(key);if(!entry){const lod=lodForZoom(zoom);for(const [candidateKey,candidate] of this.cache)if(candidate.lod===lod&&candidate.bounds&&boundsContains(candidate.bounds,bounds)){matchedKey=candidateKey;entry=candidate;break;}}if(!entry)return undefined;this.cache.delete(matchedKey);this.cache.set(matchedKey,entry);return this.cacheResult(entry.result,matchedKey,true,bounds,zoom);}
+  private cached(key:string,bounds:ViewportBounds,zoom:number):ViewportResult|undefined{let matchedKey=key;let entry=this.cache.get(key);if(!entry){const lod=this.requestedLod(zoom);for(const [candidateKey,candidate] of this.cache)if(candidate.lod===lod&&candidate.bounds&&boundsContains(candidate.bounds,bounds)){matchedKey=candidateKey;entry=candidate;break;}}if(!entry)return undefined;this.cache.delete(matchedKey);this.cache.set(matchedKey,entry);return this.cacheResult(entry.result,matchedKey,true,bounds,zoom);}
   async openDataset(source:DatasetSource,onProgress?: (completed:number,total:number)=>void):Promise<Dataset>{
     const started=performance.now();
     this.datasetRevision+=1;this.selectionKey="";this.cache.clear();this.cacheBytes=0;this.cacheEvictions=0;
@@ -64,25 +65,25 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     const nextClean=tab.style.cleanEnabled;
     const baseSql=normalizeSelectionSql(tab.sql);
     const sql=applySpatialFilterSql(baseSql,tab.spatialFilter);
-    const result=await this.networkRequest<QueryResult&WorkerViewportResult>({type:"execute",sql,lod:lodForZoom(zoom),budget:RESOLUTION_VERTEX_BUDGETS[this.resolution],bounds,clean:nextClean});
+    const requestedLod=this.requestedLod(zoom);
+    const result=await this.networkRequest<QueryResult&WorkerViewportResult>({type:"execute",sql,lod:requestedLod,budget:RESOLUTION_VERTEX_BUDGETS[this.resolution],bounds,clean:nextClean});
     this.clean=nextClean;this.selectionKey=`${this.datasetRevision}|${this.clean?1:0}|${sql}`;
-    perf("selection-execute",{totalMs:Math.round(performance.now()-started),zoom:Number(zoom.toFixed(2)),requestedLod:lodForZoom(zoom),plannedLod:result.lod,selected:result.summary.activityCount,rendered:result.activityCount,vertices:result.vertexCount,geometryBytes:result.geometryBufferBytes,candidateBytes:result.scan.candidateBytes,expectedRowGroups:result.scan.expectedRowGroupCount});
+    perf("selection-execute",{totalMs:Math.round(performance.now()-started),zoom:Number(zoom.toFixed(2)),requestedLod,plannedLod:result.lod,selected:result.summary.activityCount,rendered:result.activityCount,vertices:result.vertexCount,geometryBytes:result.geometryBufferBytes,candidateBytes:result.scan.candidateBytes,expectedRowGroups:result.scan.expectedRowGroupCount});
     return {...result,...this.cacheResult(result,this.cacheKey(zoom,bounds),false,bounds,zoom)};
   }
   async renderViewport(zoom:number,bounds:ViewportBounds):Promise<ViewportResult>{
     const requestedKey=this.cacheKey(zoom,bounds);const cached=this.cached(requestedKey,bounds,zoom);if(cached){perf("viewport-cache-hit",{zoom:Number(zoom.toFixed(2)),lod:cached.lod,vertices:cached.vertexCount});return cached;}
     const fetchBounds=padViewportBounds(bounds,VIEWPORT_PREFETCH_FRACTION);
     const started=performance.now();
-    const result=await this.networkRequest<WorkerViewportResult>({type:"render",lod:lodForZoom(zoom),budget:RESOLUTION_VERTEX_BUDGETS[this.resolution],bounds:fetchBounds,clean:this.clean});
-    perf("viewport-fetch",{totalMs:Math.round(performance.now()-started),zoom:Number(zoom.toFixed(2)),requestedLod:lodForZoom(zoom),plannedLod:result.lod,vertices:result.vertexCount,geometryBytes:result.geometryBufferBytes,candidateBytes:result.scan.candidateBytes,expectedRowGroups:result.scan.expectedRowGroupCount,prefetchFraction:VIEWPORT_PREFETCH_FRACTION});
+    const requestedLod=this.requestedLod(zoom);
+    const result=await this.networkRequest<WorkerViewportResult>({type:"render",lod:requestedLod,budget:RESOLUTION_VERTEX_BUDGETS[this.resolution],bounds:fetchBounds,clean:this.clean});
+    perf("viewport-fetch",{totalMs:Math.round(performance.now()-started),zoom:Number(zoom.toFixed(2)),requestedLod,plannedLod:result.lod,vertices:result.vertexCount,geometryBytes:result.geometryBufferBytes,candidateBytes:result.scan.candidateBytes,expectedRowGroups:result.scan.expectedRowGroupCount,prefetchFraction:VIEWPORT_PREFETCH_FRACTION});
     return this.cacheResult(result,this.cacheKey(zoom,fetchBounds),false,fetchBounds,zoom);
   }
   getSummary(bounds?:ViewportBounds):Promise<import("./contracts").SummaryStats>{return this.networkRequest({type:"summary",bounds,clean:this.clean});}
   getActivities(bounds?:ViewportBounds):Promise<ActivityListItem[]>{return this.networkRequest({type:"table",bounds,clean:this.clean});}
   getActivity(activityId:string):Promise<RouteActivity|null>{return this.networkRequest({type:"activity",activityId,clean:this.clean});}
 }
-
-export function lodForZoom(zoom:number):0|1|2|3|4{return zoom<8?0:zoom<12?1:zoom<14?2:zoom<16?3:4;}
 
 export function padViewportBounds(bounds:ViewportBounds,fraction=VIEWPORT_PREFETCH_FRACTION):ViewportBounds{
   const [west,south,east,north]=bounds;

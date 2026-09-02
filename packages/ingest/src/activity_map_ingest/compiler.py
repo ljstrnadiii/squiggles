@@ -24,6 +24,7 @@ from pandera.typing.pyarrow import Table
 
 from .geoparquet_sink import GeoParquetDataSink, RenderPyramidDataSink
 from .parsers import TrackPoint, checksum, clean_track, haversine_distance, parse_track, simplify
+from .render_lod import RENDER_LEVEL_COUNT, RENDER_PYRAMID_VERSION
 from .schema import (
     SCHEMA_VERSION,
     ActivitySchema,
@@ -33,7 +34,7 @@ from .schema import (
     validate_arrow_table,
 )
 
-COMPILER_VERSION = "0.4.0"
+COMPILER_VERSION = "0.5.0"
 SUPPORTED = (".fit", ".fit.gz", ".gpx", ".gpx.gz", ".tcx", ".tcx.gz")
 
 
@@ -492,6 +493,7 @@ def _finalize_dataset(
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "compiler_version": COMPILER_VERSION,
+        "render_pyramid_version": RENDER_PYRAMID_VERSION,
         "relation": "activities",
         "activity_count": activity_count,
         "rejection_count": len(rejects),
@@ -619,8 +621,8 @@ def validate_dataset(path: Path) -> dict[str, Any]:
     if not shards:
         raise ValueError("manifest contains no activity shards")
     render_levels = manifest.get("render_levels", [])
-    if [level.get("lod") for level in render_levels] != list(range(5)):
-        raise ValueError("manifest must contain render levels 0 through 4")
+    if [level.get("lod") for level in render_levels] != list(range(RENDER_LEVEL_COUNT)):
+        raise ValueError(f"manifest must contain render levels 0 through {RENDER_LEVEL_COUNT - 1}")
     for shard in shards:
         file = path / shard["path"]
         if not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest() != shard["sha256"]:
