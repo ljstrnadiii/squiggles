@@ -60,8 +60,8 @@ function anyPointOutside(track: string, polygon: readonly [number, number][]) {
 }
 
 function anySegmentCrosses(track: string, polygon: readonly [number, number][]) {
-  const current = `list_extract(${track},i)`;
-  const next = `list_extract(${track},i + 1)`;
+  const current = `(list_extract(${track},i))`;
+  const next = `(list_extract(${track},i + 1))`;
   return `list_contains(list_transform(range(1,array_length(${track})),i -> ${segmentCrossesPolygon(current, next, polygon)}),true)`;
 }
 
