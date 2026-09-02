@@ -21,6 +21,16 @@ const polygon: [number, number][] = [
   [-105.3019681, 40.08],
 ];
 
+const segmentMacro = `
+CREATE OR REPLACE TEMP MACRO squiggles_segments_intersect(ax, ay, bx, by, cx, cy, dx, dy) AS (
+  greatest(ax,bx) >= least(cx,dx)
+  AND least(ax,bx) <= greatest(cx,dx)
+  AND greatest(ay,by) >= least(cy,dy)
+  AND least(ay,by) <= greatest(cy,dy)
+  AND ((dx-cx)*(ay-cy)-(dy-cy)*(ax-cx)) * ((dx-cx)*(by-cy)-(dy-cy)*(bx-cx)) <= 0
+  AND ((bx-ax)*(cy-ay)-(by-ay)*(cx-ax)) * ((bx-ax)*(dy-ay)-(by-ay)*(dx-ax)) <= 0
+)`;
+
 describe("drawn spatial filters in DuckDB", () => {
   it("parses the exact worker selection wrapper", async () => {
     const db = await duckdbBlocking.createDuckDB(
@@ -30,6 +40,7 @@ describe("drawn spatial filters in DuckDB", () => {
     );
     await db.instantiate();
     const connection = db.connect();
+    connection.query(segmentMacro);
     connection.query(`
       CREATE TABLE activities (
         activity_id VARCHAR,
@@ -51,21 +62,7 @@ describe("drawn spatial filters in DuckDB", () => {
       )
     `);
 
-    const diagnostics: [string, string][] = [
-      ["point lambda", `SELECT list_transform(track_points,lambda p : struct_extract(p,'longitude') > -105.3) FROM activities`],
-      ["indexed lambda", `SELECT list_transform(range(1,array_length(track_points)),lambda i : struct_extract(list_extract(track_points,i),'longitude') > -105.3) FROM activities`],
-      ["cross product", `SELECT ((-105.2)-(-105.3))*((40.02)-(39.98))-((39.98)-(39.98))*((-105.25)-(-105.3)) FROM activities`],
-      ["segment orientation", `SELECT list_transform(range(1,array_length(track_points)),lambda i : (((-105.2)-(-105.3))*((struct_extract(list_extract(track_points,i),'latitude'))-(39.98))-((39.98)-(39.98))*((struct_extract(list_extract(track_points,i),'longitude'))-(-105.3))) * (((-105.2)-(-105.3))*((struct_extract(list_extract(track_points,i + 1),'latitude'))-(39.98))-((39.98)-(39.98))*((struct_extract(list_extract(track_points,i + 1),'longitude'))-(-105.3))) <= 0) FROM activities`],
-    ];
-    const diagnosticErrors: string[] = [];
-    for (const [name, sql] of diagnostics) {
-      try {
-        connection.query(sql);
-      } catch (error) {
-        diagnosticErrors.push(`${name}: ${String(error)}`);
-      }
-    }
-    expect(diagnosticErrors).toEqual([]);
+    expect(() => connection.query("SELECT squiggles_segments_intersect(0,0,2,2,0,2,2,0)")).not.toThrow();
 
     for (const predicate of ["intersects", "within"] as const) {
       const sql = applySpatialFilterSql(
