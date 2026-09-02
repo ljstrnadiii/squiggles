@@ -105,7 +105,8 @@ describe("App", () => {
     render(<App />);
     expect(await screen.findByRole("status", { name: "1 routes selected" })).toBeInTheDocument();
     openLogoMenu();
-    expect(screen.getByRole("button", { name: `Change dataset · ${datasetId}` })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Change dataset" })).toBeInTheDocument();
+    expect(screen.queryByText(datasetId)).not.toBeInTheDocument();
   });
 
   it("opens a synthetic developer dataset and renders its summary", async () => {

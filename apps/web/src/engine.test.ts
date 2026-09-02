@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { QueryTab, ViewportResult } from "./contracts";
-import { BrowserDuckDBEngine, cacheBudget, lodForZoom } from "./engine";
+import { BrowserDuckDBEngine, cacheBudget } from "./engine";
+import { lodForZoom } from "./lod";
 import { defaultTab } from "./storage";
 
 const viewport = (): Omit<ViewportResult, "cache"> => ({
@@ -50,7 +51,7 @@ describe("BrowserDuckDBEngine viewport cache", () => {
   });
 
   it("holds coarse overviews until the map is close enough to benefit from detail", () => {
-    expect([7.99, 8, 11.99, 12, 13.99, 14, 15.99, 16].map(lodForZoom)).toEqual([0, 1, 1, 2, 2, 3, 3, 4]);
+    expect([6.99, 7, 8.99, 9, 10.99, 11, 12.99, 13].map(zoom => lodForZoom(zoom, "medium"))).toEqual([0, 1, 1, 2, 2, 3, 3, 4]);
   });
 
   it("reuses the same transferred GeoArrow buffers for an identical viewport", async () => {
@@ -91,8 +92,8 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     globalThis.Worker = WorkerMock as unknown as typeof Worker;
     const engine = new BrowserDuckDBEngine();
     const tab: QueryTab = { ...defaultTab, style: { ...defaultTab.style }, sql: "SELECT activity_id FROM activities" };
-    await engine.execute(tab, 12.5, [-106, 39, -104, 41]);
-    const result = await engine.renderViewport(13.5, [-105.5, 39.5, -104.5, 40.5]);
+    await engine.execute(tab, 13.25, [-106, 39, -104, 41]);
+    const result = await engine.renderViewport(13.75, [-105.5, 39.5, -104.5, 40.5]);
     expect(posted).toHaveLength(1);
     expect(result.cache.hit).toBe(true);
     globalThis.Worker = originalWorker;
