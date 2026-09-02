@@ -6,13 +6,15 @@ export type UnitSystem = "metric" | "imperial";
 export type SystemResolution = "low" | "medium" | "high";
 export type MapStyle = { color: string; lineWidthScale: number; basemap: Basemap; heatEnabled: boolean; heatPalette: HeatPalette; heatTemperature: number; cleanEnabled: boolean };
 export type ViewportBounds = [west: number, south: number, east: number, north: number];
+export type SpatialPredicate = "intersects" | "within";
+export type SpatialFilter = { predicate: SpatialPredicate; polygon: [number, number][]; visible: boolean };
 
 export type Dataset = { id: string; name: string; manifest: DatasetManifest };
 export type DatasetSource =
   | { kind: "directory"; handle: FileSystemDirectoryHandle }
   | { kind: "url"; baseUrl: string; name: string };
 export type Activity = { activityId: string; name: string; sportType: string };
-export type QueryTab = { id: string; title: string; sql: string; mapState: MapState; style: MapStyle };
+export type QueryTab = { id: string; title: string; sql: string; mapState: MapState; style: MapStyle; spatialFilter?: SpatialFilter };
 export type SummaryStats = { activityCount: number; distanceM: number; elapsedSeconds: number; movingSeconds: number; elevationGainM: number; elevationLossM: number; minElevationM: number | null; maxElevationM: number | null; maxDistanceM: number | null; activeDays: number; droppedJumpPoints: number; droppedElevationPoints: number; sportCounts: { sport: string; count: number }[]; firstActivity: string | null; lastActivity: string | null };
 export type RenderPlan = { type: "arrow"; activityIds: string[] } | { type: "mvt"; urlTemplate: string };
 export type QueryResult = { queryId: string; summary: SummaryStats; renderPlan: RenderPlan };
