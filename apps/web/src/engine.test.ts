@@ -99,9 +99,10 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     globalThis.Worker = originalWorker;
   });
 
-  it("uses explicit mobile and desktop geometry budgets", () => {
-    expect(cacheBudget(true)).toBe(128 * 1024 ** 2);
-    expect(cacheBudget(false)).toBe(512 * 1024 ** 2);
+  it("lets resolution own the geometry cache budget", () => {
+    expect(cacheBudget("low")).toBe(128 * 1024 ** 2);
+    expect(cacheBudget("medium")).toBe(256 * 1024 ** 2);
+    expect(cacheBudget("high")).toBe(512 * 1024 ** 2);
   });
 
   it("retries a transient Parquet range-request failure", async () => {
