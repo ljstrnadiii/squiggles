@@ -12,61 +12,62 @@ export function polygonBounds(polygon: readonly [number, number][]): [number, nu
   return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
 }
 
-function edgesSql(polygon: readonly [number, number][]) {
-  return polygon.map((point, index) => {
-    const next = polygon[(index + 1) % polygon.length];
-    return `(${number(point[0])},${number(point[1])},${number(next[0])},${number(next[1])})`;
-  }).join(",");
-}
-
 const cross = (ax: string, ay: string, bx: string, by: string, cx: string, cy: string) =>
   `((${bx})-(${ax}))*((${cy})-(${ay}))-((${by})-(${ay}))*((${cx})-(${ax}))`;
 
-function pointInside(point: string) {
-  return `(SELECT count(*) % 2 = 1 FROM polygon_edges e WHERE ((e.y1 > ${point}.latitude) != (e.y2 > ${point}.latitude)) AND ${point}.longitude < (e.x2-e.x1)*(${point}.latitude-e.y1)/nullif(e.y2-e.y1,0)+e.x1)`;
+function pointInside(point: string, polygon: readonly [number, number][]) {
+  const crossings = polygon.map((edge, index) => {
+    const next = polygon[(index + 1) % polygon.length];
+    const x1 = number(edge[0]);
+    const y1 = number(edge[1]);
+    const x2 = number(next[0]);
+    const y2 = number(next[1]);
+    return `CASE WHEN ((${y1} > ${point}.latitude) != (${y2} > ${point}.latitude)) AND ${point}.longitude < (${x2}-${x1})*(${point}.latitude-${y1})/nullif(${y2}-${y1},0)+${x1} THEN 1 ELSE 0 END`;
+  });
+  return `((${crossings.join("+")}) % 2 = 1)`;
 }
 
-function segmentCrossesEdges(a: string, b: string) {
-  const polygonSideA = cross("e.x1", "e.y1", "e.x2", "e.y2", `${a}.longitude`, `${a}.latitude`);
-  const polygonSideB = cross("e.x1", "e.y1", "e.x2", "e.y2", `${b}.longitude`, `${b}.latitude`);
-  const routeSideA = cross(`${a}.longitude`, `${a}.latitude`, `${b}.longitude`, `${b}.latitude`, "e.x1", "e.y1");
-  const routeSideB = cross(`${a}.longitude`, `${a}.latitude`, `${b}.longitude`, `${b}.latitude`, "e.x2", "e.y2");
-  return `EXISTS (
-        SELECT 1
-        FROM unnest(c.track_points) WITH ORDINALITY p1(point, i)
-        CROSS JOIN polygon_edges e
-        WHERE p1.i < array_length(c.track_points)
-          AND greatest(p1.point.longitude,${b}.longitude) >= least(e.x1,e.x2)
-          AND least(p1.point.longitude,${b}.longitude) <= greatest(e.x1,e.x2)
-          AND greatest(p1.point.latitude,${b}.latitude) >= least(e.y1,e.y2)
-          AND least(p1.point.latitude,${b}.latitude) <= greatest(e.y1,e.y2)
-          AND (${polygonSideA}) * (${polygonSideB}) <= 0
-          AND (${routeSideA}) * (${routeSideB}) <= 0
-      )`;
+function segmentCrossesPolygon(a: string, b: string, polygon: readonly [number, number][]) {
+  const edges = polygon.map((edge, index) => {
+    const next = polygon[(index + 1) % polygon.length];
+    const x1 = number(edge[0]);
+    const y1 = number(edge[1]);
+    const x2 = number(next[0]);
+    const y2 = number(next[1]);
+    const polygonSideA = cross(x1, y1, x2, y2, `${a}.longitude`, `${a}.latitude`);
+    const polygonSideB = cross(x1, y1, x2, y2, `${b}.longitude`, `${b}.latitude`);
+    const routeSideA = cross(`${a}.longitude`, `${a}.latitude`, `${b}.longitude`, `${b}.latitude`, x1, y1);
+    const routeSideB = cross(`${a}.longitude`, `${a}.latitude`, `${b}.longitude`, `${b}.latitude`, x2, y2);
+    return `(greatest(${a}.longitude,${b}.longitude) >= least(${x1},${x2})
+      AND least(${a}.longitude,${b}.longitude) <= greatest(${x1},${x2})
+      AND greatest(${a}.latitude,${b}.latitude) >= least(${y1},${y2})
+      AND least(${a}.latitude,${b}.latitude) <= greatest(${y1},${y2})
+      AND (${polygonSideA}) * (${polygonSideB}) <= 0
+      AND (${routeSideA}) * (${routeSideB}) <= 0)`;
+  });
+  return `(${edges.join(" OR ")})`;
 }
 
 export function applySpatialFilterSql(sql: string, filter?: SpatialFilter): string {
   if (!filter || filter.polygon.length < 3) return sql;
   const [xmin, ymin, xmax, ymax] = polygonBounds(filter.polygon);
-  const insideAny = `EXISTS (SELECT 1 FROM unnest(c.track_points) p(point) WHERE ${pointInside("p.point")})`;
-  const outsideAny = `EXISTS (SELECT 1 FROM unnest(c.track_points) p(point) WHERE NOT ${pointInside("p.point")})`;
-  const nextPoint = `(list_extract(c.track_points,p1.i + 1))`;
-  const crosses = segmentCrossesEdges("p1.point", nextPoint);
+  const inside = pointInside("p", filter.polygon);
+  const insideAny = `array_length(list_filter(a.track_points,p->${inside})) > 0`;
+  const outsideAny = `array_length(list_filter(a.track_points,p->NOT ${inside})) > 0`;
+  const pointA = `(list_extract(a.track_points,i))`;
+  const pointB = `(list_extract(a.track_points,i + 1))`;
+  const segmentCrosses = segmentCrossesPolygon(pointA, pointB, filter.polygon);
+  const crosses = `array_length(list_filter(range(1,array_length(a.track_points)),i->${segmentCrosses})) > 0`;
   const predicate = filter.predicate === "within"
-    ? `NOT ${outsideAny} AND NOT ${crosses}`
-    : `${insideAny} OR ${crosses}`;
+    ? `NOT (${outsideAny}) AND NOT (${crosses})`
+    : `(${insideAny}) OR (${crosses})`;
   return `WITH spatial_user_selection AS (
 ${sql}
-),
-polygon_edges(x1,y1,x2,y2) AS (VALUES ${edgesSql(filter.polygon)}),
-spatial_candidates AS MATERIALIZED (
-  SELECT a.activity_id,a.track_points
-  FROM activities a
-  SEMI JOIN spatial_user_selection s USING(activity_id)
-  WHERE a.xmax >= ${number(xmin)} AND a.xmin <= ${number(xmax)}
-    AND a.ymax >= ${number(ymin)} AND a.ymin <= ${number(ymax)}
 )
-SELECT c.activity_id
-FROM spatial_candidates c
-WHERE ${predicate}`;
+SELECT a.activity_id
+FROM activities a
+SEMI JOIN spatial_user_selection s USING(activity_id)
+WHERE a.xmax >= ${number(xmin)} AND a.xmin <= ${number(xmax)}
+  AND a.ymax >= ${number(ymin)} AND a.ymin <= ${number(ymax)}
+  AND (${predicate})`;
 }

@@ -10,21 +10,22 @@ describe("drawn spatial filters", () => {
     expect(applySpatialFilterSql(sql, { predicate: "intersects", polygon: polygon.slice(0, 2), visible: false })).toBe(sql);
   });
 
-  it("wraps the user query and materializes bbox-pruned candidates", () => {
+  it("wraps the user query and applies bbox pruning before exact row-wise predicates", () => {
     const result = applySpatialFilterSql("SELECT activity_id FROM activities WHERE start_year = 2026", { predicate: "intersects", polygon, visible: false });
     expect(result).toContain("spatial_user_selection");
     expect(result).toContain("SEMI JOIN spatial_user_selection");
-    expect(result).toContain("spatial_candidates AS MATERIALIZED");
     expect(result).toContain("a.xmax >= -105.3");
     expect(result).toContain("a.xmin <= -105.1");
-    expect(result).toContain("WITH ORDINALITY");
-    expect(result).toContain("OR EXISTS");
+    expect(result).toContain("list_filter(a.track_points");
+    expect(result).toContain("list_filter(range(1,array_length(a.track_points))");
   });
 
-  it("unnests each candidate route only once when testing segment crossings", () => {
+  it("does not relationally expand route points or materialize track arrays", () => {
     const result = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "intersects", polygon, visible: false });
-    expect(result).toContain("list_extract(c.track_points,p1.i + 1)");
-    expect(result).not.toContain("JOIN unnest(c.track_points) WITH ORDINALITY p2");
+    expect(result).not.toContain("unnest(");
+    expect(result).not.toContain("CROSS JOIN");
+    expect(result).not.toContain("spatial_candidates AS MATERIALIZED");
+    expect(result).toContain("list_extract(a.track_points,i + 1)");
   });
 
   it("does not let display visibility change selection SQL", () => {
@@ -35,8 +36,8 @@ describe("drawn spatial filters", () => {
 
   it("uses the stricter within predicate", () => {
     const result = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "within", polygon, visible: true });
-    expect(result).toContain("WHERE NOT EXISTS");
-    expect(result).toContain("AND NOT EXISTS");
+    expect(result).toContain("NOT (array_length(list_filter(a.track_points");
+    expect(result).toContain("AND NOT (array_length(list_filter(range(1,array_length(a.track_points))");
   });
 
   it("calculates polygon bounds", () => {
