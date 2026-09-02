@@ -1,0 +1,90 @@
+name: Apply compile progress UI patch
+
+on:
+  push:
+    branches: [feat/tolerance-render-pyramid]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/tolerance-render-pyramid
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - name: Patch compile progress and labels
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f"expected one match in {path}: {old[:100]!r}, got {text.count(old)}")
+              file.write_text(text.replace(old, new))
+
+          replace_once(
+              "apps/web/src/auth.ts",
+              'export type UserProfile = Identity & { subject: string; status: "pending" | "approved" | "rejected"; role: "user" | "admin"; stats?: { uploadedBytes: number; curatedBytes: number; datasetCount: number; activityCount: number; publishedViews: number; publishedMaps: number } };',
+              'export type CompileProgress = { filename: string; status: string; statusDetail: string; progressCompleted: number; progressTotal: number };\nexport type UserProfile = Identity & { subject: string; status: "pending" | "approved" | "rejected"; role: "user" | "admin"; compile?: CompileProgress | null; stats?: { uploadedBytes: number; curatedBytes: number; datasetCount: number; activityCount: number; publishedViews: number; publishedMaps: number } };',
+          )
+
+          path = Path("infra/aws/control-plane.mjs")
+          text = path.read_text()
+          old = '''  const records = await userPartition(subject);\n  return response(200, {\n    subject,'''
+          new = '''  const records = await userPartition(subject);\n  const uploads = records.filter(item => item.entityType?.S === "upload").sort((a, b) => (b.updatedAt?.S ?? b.createdAt?.S ?? "").localeCompare(a.updatedAt?.S ?? a.createdAt?.S ?? ""));\n  const latestUpload = uploads[0];\n  return response(200, {\n    subject,'''
+          if old not in text:
+              raise SystemExit("profile records marker missing")
+          text = text.replace(old, new, 1)
+          old = '''    role: current?.role?.S ?? "user",\n    stats: {'''
+          new = '''    role: current?.role?.S ?? "user",\n    compile: latestUpload ? {\n      filename: latestUpload.filename?.S ?? "",\n      status: latestUpload.status?.S ?? "",\n      statusDetail: latestUpload.statusDetail?.S ?? "",\n      progressCompleted: Number(latestUpload.progressCompleted?.N ?? 0),\n      progressTotal: Number(latestUpload.progressTotal?.N ?? 0),\n    } : null,\n    stats: {'''
+          if old not in text:
+              raise SystemExit("profile role marker missing")
+          path.write_text(text.replace(old, new, 1))
+
+          path = Path("apps/web/src/AccountPanel.tsx")
+          text = path.read_text()
+          old = '''  const bytes = (value: number) => value < 1024 ** 2 ? `${Math.round(value / 1024)} KB` : value < 1024 ** 3 ? `${(value / 1024 ** 2).toFixed(1)} MB` : `${(value / 1024 ** 3).toFixed(1)} GB`;'''
+          new = '''  const bytes = (value: number) => value < 1024 ** 2 ? `${Math.round(value / 1024)} KB` : value < 1024 ** 3 ? `${(value / 1024 ** 2).toFixed(1)} MB` : `${(value / 1024 ** 3).toFixed(1)} GB`;\n  const compilePercent = (completed: number, total: number) => total > 0 ? Math.max(0, Math.min(100, Math.round(completed / total * 100))) : null;'''
+          if old not in text:
+              raise SystemExit("bytes marker missing")
+          text = text.replace(old, new, 1)
+          old = '''      {profile.status === "approved" && view === "account" && <section className="account-stats"><div><strong>{profile.stats?.activityCount.toLocaleString() ?? "0"}</strong><span>processed activities</span></div><div><strong>{profile.stats?.datasetCount.toLocaleString() ?? "0"}</strong><span>processed datasets</span></div><div><strong>{bytes(profile.stats?.curatedBytes ?? 0)}</strong><span>curated data</span></div><div><strong>{bytes(profile.stats?.uploadedBytes ?? 0)}</strong><span>uploaded source</span></div><div><strong>{profile.stats?.publishedViews.toLocaleString() ?? "0"}</strong><span>published views</span></div><div><strong>{profile.stats?.publishedMaps.toLocaleString() ?? "0"}</strong><span>published maps</span></div></section>}'''
+          new = '''      {profile.status === "approved" && view === "account" && <><section className="account-stats"><div><strong>{profile.stats?.activityCount.toLocaleString() ?? "0"}</strong><span>processed activities</span></div><div><strong>{profile.stats?.datasetCount.toLocaleString() ?? "0"}</strong><span>processed datasets</span></div><div><strong>{bytes(profile.stats?.curatedBytes ?? 0)}</strong><span>curated data</span></div><div><strong>{bytes(profile.stats?.uploadedBytes ?? 0)}</strong><span>uploaded source</span></div><div><strong>{profile.stats?.publishedViews.toLocaleString() ?? "0"}</strong><span>published views</span></div><div><strong>{profile.stats?.publishedMaps.toLocaleString() ?? "0"}</strong><span>published maps</span></div></section>{profile.compile && !["ready", "failed"].includes(profile.compile.status) && <div className="upload-row compile-progress"><span><strong>Compiling {profile.compile.filename}</strong>{profile.compile.statusDetail && <small>{profile.compile.statusDetail}</small>}</span><strong>{compilePercent(profile.compile.progressCompleted, profile.compile.progressTotal) !== null ? `${compilePercent(profile.compile.progressCompleted, profile.compile.progressTotal)}%` : profile.compile.status}</strong></div>}</>}'''
+          if old not in text:
+              raise SystemExit("account stats marker missing")
+          text = text.replace(old, new, 1)
+          old = '''<strong>{paused ? "paused" : upload.status}</strong></div>; })}'''
+          new = '''<strong>{paused ? "paused" : upload.status === "compiling" && compilePercent(upload.progressCompleted, upload.progressTotal) !== null ? `${compilePercent(upload.progressCompleted, upload.progressTotal)}%` : upload.status}</strong></div>; })}'''
+          if old not in text:
+              raise SystemExit("upload status marker missing")
+          text = text.replace(old, new, 1)
+          old = '''{user.latestUpload.progressTotal > 0 ? ` · ${user.latestUpload.progressCompleted}/${user.latestUpload.progressTotal}` : ""}'''
+          new = '''{user.latestUpload.progressTotal > 0 ? ` · ${compilePercent(user.latestUpload.progressCompleted, user.latestUpload.progressTotal)}%` : ""}'''
+          if old not in text:
+              raise SystemExit("admin progress marker missing")
+          path.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "apps/web/src/App.tsx",
+              '{datasetName ? `Change dataset · ${datasetName}` : "Open dataset"}',
+              '{datasetName ? "Change dataset" : "Open dataset"}',
+          )
+          PY
+          uv run ruff format packages/ingest/src/activity_map_ingest/geoparquet_sink.py scripts/rebuild_render_pyramids.py packages/ingest/src/activity_map_ingest/render_lod.py packages/ingest/tests/test_render_lod.py
+          uv run ruff check --fix packages/ingest/src/activity_map_ingest/geoparquet_sink.py scripts/rebuild_render_pyramids.py packages/ingest/src/activity_map_ingest/render_lod.py packages/ingest/tests/test_render_lod.py
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/web/src/auth.ts apps/web/src/AccountPanel.tsx apps/web/src/App.tsx infra/aws/control-plane.mjs packages/ingest/src/activity_map_ingest/geoparquet_sink.py scripts/rebuild_render_pyramids.py packages/ingest/src/activity_map_ingest/render_lod.py packages/ingest/tests/test_render_lod.py
+          git commit -m 'feat: surface compile progress in account views'
+          git push
