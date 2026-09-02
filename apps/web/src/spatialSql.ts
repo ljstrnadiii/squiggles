@@ -14,9 +14,6 @@ export function polygonBounds(polygon: readonly [number, number][]): [number, nu
   return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
 }
 
-const cross = (ax: string, ay: string, bx: string, by: string, cx: string, cy: string) =>
-  `((${bx}) - (${ax})) * ((${cy}) - (${ay})) - ((${by}) - (${ay})) * ((${cx}) - (${ax}))`;
-
 function polygonEdges(polygon: readonly [number, number][]) {
   return polygon.map((point, index) => ({ point, next: polygon[(index + 1) % polygon.length] }));
 }
@@ -30,23 +27,6 @@ function pointInside(point: PointSql, polygon: readonly [number, number][]) {
     return `CASE WHEN ((${y1} > ${point.latitude}) != (${y2} > ${point.latitude})) AND ${point.longitude} < (${x2}-${x1})*(${point.latitude}-${y1})/nullif(${y2}-${y1},0)+${x1} THEN 1 ELSE 0 END`;
   });
   return `((${crossings.join("+")}) % 2 = 1)`;
-}
-
-function segmentCrossesEdge(a: PointSql, b: PointSql, edge: PointSql, next: PointSql) {
-  const x1 = edge.longitude;
-  const y1 = edge.latitude;
-  const x2 = next.longitude;
-  const y2 = next.latitude;
-  const polygonSideA = cross(x1, y1, x2, y2, a.longitude, a.latitude);
-  const polygonSideB = cross(x1, y1, x2, y2, b.longitude, b.latitude);
-  const routeSideA = cross(a.longitude, a.latitude, b.longitude, b.latitude, x1, y1);
-  const routeSideB = cross(a.longitude, a.latitude, b.longitude, b.latitude, x2, y2);
-  return `(greatest(${a.longitude},${b.longitude}) >= least(${x1},${x2})
-    AND least(${a.longitude},${b.longitude}) <= greatest(${x1},${x2})
-    AND greatest(${a.latitude},${b.latitude}) >= least(${y1},${y2})
-    AND least(${a.latitude},${b.latitude}) <= greatest(${y1},${y2})
-    AND (${polygonSideA}) * (${polygonSideB}) <= 0
-    AND (${routeSideA}) * (${routeSideB}) <= 0)`;
 }
 
 function lambdaPoint(name: string): PointSql {
@@ -74,15 +54,12 @@ function routeSegmentList(track: string) {
   return `list_transform(range(1,array_length(${track})),lambda i : {'x1':struct_extract(${current},'longitude'),'y1':struct_extract(${current},'latitude'),'x2':struct_extract(${next},'longitude'),'y2':struct_extract(${next},'latitude')})`;
 }
 
-function segmentPoint(name: string, suffix: "1" | "2"): PointSql {
-  return {
-    longitude: `struct_extract(${name},'x${suffix}')`,
-    latitude: `struct_extract(${name},'y${suffix}')`,
-  };
+function field(name: string, key: string) {
+  return `struct_extract(${name},'${key}')`;
 }
 
 function anySegmentCrosses(track: string, polygon: readonly [number, number][]) {
-  const crossesEdge = segmentCrossesEdge(segmentPoint("s", "1"), segmentPoint("s", "2"), segmentPoint("e", "1"), segmentPoint("e", "2"));
+  const crossesEdge = `squiggles_segments_intersect(${field("s", "x1")},${field("s", "y1")},${field("s", "x2")},${field("s", "y2")},${field("e", "x1")},${field("e", "y1")},${field("e", "x2")},${field("e", "y2")})`;
   return `list_contains(list_transform(${routeSegmentList(track)},lambda s : list_contains(list_transform(${polygonEdgeList(polygon)},lambda e : ${crossesEdge}),true)),true)`;
 }
 
