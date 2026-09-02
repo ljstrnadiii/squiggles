@@ -62,7 +62,9 @@ def main() -> None:
     definition = required("INGEST_JOB_DEFINITION")
     render_version = required("RENDER_PYRAMID_VERSION")
     stale = [
-        item for item in registry_items(table_name) if value(item, "renderVersion") != render_version
+        item
+        for item in registry_items(table_name)
+        if value(item, "renderVersion") != render_version
     ]
     if not stale:
         print(f"All datasets already use render pyramid v{render_version}.")

@@ -282,6 +282,8 @@ export async function handler(event) {
   }
 
   const records = await userPartition(subject);
+  const uploads = records.filter(item => item.entityType?.S === "upload").sort((a, b) => (b.updatedAt?.S ?? b.createdAt?.S ?? "").localeCompare(a.updatedAt?.S ?? a.createdAt?.S ?? ""));
+  const latestUpload = uploads[0];
   return response(200, {
     subject,
     email: current?.email?.S ?? verifiedEmail,
@@ -289,6 +291,13 @@ export async function handler(event) {
     picture: current?.picture?.S ?? verifiedPicture,
     status: current?.status?.S ?? "pending",
     role: current?.role?.S ?? "user",
+    compile: latestUpload ? {
+      filename: latestUpload.filename?.S ?? "",
+      status: latestUpload.status?.S ?? "",
+      statusDetail: latestUpload.statusDetail?.S ?? "",
+      progressCompleted: Number(latestUpload.progressCompleted?.N ?? 0),
+      progressTotal: Number(latestUpload.progressTotal?.N ?? 0),
+    } : null,
     stats: {
       uploadedBytes: records.filter(item => item.entityType?.S === "upload").reduce((total, item) => total + Number(item.byteSize?.N ?? 0), 0),
       activityCount: records.filter(item => item.entityType?.S === "dataset").reduce((total, item) => total + Number(item.activityCount?.N ?? 0), 0),
