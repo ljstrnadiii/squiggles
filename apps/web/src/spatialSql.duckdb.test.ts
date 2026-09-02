@@ -73,6 +73,5 @@ describe("drawn spatial filters in DuckDB", () => {
     }
 
     connection.close();
-    db.terminate();
   });
 });
