@@ -32,11 +32,11 @@ function pointInside(point: PointSql, polygon: readonly [number, number][]) {
   return `((${crossings.join("+")}) % 2 = 1)`;
 }
 
-function segmentCrossesEdge(a: PointSql, b: PointSql, edge: [number, number], next: [number, number]) {
-  const x1 = number(edge[0]);
-  const y1 = number(edge[1]);
-  const x2 = number(next[0]);
-  const y2 = number(next[1]);
+function segmentCrossesEdge(a: PointSql, b: PointSql, edge: PointSql, next: PointSql) {
+  const x1 = edge.longitude;
+  const y1 = edge.latitude;
+  const x2 = next.longitude;
+  const y2 = next.latitude;
   const polygonSideA = cross(x1, y1, x2, y2, a.longitude, a.latitude);
   const polygonSideB = cross(x1, y1, x2, y2, b.longitude, b.latitude);
   const routeSideA = cross(a.longitude, a.latitude, b.longitude, b.latitude, x1, y1);
@@ -47,10 +47,6 @@ function segmentCrossesEdge(a: PointSql, b: PointSql, edge: [number, number], ne
     AND least(${a.latitude},${b.latitude}) <= greatest(${y1},${y2})
     AND (${polygonSideA}) * (${polygonSideB}) <= 0
     AND (${routeSideA}) * (${routeSideB}) <= 0)`;
-}
-
-function segmentCrossesPolygon(a: PointSql, b: PointSql, polygon: readonly [number, number][]) {
-  return `(${polygonEdges(polygon).map(({ point, next }) => segmentCrossesEdge(a, b, point, next)).join(" OR ")})`;
 }
 
 function lambdaPoint(name: string): PointSql {
@@ -76,10 +72,23 @@ function extractedPoint(track: string, index: string): PointSql {
   };
 }
 
+function polygonEdgeList(polygon: readonly [number, number][]) {
+  return `[${polygonEdges(polygon).map(({ point, next }) => `{'x1':${number(point[0])},'y1':${number(point[1])},'x2':${number(next[0])},'y2':${number(next[1])}}`).join(",")}]`;
+}
+
 function anySegmentCrosses(track: string, polygon: readonly [number, number][]) {
   const current = extractedPoint(track, "i");
   const next = extractedPoint(track, "i + 1");
-  return `list_contains(list_transform(range(1,array_length(${track})),lambda i : ${segmentCrossesPolygon(current, next, polygon)}),true)`;
+  const edgeStart: PointSql = {
+    longitude: `struct_extract(e,'x1')`,
+    latitude: `struct_extract(e,'y1')`,
+  };
+  const edgeEnd: PointSql = {
+    longitude: `struct_extract(e,'x2')`,
+    latitude: `struct_extract(e,'y2')`,
+  };
+  const crossesEdge = segmentCrossesEdge(current, next, edgeStart, edgeEnd);
+  return `list_contains(list_transform(range(1,array_length(${track})),lambda i : list_contains(list_transform(${polygonEdgeList(polygon)},lambda e : ${crossesEdge}),true)),true)`;
 }
 
 export function applySpatialFilterSql(sql: string, filter?: SpatialFilter): string {
