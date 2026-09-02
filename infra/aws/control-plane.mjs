@@ -41,6 +41,29 @@ async function userPartition(subject) {
   return items;
 }
 
+async function activeDatasetBuild(datasetId) {
+  const page = await dynamo.send(new QueryCommand({ TableName: tableName, KeyConditionExpression: "PK = :pk AND begins_with(SK, :build)", ExpressionAttributeValues: { ":pk": { S: `DATASET#${datasetId}` }, ":build": { S: "BUILD#" } } }));
+  return (page.Items ?? [])
+    .filter(item => !["ready", "failed"].includes(item.status?.S ?? ""))
+    .sort((a, b) => (b.updatedAt?.S ?? "").localeCompare(a.updatedAt?.S ?? ""))[0] ?? null;
+}
+
+async function uploadView(item) {
+  const id = item.SK.S.slice(7);
+  const rebuild = await activeDatasetBuild(id);
+  const progress = rebuild ?? item;
+  return {
+    id,
+    filename: item.filename?.S ?? "",
+    byteSize: Number(item.byteSize?.N ?? 0),
+    status: progress.status?.S ?? item.status?.S ?? "",
+    statusDetail: progress.statusDetail?.S ?? item.statusDetail?.S ?? "",
+    progressCompleted: Number(progress.progressCompleted?.N ?? 0),
+    progressTotal: Number(progress.progressTotal?.N ?? 0),
+    createdAt: item.createdAt?.S ?? "",
+  };
+}
+
 async function profilesForStatus(status) {
   const items = [];
   let cursor;
@@ -278,12 +301,13 @@ export async function handler(event) {
 
   if (route === "GET /api/uploads") {
     const result = await dynamo.send(new QueryCommand({ TableName: tableName, KeyConditionExpression: "PK = :pk AND begins_with(SK, :upload)", ExpressionAttributeValues: { ":pk": key.PK, ":upload": { S: "UPLOAD#" } }, ScanIndexForward: false }));
-    return response(200, { uploads: (result.Items ?? []).map(item => ({ id: item.SK.S.slice(7), filename: item.filename.S, byteSize: Number(item.byteSize.N), status: item.status.S, statusDetail: item.statusDetail?.S ?? "", progressCompleted: Number(item.progressCompleted?.N ?? 0), progressTotal: Number(item.progressTotal?.N ?? 0), createdAt: item.createdAt.S })) });
+    return response(200, { uploads: await Promise.all((result.Items ?? []).map(uploadView)) });
   }
 
   const records = await userPartition(subject);
   const uploads = records.filter(item => item.entityType?.S === "upload").sort((a, b) => (b.updatedAt?.S ?? b.createdAt?.S ?? "").localeCompare(a.updatedAt?.S ?? a.createdAt?.S ?? ""));
   const latestUpload = uploads[0];
+  const latestCompile = latestUpload ? await uploadView(latestUpload) : null;
   return response(200, {
     subject,
     email: current?.email?.S ?? verifiedEmail,
@@ -291,12 +315,12 @@ export async function handler(event) {
     picture: current?.picture?.S ?? verifiedPicture,
     status: current?.status?.S ?? "pending",
     role: current?.role?.S ?? "user",
-    compile: latestUpload ? {
-      filename: latestUpload.filename?.S ?? "",
-      status: latestUpload.status?.S ?? "",
-      statusDetail: latestUpload.statusDetail?.S ?? "",
-      progressCompleted: Number(latestUpload.progressCompleted?.N ?? 0),
-      progressTotal: Number(latestUpload.progressTotal?.N ?? 0),
+    compile: latestCompile ? {
+      filename: latestCompile.filename,
+      status: latestCompile.status,
+      statusDetail: latestCompile.statusDetail,
+      progressCompleted: latestCompile.progressCompleted,
+      progressTotal: latestCompile.progressTotal,
     } : null,
     stats: {
       uploadedBytes: records.filter(item => item.entityType?.S === "upload").reduce((total, item) => total + Number(item.byteSize?.N ?? 0), 0),
