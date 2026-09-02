@@ -1,0 +1,57 @@
+name: Patch rendering fixes
+on:
+  push:
+    branches: [fix/rendering-resolution-geoarrow]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/rendering-resolution-geoarrow
+      - name: Apply rendering fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p=Path(path); t=p.read_text()
+              if old not in t: raise SystemExit(f'missing marker: {path}: {old[:80]!r}')
+              p.write_text(t.replace(old,new,1))
+
+          replace('apps/web/src/engine.ts',
+            '  private resolution:SystemResolution="medium";\n  private readonly cacheBudget=cacheBudget();',
+            '  private resolution:SystemResolution="medium";\n  private get cacheBudget(){return cacheBudget(this.resolution);}')
+          replace('apps/web/src/engine.ts',
+            'export function cacheBudget(mobile=typeof matchMedia==="function"&&matchMedia("(pointer: coarse)").matches):number{return (mobile?128:512)*MEBIBYTE;}',
+            'export function cacheBudget(resolution:SystemResolution="medium"):number{return ({low:128,medium:256,high:512} as const)[resolution]*MEBIBYTE;}')
+          replace('apps/web/src/engine.test.ts',
+            '  it("uses explicit mobile and desktop geometry budgets", () => {\n    expect(cacheBudget(true)).toBe(128 * 1024 ** 2);\n    expect(cacheBudget(false)).toBe(512 * 1024 ** 2);\n  });',
+            '  it("lets resolution own the geometry cache budget", () => {\n    expect(cacheBudget("low")).toBe(128 * 1024 ** 2);\n    expect(cacheBudget("medium")).toBe(256 * 1024 ** 2);\n    expect(cacheBudget("high")).toBe(512 * 1024 ** 2);\n  });')
+
+          worker=Path('apps/web/src/duckdb.worker.ts')
+          t=worker.read_text()
+          marker='export function binaryRouteBatches(table: ArrowTable, geometryName: string): BinaryRouteBatch[] {'
+          helper='''function materializedRouteBatch(batch: ArrowBatch, geometry: ArrowVector, columns: Map<string, ArrowVector>): BinaryRouteBatch {\n  const positions: number[] = [];\n  const starts: number[] = [];\n  const owners: number[] = [];\n  for (let activityIndex = 0; activityIndex < batch.numRows; activityIndex += 1) {\n    const route = coordinates(geometry.get(activityIndex));\n    if (!route.length) continue;\n    starts.push(positions.length / 2); owners.push(activityIndex);\n    for (let point = 0; point < route.length; point += 1) {\n      if (point > 0 && distanceMeters(route[point - 1], route[point]) > 20_000) { starts.push(positions.length / 2); owners.push(activityIndex); }\n      positions.push(route[point][0], route[point][1]);\n    }\n  }\n  starts.push(positions.length / 2);\n  return { activities: Array.from({ length: batch.numRows }, (_, index) => metadataAt(columns, index)), positions: Float64Array.from(positions), startIndices: Uint32Array.from(starts), segmentActivityIndices: Uint32Array.from(owners) };\n}\n\n'''
+          if helper.strip() not in t:
+              if marker not in t: raise SystemExit('missing binaryRouteBatches marker')
+              t=t.replace(marker, helper+marker,1)
+          old='''    if (geometry.data.length !== 1) throw new Error("Viewport GeoArrow batch unexpectedly contains multiple chunks");'''
+          new='''    if (geometry.data.length !== 1) return materializedRouteBatch(batch, geometry, columns);'''
+          if old not in t: raise SystemExit('missing chunks marker')
+          t=t.replace(old,new,1)
+          old2='''    if (!(offsets instanceof Int32Array) || !(values instanceof Float64Array) || (!fixedPairs && pairOffsets === null)) {\n      throw new Error(`Viewport geometry must be a GeoArrow LineString coordinate buffer (received ${geometry.type?.toString() ?? "unknown"}; offsets ${offsets?.constructor?.name ?? "missing"}; coordinate stride ${fixedCoordinates?.stride ?? "missing"}; values ${values?.constructor?.name ?? "missing"})`);\n    }'''
+          new2='''    if (!(offsets instanceof Int32Array) || !(values instanceof Float64Array) || (!fixedPairs && pairOffsets === null)) {\n      return materializedRouteBatch(batch, geometry, columns);\n    }'''
+          if old2 not in t: raise SystemExit('missing geoarrow error marker')
+          worker.write_text(t.replace(old2,new2,1))
+          PY
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/web/src/engine.ts apps/web/src/engine.test.ts apps/web/src/duckdb.worker.ts
+          git commit -m 'fix: unify resolution budgets and decode nested GeoArrow'
+          git push
