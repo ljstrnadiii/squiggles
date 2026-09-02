@@ -4,12 +4,13 @@ import DeckGL from "@deck.gl/react";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 
-import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";
+import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";
 import { binaryPathData, pickedActivity, routeColors } from "./binaryRoutes";
 import { BrowserDuckDBEngine } from "./engine";
 import { buildBinaryHeatDataCooperative, colorForWeight, type CooperativeHeatResult } from "./heat";
 import { QUERY_SCHEMA } from "./querySchema";
 import { lineWidthsForViewport, routeSegments, type RouteSegment } from "./routes";
+import { spatialLayers } from "./spatialLayers";
 import { defaultTab, ELECTRIC_BLUE, loadTabs, normalizeRouteColor, saveTabs } from "./storage";
 import { loadTheme, saveTheme } from "./theme";
 import { distanceUnit, distanceValue, elevationUnit, elevationValue, loadUnits, saveUnits } from "./units";
@@ -203,6 +204,8 @@ export function App() {
   });
   const tab = tabs.find(item => item.id === active) ?? tabs[0];
   const [draft, setDraft] = useState(tab.sql);
+  const [spatialDrawing, setSpatialDrawing] = useState(false);
+  const [spatialDraft, setSpatialDraft] = useState<[number, number][]>([]);
   const [routeBatches, setRouteBatches] = useState<BinaryRouteBatch[]>([]);
   const [tableActivities, setTableActivities] = useState<ActivityListItem[]>([]);
   const [summary, setSummary] = useState(empty);
@@ -434,6 +437,7 @@ export function App() {
 
   function choose(next: QueryTab, openQuery = false) {
     const isCurrent = next.id === active;
+    setSpatialDrawing(false); setSpatialDraft([]);
     if (isCurrent) setToolbarOpen(open => !open);
     else { setActive(next.id); setDraft(next.sql); setView(next.mapState); setRenderedView(next.mapState); setToolbarOpen(openQuery); }
     replaceUrlSettings(next, next.mapState, units); setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false);
@@ -446,7 +450,7 @@ export function App() {
     const updated = [...tabs, next]; setTabs(updated); saveTabs(updated); choose(next, true);
   }
   function duplicate() {
-    const next = { ...tab, style: { ...tab.style }, id: crypto.randomUUID(), title: `${tab.title} copy`, sql: draft };
+    const next = { ...tab, style: { ...tab.style }, spatialFilter: tab.spatialFilter ? { ...tab.spatialFilter, polygon: [...tab.spatialFilter.polygon] } : undefined, id: crypto.randomUUID(), title: `${tab.title} copy`, sql: draft };
     const updated = [...tabs, next]; setTabs(updated); saveTabs(updated); choose(next, true);
   }
   function remove() {
@@ -462,6 +466,25 @@ export function App() {
     // successfully executed SQL automatically. Unsaved SQL remains a draft.
     if (style.cleanEnabled !== undefined && style.cleanEnabled !== tab.style.cleanEnabled && ready.current) void run(nextTab, view, tab.sql);
   }
+  function saveSpatialFilter(spatialFilter: QueryTab["spatialFilter"], rerun: boolean) {
+    const nextTab = { ...tab, spatialFilter };
+    const updated = tabs.map(item => item.id === tab.id ? nextTab : item);
+    setTabs(updated); saveTabs(updated);
+    if (rerun && ready.current) void run(nextTab, view, tab.sql);
+  }
+  function changeSpatialPredicate(predicate: SpatialPredicate) {
+    const spatialFilter = { predicate, polygon: tab.spatialFilter?.polygon ?? [], visible: tab.spatialFilter?.visible ?? false };
+    saveSpatialFilter(spatialFilter, spatialFilter.polygon.length >= 3);
+  }
+  function startSpatialDraw() {
+    setSpatialDraft([]); setSpatialDrawing(true); setToolbarOpen(false); setSelected(null); setProfileHover(null); setHover(null);
+  }
+  function acceptSpatialDraw() {
+    if (spatialDraft.length < 3) return;
+    const spatialFilter = { predicate: tab.spatialFilter?.predicate ?? "intersects" as const, polygon: spatialDraft, visible: false };
+    setSpatialDrawing(false); setSpatialDraft([]); saveSpatialFilter(spatialFilter, true);
+  }
+  function clearSpatialFilter() { setSpatialDrawing(false); setSpatialDraft([]); saveSpatialFilter(undefined, true); }
   function changeTheme(theme: ThemeMode) { setThemeMode(theme); saveTheme(theme); }
   function changeUnits(next: UnitSystem) { setUnits(next); saveUnits(next); }
   function changeSystemResolution(next: SystemResolution) { setSystemResolution(next); saveSystemResolution(next); }
@@ -579,22 +602,23 @@ export function App() {
   const selectedSegments = useMemo(() => selected ? routeSegments([selected], true) : [], [selected]);
   const lineWidths = useMemo(() => lineWidthsForViewport(tab.style.lineWidthScale, mapSize.width, mapSize.height), [mapSize, tab.style.lineWidthScale]);
   const layers = useMemo(() => [
+    ...spatialLayers(tab.spatialFilter, spatialDrawing, spatialDraft),
     ...overviewBatches.flatMap((batch, index) => [
       new PathLayer({ id: `routes-${index}`, data: overviewPathData[index], _pathType: "open", positionFormat: "XY", getWidth: tab.style.heatEnabled ? lineWidths.heat : lineWidths.route, widthUnits: "pixels", widthMinPixels: 0.35, pickable: false }),
-      new PathLayer({ id: `route-hit-targets-${index}`, data: pickingPathData[index], _pathType: "open", positionFormat: "XY", getColor: [0, 0, 0, 0], getWidth: lineWidths.route + 10, widthUnits: "pixels", widthMinPixels: 10, pickable: true, onHover: (info: PickingInfo) => { const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; setHover(item ? { x: info.x, y: info.y, item, origin: "map" } : null); }, onClick: (info: PickingInfo) => { const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (item) void openActivity(item); } }),
+      new PathLayer({ id: `route-hit-targets-${index}`, data: pickingPathData[index], _pathType: "open", positionFormat: "XY", getColor: [0, 0, 0, 0], getWidth: lineWidths.route + 10, widthUnits: "pixels", widthMinPixels: 10, pickable: !spatialDrawing, onHover: (info: PickingInfo) => { if (spatialDrawing) return; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; setHover(item ? { x: info.x, y: info.y, item, origin: "map" } : null); }, onClick: (info: PickingInfo) => { if (spatialDrawing) return; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (item) void openActivity(item); } }),
     ]),
-    ...(hover ? routeBatches.map((batch, index) =>
+    ...(hover && !spatialDrawing ? routeBatches.map((batch, index) =>
       new PathLayer({ id: `hover-route-${index}`, data: hoverPathData[index], _pathType: "open", positionFormat: "XY", getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8 }),
     ) : []),
     ...(selected && isolateSelected ? [
-      new PathLayer<RouteSegment>({ id: "isolated-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.route, widthUnits: "pixels", widthMinPixels: 0.35, pickable: true }),
+      new PathLayer<RouteSegment>({ id: "isolated-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.route, widthUnits: "pixels", widthMinPixels: 0.35, pickable: !spatialDrawing }),
     ] : selected ? [
-      new PathLayer<RouteSegment>({ id: "selected-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8, pickable: true }),
+      new PathLayer<RouteSegment>({ id: "selected-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8, pickable: !spatialDrawing }),
     ] : []),
-    ...(profileHover ? [new ScatterplotLayer<ElevationSample>({ id: "profile-position", data: [profileHover], getPosition: item => item.position, getFillColor: [71, 107, 204, 255], getLineColor: [255, 255, 255, 255], getRadius: 8, radiusUnits: "pixels", stroked: true, lineWidthMinPixels: 3 })] : []),
-  ], [hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, tab.style.color, tab.style.heatEnabled]);
+    ...(profileHover && !spatialDrawing ? [new ScatterplotLayer<ElevationSample>({ id: "profile-position", data: [profileHover], getPosition: item => item.position, getFillColor: [71, 107, 204, 255], getLineColor: [255, 255, 255, 255], getRadius: 8, radiusUnits: "pixels", stroked: true, lineWidthMinPixels: 3 })] : []),
+  ], [hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, spatialDraft, spatialDrawing, tab.spatialFilter, tab.style.color, tab.style.heatEnabled]);
 
-  return <main className="app" onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void run(); }}>
+  return <main className="app" onKeyDown={event => { if (spatialDrawing && event.key === "Escape") { setSpatialDrawing(false); setSpatialDraft([]); return; } if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void run(); }}>
     <header className="topbar">
       <div className="brand"><button className={`brand-button ${logoMenuOpen ? "active" : ""}`} aria-label="Open Squiggles menu" data-tooltip="Squiggles menu" aria-expanded={logoMenuOpen} onClick={() => { setLogoMenuOpen(open => !open); setMenuOpen(false); setAccountMenuOpen(false); }}><img src={logoUrl} alt="Squiggles" /></button></div>
       <button className="mobile-query-title" aria-label={menuOpen ? "Close query menu" : "Open query menu"} aria-expanded={menuOpen} onClick={() => { setMenuOpen(open => !open); setLogoMenuOpen(false); setAccountMenuOpen(false); setSystemSettingsOpen(false); }}>{tab.title}</button>
@@ -628,22 +652,24 @@ export function App() {
         <label data-tooltip="Choose the color ramp for route proximity.">Colors<select aria-label="Heat colormap" value={tab.style.heatPalette} disabled={!tab.style.heatEnabled} onChange={event => changeStyle({ heatPalette: event.target.value as HeatPalette })}><option value="sunset">Sunset</option><option value="viridis">Viridis</option><option value="fire">Fire</option><option value="ice">Ice</option></select></label>
         <label className="temperature" data-tooltip="Higher values make less-frequent shared routes reach saturated colors sooner."><span>Temperature</span><input aria-label="Heat temperature" type="range" min="0.5" max="3" step="0.1" disabled={!tab.style.heatEnabled} value={tab.style.heatTemperature} onChange={event => changeStyle({ heatTemperature: Number(event.target.value) })} /><output>{tab.style.heatTemperature.toFixed(1)}×</output></label>
       </div></section>
+      <section className="toolbar-section"><h3>Spatial filter</h3><div className="spatial-filter-controls"><label data-tooltip="Intersects selects routes that enter or cross the drawn area. Entirely within requires the whole route to stay inside it.">Predicate<select aria-label="Spatial predicate" value={tab.spatialFilter?.predicate ?? "intersects"} onChange={event => changeSpatialPredicate(event.target.value as SpatialPredicate)}><option value="intersects">Intersects area</option><option value="within">Entirely within area</option></select></label><button onClick={startSpatialDraw}>{tab.spatialFilter?.polygon.length ? "Redraw area" : "Draw area"}</button></div>{Boolean(tab.spatialFilter?.polygon.length) && <><p className="spatial-filter-summary">{tab.spatialFilter?.predicate === "within" ? "Entire route within" : "Intersects"} · {tab.spatialFilter!.polygon.length} vertices</p><div className="spatial-filter-actions"><button onClick={() => saveSpatialFilter({ ...tab.spatialFilter!, visible: !tab.spatialFilter!.visible }, false)}>{tab.spatialFilter?.visible ? "Hide area" : "Show area"}</button><button onClick={clearSpatialFilter}>Clear</button></div></>}</section>
       <section className="toolbar-section"><h3>Data</h3><label className="check" data-tooltip="Run the last successful SQL automatically against a derived view that excludes isolated GPS jumps and elevation spikes. Unsaved SQL stays a draft and raw files are unchanged."><input aria-label="Clean" type="checkbox" checked={tab.style.cleanEnabled} onChange={event => changeStyle({ cleanEnabled: event.target.checked })} /> Clean anomalous points</label></section>
       <section className="toolbar-section sql-section"><div className="section-heading"><div><h3>SQL</h3><p>{draft === tab.sql ? "Current query is applied" : "Draft changed · run to apply"}</p></div><button className="run" title="Run this DuckDB SQL query" disabled={busy || !ready.current} onClick={() => void run()}>▶ Run <kbd>⌘↵</kbd></button></div><Suspense fallback={<div className="sql-loading">Loading SQL editor…</div>}><SqlEditor value={draft} dark={effectiveTheme === "dark"} onChange={setDraft} /></Suspense></section>
       <section className="toolbar-section tab-actions"><h3>Tab</h3><div><button title="Copy a link with this tab, camera, and map settings" onClick={() => void copyTabLink()}>{linkCopied ? "Link copied" : "Copy tab link"}</button><button title="Duplicate this query and its map settings" onClick={duplicate}>Duplicate</button><button title="Delete this saved query" onClick={remove} disabled={tabs.length === 1}>Delete</button></div></section>
     </section>}
     {error && <div className="error global-error"><strong>Something needs attention</strong><span>{error}</span></div>}
 
-    <section className="map" ref={mapElement}>
+    <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
       <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />
-      <DeckGL controller={{ dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: 0 }} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
+      <DeckGL controller={spatialDrawing ? false : { dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: 0 }} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
         // Ignore camera callbacks produced while an asynchronously loaded published
         // view is being applied. Only a real pointer/wheel gesture may own the camera.
         if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isZooming) return;
         const next = viewState as MapState;
         setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });
-      }} onClick={info => { if (!info.object) { setSelected(null); setProfileHover(null); } }} />
-      {hover?.origin === "map" && <div className="tooltip" style={{ left: hover.x + 12, top: hover.y + 12 }}><strong>{hover.item.name}</strong><span>{hover.item.sportType} · {hover.item.startTime?.slice(0, 10)}</span><span>{distance(hover.item.distanceM ?? 0)} · {elevation(hover.item.elevationGainM ?? 0)} gain</span></div>}
+      }} onClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate?.length >= 2) setSpatialDraft(previous => [...previous, [coordinate[0], coordinate[1]]]); return; } if (!info.object) { setSelected(null); setProfileHover(null); } }} />
+      {spatialDrawing && <><div className="spatial-draw-tools" role="group" aria-label="Polygon drawing controls"><button aria-label="Undo last polygon vertex" title="Undo last point" disabled={spatialDraft.length === 0} onClick={() => setSpatialDraft(previous => previous.slice(0, -1))}>↶</button><button className="accept" aria-label="Accept polygon" title="Accept polygon" disabled={spatialDraft.length < 3} onClick={acceptSpatialDraw}>✓</button></div><div className="spatial-draw-hint">Tap the map to add polygon vertices · ↶ undo · ✓ apply</div></>}
+      {!spatialDrawing && hover?.origin === "map" && <div className="tooltip" style={{ left: hover.x + 12, top: hover.y + 12 }}><strong>{hover.item.name}</strong><span>{hover.item.sportType} · {hover.item.startTime?.slice(0, 10)}</span><span>{distance(hover.item.distanceM ?? 0)} · {elevation(hover.item.elevationGainM ?? 0)} gain</span></div>}
     </section>
 
     {selected && <aside className="detail" aria-label="Activity detail"><button className="close" aria-label="Close detail" onClick={() => { setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>×</button><span className="eyebrow">{selected.sportType}</span><h2>{selected.name}</h2><p className="detail-date">{selected.startTime?.slice(0, 10)}</p><div className="detail-stats"><Stat value={distance(selected.distanceM ?? 0)} label="distance" /><Stat value={elevation(selected.elevationGainM ?? 0)} label="gain" /><Stat value={selected.maxElevationM == null ? "—" : elevation(selected.maxElevationM)} label="maximum" /></div><div className="detail-actions"><button onClick={zoomToSelected}>Zoom to route</button><button className={`isolate ${isolateSelected ? "active" : ""}`} aria-pressed={isolateSelected} onClick={() => setIsolateSelected(value => !value)}>{isolateSelected ? "Show all routes" : "Show only this route"}</button></div><ElevationProfile samples={selected.elevationProfile} active={profileHover} units={units} onHover={setProfileHover} />{selected.sourceUrl && <a href={selected.sourceUrl} target="_blank" rel="noreferrer">Open original activity ↗</a>}</aside>}
