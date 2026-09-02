@@ -18,11 +18,15 @@ export async function loadRuntimeConfig(): Promise<RuntimeConfig | null> {
 }
 
 export function loadSession(): AuthSession | null {
-  try { return JSON.parse(sessionStorage.getItem(sessionKey) ?? "null") as AuthSession | null; }
-  catch { return null; }
+  try {
+    const stored = localStorage.getItem(sessionKey) ?? sessionStorage.getItem(sessionKey);
+    const session = JSON.parse(stored ?? "null") as AuthSession | null;
+    if (session && !localStorage.getItem(sessionKey)) localStorage.setItem(sessionKey, JSON.stringify(session));
+    return session;
+  } catch { return null; }
 }
 
-export function clearSession() { sessionStorage.removeItem(sessionKey); }
+export function clearSession() { localStorage.removeItem(sessionKey); sessionStorage.removeItem(sessionKey); }
 
 async function refreshSession(config: RuntimeConfig, session: AuthSession): Promise<boolean> {
   if (!session.refreshToken) return false;
@@ -35,7 +39,7 @@ async function refreshSession(config: RuntimeConfig, session: AuthSession): Prom
   const tokens = await response.json() as { access_token: string; id_token?: string };
   session.accessToken = tokens.access_token;
   if (tokens.id_token) session.idToken = tokens.id_token;
-  sessionStorage.setItem(sessionKey, JSON.stringify(session));
+  localStorage.setItem(sessionKey, JSON.stringify(session));
   return true;
 }
 
@@ -83,7 +87,7 @@ export async function finishLogin(config: RuntimeConfig): Promise<AuthSession | 
   if (!response.ok) throw new Error("Cognito could not complete the login.");
   const tokens = await response.json() as { access_token: string; id_token: string; refresh_token?: string };
   const session = { accessToken: tokens.access_token, idToken: tokens.id_token, refreshToken: tokens.refresh_token };
-  sessionStorage.setItem(sessionKey, JSON.stringify(session));
+  localStorage.setItem(sessionKey, JSON.stringify(session));
   sessionStorage.removeItem(verifierKey);
   sessionStorage.removeItem(stateKey);
   window.history.replaceState({}, "", "/");

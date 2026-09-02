@@ -76,10 +76,9 @@ export function AccountPanel({ onClose, onIdentityChange, view = "account" }: { 
   };
 
   return <section className="system-settings utility-panel account-panel" aria-label="Account">
-    <header><div>{view !== "upload" && <span className="eyebrow">{session ? "ACCOUNT" : "LOG IN"}</span>}<strong>{session ? view === "upload" ? "Upload Archive" : profile?.name || profile?.email : "Make Squiggles yours"}</strong></div><button aria-label="Close account" onClick={onClose}>×</button></header>
-    {loading && <p>Checking your session…</p>}
+    <header><div>{view !== "upload" && <span className="eyebrow">{session ? "ACCOUNT" : "LOG IN"}</span>}<strong>{session ? view === "upload" ? "Upload Archive" : profile?.name || profile?.email : "Log in"}</strong></div><button aria-label="Close account" onClick={onClose}>×</button></header>
     {error && <p className="account-error">{error}</p>}
-    {!loading && !session && <><p>An account lets Squiggles compile your activity archive, keep maps available across devices, publish a stable link, and count views. Strava exports are currently supported.</p><button className="account-primary" disabled={!config} onClick={() => config && void beginGoogleLogin(config)}>Log in with Google</button></>}
+    {!loading && !session && <><p>Upload and manage your activity archive.</p><button className="account-primary" disabled={!config} onClick={() => config && void beginGoogleLogin(config)}>Log in with Google</button></>}
     {profile && <>
       {view === "account" && <div className={`approval-status ${profile.status}`}><span aria-hidden="true" />Access {profile.status}{profile.role === "admin" ? " · admin" : ""}</div>}
       {profile.status === "pending" && <p>Your first login worked. An administrator still needs to approve this account before private data or uploads are available.</p>}

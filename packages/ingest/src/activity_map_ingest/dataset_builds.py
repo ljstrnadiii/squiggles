@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import shutil
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -43,7 +44,9 @@ def versioned_manifest(manifest: dict[str, Any], build_id: str) -> dict[str, Any
     return result
 
 
-def rebuild_derived_dataset(source: Path, output: Path) -> dict[str, Any]:
+def rebuild_derived_dataset(
+    source: Path, output: Path, progress_callback: Callable[[int, int], None] | None = None
+) -> dict[str, Any]:
     """Rebuild render artifacts from canonical GeoParquet without source re-ingestion."""
     manifest = json.loads((source / "dataset.json").read_text())
     shards = manifest.get("shards", [])
@@ -67,7 +70,9 @@ def rebuild_derived_dataset(source: Path, output: Path) -> dict[str, Any]:
     rejection_source = source / "rejections.parquet"
     if rejection_source.is_file():
         shutil.copy2(rejection_source, output / "rejections.parquet")
-    render_levels = write_render_pyramid(pa.concat_tables(tables), output / "render")
+    render_levels = write_render_pyramid(
+        pa.concat_tables(tables), output / "render", progress_callback=progress_callback
+    )
     rebuilt = {
         **{key: value for key, value in manifest.items() if key not in {"build", "render_levels"}},
         "schema_version": SCHEMA_VERSION,

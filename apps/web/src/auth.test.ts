@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { authFetch, clearSession, deleteAccount, identityFromSession, loadSession } from "./auth";
 
 describe("browser authentication", () => {
-  beforeEach(() => { sessionStorage.clear(); vi.restoreAllMocks(); });
+  beforeEach(() => { sessionStorage.clear(); localStorage.clear(); vi.restoreAllMocks(); });
 
   it("returns no session when signed out", () => expect(loadSession()).toBeNull());
   it("clears stored sessions", () => { sessionStorage.setItem("squiggles-auth-session", "{}"); clearSession(); expect(loadSession()).toBeNull(); });
