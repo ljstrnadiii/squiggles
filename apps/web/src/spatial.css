@@ -1,0 +1,71 @@
+.spatial-filter-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+.spatial-filter-controls > label { min-width: 0; }
+.spatial-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.spatial-filter-actions button { font-size: 10px; }
+.spatial-filter-summary {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+.spatial-draw-tools {
+  position: absolute;
+  z-index: 9;
+  top: 16px;
+  right: max(16px, env(safe-area-inset-right));
+  display: grid;
+  gap: 8px;
+  pointer-events: auto;
+}
+.spatial-draw-tools button {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 10px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 28px var(--shadow);
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1;
+}
+.spatial-draw-tools button.accept {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+.spatial-draw-hint {
+  position: absolute;
+  z-index: 8;
+  left: 50%;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--raised) 92%, transparent);
+  box-shadow: 0 8px 28px var(--shadow);
+  color: var(--text);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.map.spatial-drawing canvas { cursor: crosshair !important; }
+@media (max-width: 720px) {
+  .spatial-filter-controls { grid-template-columns: 1fr; }
+  .spatial-draw-tools { top: 12px; right: max(12px, env(safe-area-inset-right)); }
+  .spatial-draw-tools button { width: 48px; height: 48px; }
+  .spatial-draw-hint { white-space: normal; text-align: center; }
+}

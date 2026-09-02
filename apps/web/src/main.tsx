@@ -4,6 +4,7 @@ import { App } from "./App";
 import { PanelEnhancements } from "./PanelEnhancements";
 import "./styles.css";
 import "./panelEnhancements.css";
+import "./spatial.css";
 
 const defaultPublishedPath = "/p/076a09fa";
 if (window.location.hostname === "squiggles.io" && window.location.pathname === "/" && !window.location.search && !window.location.hash) {
