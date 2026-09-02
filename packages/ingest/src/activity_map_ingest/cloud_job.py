@@ -206,7 +206,16 @@ def main() -> None:
                     source,
                 )
                 status("compiling", "Building render pyramid from canonical GeoParquet")
-                rebuild_derived_dataset(source, output)
+                rebuild_derived_dataset(
+                    source,
+                    output,
+                    progress_callback=lambda completed, total: status(
+                        "compiling",
+                        f"Render level {completed:,} of {total:,} · {completed / total:.0%}",
+                        completed,
+                        total,
+                    ),
+                )
             elif mode == "full":
                 archive = root / "strava.zip"
                 status("downloading")

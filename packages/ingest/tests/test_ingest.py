@@ -249,7 +249,13 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
     legacy.pop("render_levels")
     (output / "dataset.json").write_text(json.dumps(legacy))
     rebuilt_path = tmp_path / "rebuilt"
-    rebuilt = rebuild_derived_dataset(output, rebuilt_path)
+    rebuild_progress: list[tuple[int, int]] = []
+    rebuilt = rebuild_derived_dataset(
+        output,
+        rebuilt_path,
+        progress_callback=lambda completed, total: rebuild_progress.append((completed, total)),
+    )
+    assert rebuild_progress[-1] == (8, 8)
     assert rebuilt["schema_version"] == "1.4.0"
     assert rebuilt["derived_from_schema_version"] == "1.3.0"
     assert validate_dataset(rebuilt_path)["activity_count"] == 2

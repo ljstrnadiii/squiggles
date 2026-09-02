@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, cast
 
@@ -94,7 +94,9 @@ def _render_geometry(
     )
 
 
-def write_render_pyramid(table: pa.Table, path: Path) -> list[ShardMetadata]:
+def write_render_pyramid(
+    table: pa.Table, path: Path, progress_callback: Callable[[int, int], None] | None = None
+) -> list[ShardMetadata]:
     """Write immutable render artifacts from full canonical geometry."""
     path.mkdir(parents=True, exist_ok=True)
     combined = table.sort_by([("spatial_order", "ascending"), ("activity_id", "ascending")])
@@ -161,6 +163,8 @@ def write_render_pyramid(table: pa.Table, path: Path) -> list[ShardMetadata]:
                 "row_groups": row_groups,
             }
         )
+        if progress_callback:
+            progress_callback(lod + 1, len(RENDER_TOLERANCES_M))
     return levels
 
 
