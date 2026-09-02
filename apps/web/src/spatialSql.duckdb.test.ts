@@ -51,6 +51,22 @@ describe("drawn spatial filters in DuckDB", () => {
       )
     `);
 
+    const diagnostics: [string, string][] = [
+      ["point lambda", `SELECT list_transform(track_points,lambda p : struct_extract(p,'longitude') > -105.3) FROM activities`],
+      ["indexed lambda", `SELECT list_transform(range(1,array_length(track_points)),lambda i : struct_extract(list_extract(track_points,i),'longitude') > -105.3) FROM activities`],
+      ["cross product", `SELECT ((-105.2)-(-105.3))*((40.02)-(39.98))-((39.98)-(39.98))*((-105.25)-(-105.3)) FROM activities`],
+      ["segment orientation", `SELECT list_transform(range(1,array_length(track_points)),lambda i : (((-105.2)-(-105.3))*((struct_extract(list_extract(track_points,i),'latitude'))-(39.98))-((39.98)-(39.98))*((struct_extract(list_extract(track_points,i),'longitude'))-(-105.3))) * (((-105.2)-(-105.3))*((struct_extract(list_extract(track_points,i + 1),'latitude'))-(39.98))-((39.98)-(39.98))*((struct_extract(list_extract(track_points,i + 1),'longitude'))-(-105.3))) <= 0) FROM activities`],
+    ];
+    const diagnosticErrors: string[] = [];
+    for (const [name, sql] of diagnostics) {
+      try {
+        connection.query(sql);
+      } catch (error) {
+        diagnosticErrors.push(`${name}: ${String(error)}`);
+      }
+    }
+    expect(diagnosticErrors).toEqual([]);
+
     for (const predicate of ["intersects", "within"] as const) {
       const sql = applySpatialFilterSql(
         "SELECT activity_id FROM activities",
