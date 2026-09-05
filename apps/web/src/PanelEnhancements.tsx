@@ -1,29 +1,115 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-type PanelTargets = { table: HTMLElement | null; toolbar: HTMLElement | null };
+type PanelTargets = { table: HTMLElement | null; toolbar: HTMLElement | null; logoMenu: HTMLElement | null };
+
+type NetworkInformation = {
+  effectiveType?: string;
+  downlink?: number;
+  rtt?: number;
+  saveData?: boolean;
+};
 
 function targets(): PanelTargets {
   return {
     table: document.querySelector<HTMLElement>('section.activity-table[aria-label="Activity table"]'),
     toolbar: document.querySelector<HTMLElement>('section.toolbar[aria-label="Query and map settings"]'),
+    logoMenu: document.querySelector<HTMLElement>('nav.logo-menu[aria-label="Squiggles navigation"]'),
   };
+}
+
+function milliseconds(value: number) {
+  return `${Math.max(0, value).toFixed(0)} ms`;
+}
+
+function bytes(value: number) {
+  return value < 1024 ? `${value} B` : value < 1024 ** 2 ? `${(value / 1024).toFixed(1)} KiB` : `${(value / 1024 ** 2).toFixed(1)} MiB`;
+}
+
+function diagnosticSnapshot() {
+  const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+  const resources = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
+  const transferred = resources.reduce((total, resource) => total + Math.max(0, resource.transferSize || 0), 0);
+  const connection = (navigator as Navigator & { connection?: NetworkInformation }).connection;
+  return {
+    generatedAt: new Date().toISOString(),
+    startup: {
+      domInteractiveMs: navigation?.domInteractive ?? null,
+      domContentLoadedMs: navigation?.domContentLoadedEventEnd ?? null,
+      loadEventMs: navigation?.loadEventEnd ?? null,
+      responseStartMs: navigation?.responseStart ?? null,
+    },
+    network: {
+      resourceRequests: resources.length,
+      transferredBytes: transferred,
+      effectiveType: connection?.effectiveType ?? null,
+      downlinkMbps: connection?.downlink ?? null,
+      rttMs: connection?.rtt ?? null,
+      saveData: connection?.saveData ?? null,
+    },
+    device: {
+      userAgent: navigator.userAgent,
+      viewport: `${window.innerWidth}×${window.innerHeight}`,
+      devicePixelRatio: window.devicePixelRatio,
+      hardwareConcurrency: navigator.hardwareConcurrency ?? null,
+    },
+  };
+}
+
+function Diagnostics({ onClose }: { onClose: () => void }) {
+  const snapshot = diagnosticSnapshot();
+  const copy = async () => {
+    await navigator.clipboard?.writeText(JSON.stringify(snapshot, null, 2));
+  };
+  return <section className="enhancement-diagnostics" aria-label="Diagnostics">
+    <header><div><span>DIAGNOSTICS</span><strong>Startup and device</strong></div><button aria-label="Close diagnostics" onClick={onClose}>×</button></header>
+    <table><tbody>
+      <tr><th>DOM interactive</th><td>{snapshot.startup.domInteractiveMs == null ? "—" : milliseconds(snapshot.startup.domInteractiveMs)}</td></tr>
+      <tr><th>DOMContentLoaded</th><td>{snapshot.startup.domContentLoadedMs == null ? "—" : milliseconds(snapshot.startup.domContentLoadedMs)}</td></tr>
+      <tr><th>Load event</th><td>{snapshot.startup.loadEventMs == null ? "—" : milliseconds(snapshot.startup.loadEventMs)}</td></tr>
+      <tr><th>First response</th><td>{snapshot.startup.responseStartMs == null ? "—" : milliseconds(snapshot.startup.responseStartMs)}</td></tr>
+      <tr><th>Resource requests</th><td>{snapshot.network.resourceRequests}</td></tr>
+      <tr><th>Transferred</th><td>{bytes(snapshot.network.transferredBytes)}</td></tr>
+      <tr><th>Connection</th><td>{snapshot.network.effectiveType ?? "—"}{snapshot.network.downlinkMbps == null ? "" : ` · ${snapshot.network.downlinkMbps} Mbps`}{snapshot.network.rttMs == null ? "" : ` · ${snapshot.network.rttMs} ms RTT`}</td></tr>
+      <tr><th>Viewport</th><td>{snapshot.device.viewport} · {snapshot.device.devicePixelRatio.toFixed(2)}× DPR</td></tr>
+      <tr><th>CPU threads</th><td>{snapshot.device.hardwareConcurrency ?? "—"}</td></tr>
+      <tr><th>User agent</th><td className="diagnostics-user-agent">{snapshot.device.userAgent}</td></tr>
+    </tbody></table>
+    <p>Rendering-specific LOD, row-group, vertex-budget, GeoArrow, and cache metrics remain available in the query Rendering panel while they are migrated into this combined Diagnostics surface.</p>
+    <button className="diagnostics-copy" onClick={() => void copy()}>Copy diagnostics</button>
+  </section>;
 }
 
 export function PanelEnhancements() {
   const [panels, setPanels] = useState<PanelTargets>(() => targets());
   const [tableExpanded, setTableExpanded] = useState(false);
   const [toolbarExpanded, setToolbarExpanded] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const logoClicks = useRef<number[]>([]);
 
   useEffect(() => {
     const update = () => setPanels(previous => {
       const next = targets();
-      return previous.table === next.table && previous.toolbar === next.toolbar ? previous : next;
+      return previous.table === next.table && previous.toolbar === next.toolbar && previous.logoMenu === next.logoMenu ? previous : next;
     });
     const observer = new MutationObserver(update);
     observer.observe(document.body, { childList: true, subtree: true });
     update();
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const logo = document.querySelector<HTMLButtonElement>("button.brand-button");
+    if (!logo) return;
+    const openAfterFiveTaps = () => {
+      const now = performance.now();
+      logoClicks.current = [...logoClicks.current.filter(time => now - time < 2500), now];
+      if (logoClicks.current.length < 5) return;
+      logoClicks.current = [];
+      setDiagnosticsOpen(true);
+    };
+    logo.addEventListener("click", openAfterFiveTaps);
+    return () => logo.removeEventListener("click", openAfterFiveTaps);
   }, []);
 
   useEffect(() => { if (!panels.table) setTableExpanded(false); }, [panels.table]);
@@ -45,5 +131,7 @@ export function PanelEnhancements() {
   return <>
     {tableHeader && createPortal(<button className="panel-expand" aria-label={tableExpanded ? "Exit full screen activity table" : "Open activity table full screen"} title={tableExpanded ? "Exit full screen" : "Full screen"} onClick={() => setTableExpanded(value => !value)}>{tableExpanded ? "⊙" : "⛶"}</button>, tableHeader)}
     {toolbarHeader && createPortal(<button className="panel-expand" aria-label={toolbarExpanded ? "Exit full screen query settings" : "Open query settings full screen"} title={toolbarExpanded ? "Exit full screen" : "Full screen"} onClick={() => setToolbarExpanded(value => !value)}>{toolbarExpanded ? "⊙" : "⛶"}</button>, toolbarHeader)}
+    {panels.logoMenu && createPortal(<button onClick={() => setDiagnosticsOpen(true)}>Diagnostics</button>, panels.logoMenu)}
+    {diagnosticsOpen && createPortal(<Diagnostics onClose={() => setDiagnosticsOpen(false)} />, document.body)}
   </>;
 }
