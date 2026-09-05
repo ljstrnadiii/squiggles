@@ -79,6 +79,7 @@ let cleanViewEnabled = false;
 let selectionAll = false;
 let registeredFiles: RegisteredFile[] = [];
 let registeredRenderLevels = new Map<Lod, RegisteredFile[]>();
+let initializationTimings = { selectBundleMs: 0, instantiateMs: 0, connectMs: 0 };
 
 const scalar = (value: unknown) => (typeof value === "bigint" ? Number(value) : value);
 const coordinates = (value: unknown): [number, number][] =>
@@ -292,13 +293,20 @@ async function initialize() {
       ).href,
     },
   };
+  const selectStarted = performance.now();
   const bundle = await duckdb.selectBundle(bundles);
+  const selectBundleMs = performance.now() - selectStarted;
   database = new duckdb.AsyncDuckDB(
     new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING),
     new Worker(bundle.mainWorker!),
   );
+  const instantiateStarted = performance.now();
   await database.instantiate(bundle.mainModule, bundle.pthreadWorker);
+  const instantiateMs = performance.now() - instantiateStarted;
+  const connectStarted = performance.now();
   connection = await database.connect();
+  const connectMs = performance.now() - connectStarted;
+  initializationTimings = { selectBundleMs, instantiateMs, connectMs };
   return database;
 }
 
@@ -664,7 +672,9 @@ async function summarize(bounds: Bounds | undefined, clean: boolean) {
 self.onmessage = async (event: MessageEvent<Request>) => {
   const request = event.data;
   try {
+    const initializeStarted = performance.now();
     const db = await initialize();
+    const initializeMs = performance.now() - initializeStarted;
     if (request.type === "open") {
       registeredFiles = request.files;
       registeredRenderLevels = new Map(
@@ -672,6 +682,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       );
       selectionAll = false;
       const renderFilesToRegister = request.renderLevels.flatMap((level) => level.files);
+      const registrationStarted = performance.now();
       for (const file of [...request.files, ...renderFilesToRegister]) {
         if (file.buffer) {
           await db.registerFileBuffer(file.name, new Uint8Array(file.buffer));
@@ -679,13 +690,24 @@ self.onmessage = async (event: MessageEvent<Request>) => {
           await db.registerFileURL(file.name, file.url, duckdb.DuckDBDataProtocol.HTTP, false);
         }
       }
+      const registerFilesMs = performance.now() - registrationStarted;
+      const activitySourceStarted = performance.now();
       await connection!.query(
         `CREATE OR REPLACE VIEW activity_source AS ${canonicalSourceSql(request.files)}`,
       );
+      const activitySourceViewMs = performance.now() - activitySourceStarted;
+      const activitiesStarted = performance.now();
       await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");
+      const activitiesViewMs = performance.now() - activitiesStarted;
       supportsClean = ["1.2.0", "1.3.0", "1.4.0"].includes(request.schemaVersion);
       cleanViewEnabled = false;
-      self.postMessage({ id: request.id, ok: true, value: true });
+      respond(request.id, {
+        initializeMs,
+        ...initializationTimings,
+        registerFilesMs,
+        activitySourceViewMs,
+        activitiesViewMs,
+      });
       return;
     }
 

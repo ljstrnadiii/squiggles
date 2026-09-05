@@ -47,6 +47,15 @@ type WorkerFile = {
   }[];
 };
 type WorkerRenderLevel = { lod: Lod; files: WorkerFile[] };
+type WorkerOpenTiming = {
+  initializeMs: number;
+  selectBundleMs: number;
+  instantiateMs: number;
+  connectMs: number;
+  registerFilesMs: number;
+  activitySourceViewMs: number;
+  activitiesViewMs: number;
+};
 
 const MEBIBYTE = 1024 ** 2;
 const VIEWPORT_PREFETCH_FRACTION = 0.2;
@@ -362,10 +371,19 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     };
 
     try {
-      await this.request(
+      const workerTiming = await this.request<WorkerOpenTiming>(
         openRequest,
         [...files, ...allRenderFiles].flatMap((file) => (file.buffer ? [file.buffer] : [])),
       );
+      perf("worker-open-phases", {
+        initializeMs: Math.round(workerTiming.initializeMs),
+        selectBundleMs: Math.round(workerTiming.selectBundleMs),
+        instantiateMs: Math.round(workerTiming.instantiateMs),
+        connectMs: Math.round(workerTiming.connectMs),
+        registerFilesMs: Math.round(workerTiming.registerFilesMs),
+        activitySourceViewMs: Math.round(workerTiming.activitySourceViewMs),
+        activitiesViewMs: Math.round(workerTiming.activitiesViewMs),
+      });
     } catch (error) {
       throw new Error(
         formatDuckDBDiagnostic(openRequest, error, {
