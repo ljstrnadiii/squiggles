@@ -120,7 +120,7 @@ jobs:
           METADATA_TABLE_NAME: ${{ steps.pulumi.outputs.metadataTableName }}
           INGEST_JOB_QUEUE: ${{ steps.pulumi.outputs.ingestJobQueue }}
           INGEST_JOB_DEFINITION: ${{ steps.pulumi.outputs.ingestJobDefinition }}
-          RENDER_PYRAMID_VERSION: "2"
+          RENDER_PYRAMID_VERSION: "3"
         run: python scripts/rebuild_render_pyramids.py
 
   release:
