@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -15,6 +16,8 @@ def main() -> None:
     page_errors: list[str] = []
     failed_requests: list[str] = []
     navigations: list[str] = []
+    request_started: dict[int, float] = {}
+    network_timings: list[dict[str, object]] = []
     ARTIFACT_DIR.mkdir(exist_ok=True)
 
     with sync_playwright() as playwright:
@@ -27,6 +30,27 @@ def main() -> None:
         page = context.new_page()
         page.on("console", lambda message: console.append(f"{message.type}: {message.text}"))
         page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+        def request_started_handler(request) -> None:
+            request_started[id(request)] = time.monotonic()
+
+        def request_finished_handler(request) -> None:
+            started = request_started.pop(id(request), None)
+            if started is None:
+                return
+            response = request.response()
+            network_timings.append(
+                {
+                    "method": request.method,
+                    "url": request.url,
+                    "resourceType": request.resource_type,
+                    "status": response.status if response else None,
+                    "durationMs": round((time.monotonic() - started) * 1000),
+                }
+            )
+
+        context.on("request", request_started_handler)
+        context.on("requestfinished", request_finished_handler)
         page.on(
             "requestfailed",
             lambda request: failed_requests.append(
@@ -85,6 +109,17 @@ def main() -> None:
         print(json.dumps(page_errors, indent=2))
         print("FAILED_REQUESTS")
         print(json.dumps(failed_requests, indent=2))
+        print("SLOW_NETWORK_REQUESTS")
+        print(
+            json.dumps(
+                sorted(
+                    (request for request in network_timings if request["durationMs"] >= 100),
+                    key=lambda request: request["durationMs"],
+                    reverse=True,
+                )[:100],
+                indent=2,
+            )
+        )
         print("CONSOLE")
         print(json.dumps(console[-100:], indent=2))
 
@@ -96,6 +131,7 @@ def main() -> None:
                         "state": state,
                         "pageErrors": page_errors,
                         "failedRequests": failed_requests,
+                        "networkTimings": network_timings,
                         "console": console[-100:],
                     },
                     indent=2,
