@@ -16,3 +16,9 @@ jobs:
       - uses: actions/checkout@v7
       - name: Verify production startup path
         run: python scripts/check_hosted_map.py
+      - name: Install browser smoke dependencies
+        run: |
+          python -m pip install playwright==1.55.0
+          python -m playwright install --with-deps chromium
+      - name: Exercise production map in Chromium
+        run: python scripts/check_hosted_browser.py
