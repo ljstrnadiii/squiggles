@@ -28,7 +28,8 @@ from .schema import (
 )
 
 ShardMetadata = dict[str, Any]
-RENDER_CHUNK_TARGET_BYTES = 4 * 1024 * 1024
+RENDER_ROW_GROUP_TARGET_BYTES = 4 * 1024 * 1024
+RENDER_FILE_TARGET_BYTES = 1024 * 1024 * 1024
 RENDER_SCALARS = [
     "activity_id",
     "name",
@@ -56,14 +57,16 @@ RENDER_SCALARS = [
 ]
 
 
-def _byte_groups(table: Table[RenderActivitySchema]) -> list[Table[RenderActivitySchema]]:
-    """Split a render partition into whole-activity chunks near the mobile I/O target."""
+def _byte_groups(
+    table: Table[RenderActivitySchema], target_bytes: int
+) -> list[Table[RenderActivitySchema]]:
+    """Split a table into whole-activity groups near a target uncompressed size."""
     groups: list[Table[RenderActivitySchema]] = []
     start = 0
     estimated_bytes = 0
     for index in range(table.num_rows):
         row_bytes = max(1, table.slice(index, 1).nbytes)
-        if index > start and estimated_bytes + row_bytes > RENDER_CHUNK_TARGET_BYTES:
+        if index > start and estimated_bytes + row_bytes > target_bytes:
             groups.append(cast(Table[RenderActivitySchema], table.slice(start, index - start)))
             start = index
             estimated_bytes = 0
@@ -93,10 +96,10 @@ def _render_geometry(
     )
 
 
-def _render_file_metadata(table: Table[RenderActivitySchema], path: str, payload: pa.Buffer) -> ShardMetadata:
+def _row_group_metadata(table: Table[RenderActivitySchema]) -> ShardMetadata:
     vertex = table["vertex_count"]
     clean_vertex = table["clean_vertex_count"]
-    row_group = {
+    return {
         "row_count": table.num_rows,
         "bbox": _table_bounds(table),
         "estimated_uncompressed_bytes": table.nbytes,
@@ -111,36 +114,43 @@ def _render_file_metadata(table: Table[RenderActivitySchema], path: str, payload
             "max": pc.max(clean_vertex).as_py(),
         },
     }
-    return {
-        "path": path,
-        "row_count": table.num_rows,
-        "byte_size": payload.size,
-        "sha256": hashlib.sha256(payload).hexdigest(),
-        "bbox": row_group["bbox"],
-        "row_group_count": 1,
-        "row_groups": [row_group],
-    }
 
 
 def _write_render_file(
-    table: Table[RenderActivitySchema], root: Path, relative: Path
+    row_groups: list[Table[RenderActivitySchema]], root: Path, relative: Path
 ) -> ShardMetadata:
     target = root / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     output = pa.BufferOutputStream()
-    pq.write_table(table, output, compression="zstd", row_group_size=table.num_rows)
+    with pq.ParquetWriter(output, row_groups[0].schema, compression="zstd") as writer:
+        for row_group in row_groups:
+            writer.write_table(row_group, row_group_size=row_group.num_rows)
     payload = output.getvalue()
     with target.open("wb") as handle:
         handle.write(memoryview(payload))
-    return _render_file_metadata(table, f"render/{relative.as_posix()}", payload)
+    metadata = [_row_group_metadata(group) for group in row_groups]
+    return {
+        "path": f"render/{relative.as_posix()}",
+        "row_count": sum(group.num_rows for group in row_groups),
+        "byte_size": payload.size,
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "bbox": [
+            min(group["bbox"][0] for group in metadata),
+            min(group["bbox"][1] for group in metadata),
+            max(group["bbox"][2] for group in metadata),
+            max(group["bbox"][3] for group in metadata),
+        ],
+        "row_group_count": len(metadata),
+        "row_groups": metadata,
+    }
 
 
 def _render_partitions(
     table: Table[RenderActivitySchema], lod: int
 ) -> list[tuple[Path, Table[RenderActivitySchema]]]:
-    """Keep small LODs contiguous; use familiar Hive dimensions only when a level grows."""
+    """Keep coarse global LODs contiguous; partition larger detail levels for pruning."""
     base = Path(f"lod={lod}")
-    if table.nbytes <= RENDER_CHUNK_TARGET_BYTES:
+    if lod <= 2:
         return [(base, table)]
 
     partitions: list[tuple[Path, Table[RenderActivitySchema]]] = []
@@ -159,6 +169,39 @@ def _render_partitions(
                 (base / f"activity_family={family}" / f"start_year={year}", year_table)
             )
     return partitions
+
+
+def _render_files(
+    table: Table[RenderActivitySchema], root: Path, partition_path: Path
+) -> list[ShardMetadata]:
+    row_groups = _byte_groups(table, RENDER_ROW_GROUP_TARGET_BYTES)
+    files: list[ShardMetadata] = []
+    pending: list[Table[RenderActivitySchema]] = []
+    pending_bytes = 0
+    sequence = 0
+
+    def flush() -> None:
+        nonlocal pending, pending_bytes, sequence
+        if not pending:
+            return
+        files.append(
+            _write_render_file(
+                pending,
+                root,
+                partition_path / f"part-{sequence:05d}.parquet",
+            )
+        )
+        pending = []
+        pending_bytes = 0
+        sequence += 1
+
+    for row_group in row_groups:
+        if pending and pending_bytes + row_group.nbytes > RENDER_FILE_TARGET_BYTES:
+            flush()
+        pending.append(row_group)
+        pending_bytes += row_group.nbytes
+    flush()
+    return files
 
 
 def write_render_pyramid(
@@ -194,10 +237,7 @@ def write_render_pyramid(
 
         files: list[ShardMetadata] = []
         for partition_path, partition in _render_partitions(render, lod):
-            for sequence, group in enumerate(_byte_groups(partition)):
-                files.append(
-                    _write_render_file(group, path, partition_path / f"part-{sequence:05d}.parquet")
-                )
+            files.extend(_render_files(partition, path, partition_path))
 
         levels.append(
             {
