@@ -316,10 +316,11 @@ export function App() {
       const current = { ...queryTab, sql, mapState };
       const renderStarted = performance.now();
       const result = await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current));
-      setRouteBatches(result.batches); setRenderedView(mapState); setSummary(result.summary); setScopedSummary(result.summary);
+      setRouteBatches(result.batches); setRenderedView(mapState);
       selectionReady.current = true;
+      void engine.getSummary().then(value => { setSummary(value); if (!viewportScope) setScopedSummary(value); }).catch(error => setError(error instanceof Error ? error.message : String(error)));
       setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
-      setStatus(`${result.summary.activityCount.toLocaleString()} routes selected`);
+      setStatus(`${result.selectedCount.toLocaleString()} routes selected`);
       setTabs(previous => {
         const updated = previous.map(item => item.id === queryTab.id ? current : item);
         saveTabs(updated); return updated;

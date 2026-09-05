@@ -401,22 +401,18 @@ async function configureActivitiesView(clean: boolean) {
   if (enabled === cleanViewEnabled) return;
   if (!enabled) {
     await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");
+    await connection!.query("CREATE OR REPLACE TEMP VIEW activity_geometry AS SELECT activity_id,geometry,geometry_clean,xmin,ymin,xmax,ymax,clean_xmin,clean_ymin,clean_xmax,clean_ymax FROM canonical_source");
   } else {
     await connection!.query(`CREATE OR REPLACE TEMP VIEW activities AS SELECT * REPLACE (
-      geometry_clean AS geometry,
-      geometry_clean_lod0 AS geometry_lod0,
-      geometry_clean_lod1 AS geometry_lod1,
-      geometry_clean_lod2 AS geometry_lod2,
-      geometry_clean_lod3 AS geometry_lod3,
       coalesce(clean_distance_m,distance_m) AS distance_m,
       coalesce(clean_elevation_gain_m,elevation_gain_m) AS elevation_gain_m,
       coalesce(clean_elevation_loss_m,elevation_loss_m) AS elevation_loss_m,
       coalesce(clean_min_elevation_m,min_elevation_m) AS min_elevation_m,
       coalesce(clean_max_elevation_m,max_elevation_m) AS max_elevation_m,
       clean_point_count AS point_count,
-      clean_xmin AS xmin, clean_ymin AS ymin, clean_xmax AS xmax, clean_ymax AS ymax,
-      list_filter(track_points,p->p.clean) AS track_points
+      clean_xmin AS xmin, clean_ymin AS ymin, clean_xmax AS xmax, clean_ymax AS ymax
     ) FROM activity_source`);
+    await connection!.query("CREATE OR REPLACE TEMP VIEW activity_geometry AS SELECT activity_id,geometry_clean AS geometry,geometry_clean,xmin,ymin,xmax,ymax,clean_xmin,clean_ymin,clean_xmax,clean_ymax FROM canonical_source");
   }
   cleanViewEnabled = enabled;
 }
@@ -580,11 +576,11 @@ async function render(
   }
 
   const geometry = clean ? "geometry_clean" : "geometry";
-  const distance = clean ? "coalesce(a.clean_distance_m,a.distance_m)" : "a.distance_m";
-  const gain = clean ? "coalesce(a.clean_elevation_gain_m,a.elevation_gain_m)" : "a.elevation_gain_m";
-  const maximum = clean ? "coalesce(a.clean_max_elevation_m,a.max_elevation_m)" : "a.max_elevation_m";
+  const distance = clean ? "coalesce(m.clean_distance_m,m.distance_m)" : "m.distance_m";
+  const gain = clean ? "coalesce(m.clean_elevation_gain_m,m.elevation_gain_m)" : "m.elevation_gain_m";
+  const maximum = clean ? "coalesce(m.clean_max_elevation_m,m.max_elevation_m)" : "m.max_elevation_m";
   const result = await connection!.query(
-    `SELECT a.activity_id,a.name,a.sport_type,CAST(a.start_time AS VARCHAR) start_time,${distance} distance_m,${gain} elevation_gain_m,${maximum} max_elevation_m,a.source_url,a.${geometry} FROM ${relation} a${selectionJoin()} WHERE ${viewportPredicate(bounds, clean)}`,
+    `SELECT a.activity_id,m.name,m.sport_type,CAST(m.start_time AS VARCHAR) start_time,${distance} distance_m,${gain} elevation_gain_m,${maximum} max_elevation_m,m.source_url,a.${geometry} FROM ${relation} a JOIN activities m USING(activity_id)${selectionJoin()} WHERE ${viewportPredicate(bounds, clean)}`,
   );
   const batches = binaryRouteBatches(result, geometry);
   const vertexCount = batches.reduce((total, batch) => total + batch.positions.length / 2, 0);
@@ -677,14 +673,15 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     const db = await initialize();
     const initializeMs = performance.now() - initializeStarted;
     if (request.type === "open") {
-      registeredFiles = request.files;
+      registeredCanonicalFiles = request.files;
+      registeredFiles = request.metadataFiles;
       registeredRenderLevels = new Map(
         request.renderLevels.map((level) => [level.lod, level.files]),
       );
       selectionAll = false;
       const renderFilesToRegister = request.renderLevels.flatMap((level) => level.files);
       const registrationStarted = performance.now();
-      for (const file of [...request.files, ...renderFilesToRegister]) {
+      for (const file of [...request.files, ...request.metadataFiles, ...renderFilesToRegister]) {
         if (file.buffer) {
           await db.registerFileBuffer(file.name, new Uint8Array(file.buffer));
         } else if (file.url) {
@@ -694,13 +691,15 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       const registerFilesMs = performance.now() - registrationStarted;
       const activitySourceStarted = performance.now();
       await connection!.query(
-        `CREATE OR REPLACE VIEW activity_source AS ${canonicalSourceSql(request.files)}`,
+        `CREATE OR REPLACE VIEW activity_source AS ${parquetRelation(request.metadataFiles, false)}`,
       );
       const activitySourceViewMs = performance.now() - activitySourceStarted;
+      await connection!.query(`CREATE OR REPLACE VIEW canonical_source AS ${canonicalSourceSql(request.files)}`);
+      await connection!.query("CREATE OR REPLACE TEMP VIEW activity_geometry AS SELECT activity_id,geometry,geometry_clean,xmin,ymin,xmax,ymax,clean_xmin,clean_ymin,clean_xmax,clean_ymax FROM canonical_source");
       const activitiesStarted = performance.now();
       await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");
       const activitiesViewMs = performance.now() - activitiesStarted;
-      supportsClean = ["1.2.0", "1.3.0", "1.4.0"].includes(request.schemaVersion);
+      supportsClean = ["1.2.0", "1.3.0", "1.4.0", "1.5.0"].includes(request.schemaVersion);
       cleanViewEnabled = false;
       respond(request.id, {
         initializeMs,
@@ -720,7 +719,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       const geometry = clean ? "geometry_clean" : "geometry";
       const points = clean ? "list_filter(track_points,p->p.clean)" : "track_points";
       const table = await connection!.query(
-        `SELECT activity_id,name,sport_type,CAST(start_time AS VARCHAR) start_time,${clean ? "coalesce(clean_distance_m,distance_m)" : "distance_m"} distance_m,${clean ? "coalesce(clean_elevation_gain_m,elevation_gain_m)" : "elevation_gain_m"} elevation_gain_m,${clean ? "coalesce(clean_max_elevation_m,max_elevation_m)" : "max_elevation_m"} max_elevation_m,source_url,${geometry} geometry,list_transform(${points},p->[p.longitude,p.latitude,p.elevation_m]) elevation_profile FROM activities WHERE activity_id='${request.activityId.replaceAll("'", "''")}' LIMIT 1`,
+        `SELECT activity_id,name,sport_type,CAST(start_time AS VARCHAR) start_time,${clean ? "coalesce(clean_distance_m,distance_m)" : "distance_m"} distance_m,${clean ? "coalesce(clean_elevation_gain_m,elevation_gain_m)" : "elevation_gain_m"} elevation_gain_m,${clean ? "coalesce(clean_max_elevation_m,max_elevation_m)" : "max_elevation_m"} max_elevation_m,source_url,${geometry} geometry,list_transform(${points},p->[p.longitude,p.latitude,p.elevation_m]) elevation_profile FROM canonical_source WHERE activity_id='${request.activityId.replaceAll("'", "''")}' LIMIT 1`,
       );
       const row = table.toArray()[0] as unknown as Record<string, unknown> | undefined;
       self.postMessage({
@@ -814,6 +813,9 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       );
     }
 
+    const selectedCount = selectionAll
+      ? registeredFiles.reduce((total, file) => total + file.rowCount, 0)
+      : Number(scalar((await connection!.query("SELECT count(*) total FROM current_selection")).toArray()[0]?.total ?? 0));
     const clean = request.clean && supportsClean;
     const viewport = await render(
       request.lod,
@@ -822,10 +824,9 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       clean,
       request.startingVertexEstimate,
     );
-    const summary = await summarize(undefined, clean);
     respond(request.id, {
       queryId: String(request.id),
-      summary,
+      selectedCount,
       renderPlan: { type: "arrow", activityIds: [] },
       ...viewport,
     });

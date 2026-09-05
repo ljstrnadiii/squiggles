@@ -43,7 +43,7 @@ spatial_candidate_ids AS MATERIALIZED (
     AND a.ymax >= ${number(ymin)} AND a.ymin <= ${number(ymax)}
 )
 SELECT a.activity_id
-FROM activities a
+FROM activity_geometry a
 SEMI JOIN spatial_candidate_ids c USING(activity_id)
 CROSS JOIN spatial_polygon
 WHERE ${predicate}`;

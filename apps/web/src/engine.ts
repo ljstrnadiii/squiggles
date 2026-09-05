@@ -301,7 +301,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
           });
     const manifestMs = performance.now() - manifestStarted;
 
-    if (!["1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0"].includes(manifest.schema_version)) {
+    if (!["1.5.0"].includes(manifest.schema_version)) {
       throw new Error(`Unsupported dataset schema ${manifest.schema_version}`);
     }
     if (!manifest.render_levels?.length || manifest.render_levels.some((level) => !level.files)) {
@@ -309,6 +309,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     }
 
     const files: WorkerFile[] = [];
+    const metadataFiles: WorkerFile[] = [];
     const renderLevels: WorkerRenderLevel[] = [];
     const workerFile = (entry: DatasetFileManifest, buffer?: ArrayBuffer): WorkerFile => ({
       name: entry.path,
@@ -329,10 +330,12 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     const renderEntries = manifest.render_levels.flatMap((level) =>
       level.files.map((file) => ({ lod: level.lod, file })),
     );
-    const totalEntries = manifest.shards.length + renderEntries.length;
+    const metadataEntries = manifest.metadata ?? [];
+    const totalEntries = manifest.shards.length + metadataEntries.length + renderEntries.length;
 
     if (source.kind === "url") {
       for (const shard of manifest.shards) files.push(workerFile(shard));
+      for (const entry of metadataEntries) metadataFiles.push(workerFile(entry));
       for (const level of manifest.render_levels) {
         renderLevels.push({ lod: level.lod, files: level.files.map((file) => workerFile(file)) });
       }
@@ -353,6 +356,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       };
 
       for (const shard of manifest.shards) files.push(await load(shard));
+      for (const entry of metadataEntries) metadataFiles.push(await load(entry));
       for (const level of manifest.render_levels) {
         const levelFiles: WorkerFile[] = [];
         for (const entry of level.files) levelFiles.push(await load(entry));
@@ -366,6 +370,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     const openRequest = {
       type: "open",
       files,
+      metadataFiles,
       renderLevels,
       schemaVersion: manifest.schema_version,
     };
@@ -373,7 +378,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     try {
       const workerTiming = await this.request<WorkerOpenTiming>(
         openRequest,
-        [...files, ...allRenderFiles].flatMap((file) => (file.buffer ? [file.buffer] : [])),
+        [...files, ...metadataFiles, ...allRenderFiles].flatMap((file) => (file.buffer ? [file.buffer] : [])),
       );
       perf("worker-open-phases", {
         initializeMs: Math.round(workerTiming.initializeMs),
@@ -389,7 +394,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
         formatDuckDBDiagnostic(openRequest, error, {
           dataset: name,
           schemaVersion: manifest.schema_version,
-          files: [...files.map((file) => file.name), ...allRenderFiles.map((file) => file.name)],
+          files: [...files.map((file) => file.name), ...metadataFiles.map((file) => file.name), ...allRenderFiles.map((file) => file.name)],
         }),
       );
     }
