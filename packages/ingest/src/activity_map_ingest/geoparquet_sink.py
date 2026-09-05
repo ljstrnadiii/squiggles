@@ -91,8 +91,7 @@ def _mercator_xy(longitude: float, latitude: float) -> tuple[float, float]:
     latitude = max(-_WEB_MERCATOR_MAX_LAT, min(_WEB_MERCATOR_MAX_LAT, latitude))
     return (
         _WEB_MERCATOR_RADIUS_M * math.radians(longitude),
-        _WEB_MERCATOR_RADIUS_M
-        * math.log(math.tan(math.pi / 4 + math.radians(latitude) / 2)),
+        _WEB_MERCATOR_RADIUS_M * math.log(math.tan(math.pi / 4 + math.radians(latitude) / 2)),
     )
 
 
@@ -221,13 +220,10 @@ def _write_render_file(
     }
 
 
-def _render_files(
-    table: Table[RenderActivitySchema], root: Path, lod: int
-) -> list[ShardMetadata]:
+def _render_files(table: Table[RenderActivitySchema], root: Path, lod: int) -> list[ShardMetadata]:
     ordered = _str_order(table, RENDER_ROW_GROUP_TARGET_BYTES)
     row_groups = [
-        _secondary_order(group)
-        for group in _byte_groups(ordered, RENDER_ROW_GROUP_TARGET_BYTES)
+        _secondary_order(group) for group in _byte_groups(ordered, RENDER_ROW_GROUP_TARGET_BYTES)
     ]
     files: list[ShardMetadata] = []
     pending: list[Table[RenderActivitySchema]] = []
