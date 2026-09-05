@@ -1,0 +1,76 @@
+name: Fix metadata split
+on:
+  push:
+    branches: [perf/metadata-overview-split]
+permissions:
+  contents: write
+jobs:
+  fix:
+    if: "${{ github.event.head_commit.message != 'fix: align split tests and formatting' }}"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: perf/metadata-overview-split
+      - name: Patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('apps/web/src/App.test.tsx')
+          text = p.read_text()
+          text = text.replace(
+              'return { queryId: "1", lod: 1,',
+              'return { queryId: "1", selectedCount: 1, lod: 1,',
+              1,
+          )
+          p.write_text(text)
+
+          p = Path('apps/web/src/spatialSql.duckdb.test.ts')
+          text = p.read_text()
+          anchor = '    `);\n\n    for (const predicate of ["intersects", "within"] as const) {'
+          replacement = (
+              '    `);\n'
+              '    connection.query("CREATE TEMP VIEW activity_geometry AS SELECT * FROM activities");\n\n'
+              '    for (const predicate of ["intersects", "within"] as const) {'
+          )
+          if anchor not in text:
+              raise SystemExit('spatial test anchor missing')
+          p.write_text(text.replace(anchor, replacement, 1))
+
+          p = Path('packages/ingest/src/activity_map_ingest/compiler.py')
+          text = p.read_text()
+          text = text.replace(
+              '        manifest = _finalize_dataset(rejects, Path(output_tmp), sink.shards, metadata_sink.files, render_sink.levels)\n',
+              '        manifest = _finalize_dataset(\n'
+              '            rejects, Path(output_tmp), sink.shards, metadata_sink.files, render_sink.levels\n'
+              '        )\n',
+          )
+          text = text.replace(
+              '        if any(name.startswith("geometry") or name == "track_points" for name in table.column_names):\n',
+              '        if any(\n'
+              '            name.startswith("geometry") or name == "track_points"\n'
+              '            for name in table.column_names\n'
+              '        ):\n',
+          )
+          old = '            allowed = {"activity_id", "xmin", "ymin", "xmax", "ymax", "clean_xmin", "clean_ymin", "clean_xmax", "clean_ymax", "spatial_order", "vertex_count", "clean_vertex_count", "geometry", "geometry_clean"}\n'
+          new = '''            allowed = {\n                "activity_id",\n                "xmin",\n                "ymin",\n                "xmax",\n                "ymax",\n                "clean_xmin",\n                "clean_ymin",\n                "clean_xmax",\n                "clean_ymax",\n                "spatial_order",\n                "vertex_count",\n                "clean_vertex_count",\n                "geometry",\n                "geometry_clean",\n            }\n'''
+          if old not in text:
+              raise SystemExit('allowed columns anchor missing')
+          p.write_text(text.replace(old, new, 1))
+
+          p = Path('packages/ingest/src/activity_map_ingest/geoparquet_sink.py')
+          text = p.read_text()
+          old = '        tables = [BlockAccessor.for_block(block).to_arrow() for block in blocks if BlockAccessor.for_block(block).num_rows() > 0]\n'
+          new = '''        tables = [\n            BlockAccessor.for_block(block).to_arrow()\n            for block in blocks\n            if BlockAccessor.for_block(block).num_rows() > 0\n        ]\n'''
+          if old not in text:
+              raise SystemExit('metadata sink formatting anchor missing')
+          p.write_text(text.replace(old, new, 1))
+          PY
+          git rm -f scripts/apply_metadata_split.py scripts/apply_metadata_web_split.py
+          git rm -f .github/workflows/metadata-split-patch.yml .github/workflows/metadata-web-patch.yml .github/workflows/fix-metadata-split.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps packages .github scripts
+          git commit -m "fix: align split tests and formatting"
+          git push origin HEAD:perf/metadata-overview-split
