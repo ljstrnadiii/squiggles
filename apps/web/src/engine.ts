@@ -9,6 +9,26 @@ type WorkerFile={name:string;buffer?:ArrayBuffer;url?:string;bbox?:ViewportBound
 const MEBIBYTE=1024**2;
 const VIEWPORT_PREFETCH_FRACTION=0.2;
 function perf(event:string,fields:Record<string,unknown>){console.info("[squiggles:perf]",event,fields);}
+function rawError(error:unknown){return error instanceof Error?error.message:String(error);}
+function requestOperation(type:unknown){return ({open:"register Parquet files and create activity_source view",execute:"execute selection SQL",render:"render viewport",summary:"summarize selection",table:"list activities",activity:"load activity detail"} as Record<string,string>)[String(type)]??"DuckDB worker request";}
+export function formatDuckDBDiagnostic(body:object,error:unknown,extra:Record<string,unknown>={}):string{
+  const request=body as Record<string,unknown>;
+  const lines=["Squiggles DuckDB failure",`Request: ${String(request.type??"unknown")}`,`Operation: ${String(extra.operation??requestOperation(request.type))}`];
+  if(extra.dataset)lines.push(`Dataset: ${String(extra.dataset)}`);
+  if(extra.schemaVersion)lines.push(`Schema: ${String(extra.schemaVersion)}`);
+  if(typeof request.clean==="boolean")lines.push(`Clean geometry: ${request.clean}`);
+  if(typeof request.lod==="number")lines.push(`LOD: ${request.lod}`);
+  if(typeof request.budget==="number")lines.push(`Vertex budget: ${request.budget}`);
+  if(Array.isArray(request.bounds))lines.push(`Bounds: ${request.bounds.join(", ")}`);
+  const files=Array.isArray(extra.files)?extra.files.map(String):[];
+  if(files.length){
+    lines.push("",`Files (${files.length}):`,...files.slice(0,20).map(file=>`- ${file}`));
+    if(files.length>20)lines.push(`- … ${files.length-20} more`);
+  }
+  if(typeof request.sql==="string")lines.push("","SQL:",request.sql);
+  lines.push("","DuckDB error:",rawError(error));
+  return lines.join("\n");
+}
 export class BrowserDuckDBEngine implements ExecutionEngine {
   private worker=new Worker(new URL("./duckdb.worker.ts",import.meta.url),{type:"module"}); private id=0; private clean=false; private pending=new Map<number,{resolve:(value:unknown)=>void;reject:(error:Error)=>void}>();
   private datasetRevision=0; private selectionKey=""; private cache=new Map<string,CacheEntry>(); private cacheBytes=0; private cacheEvictions=0;
@@ -17,7 +37,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   constructor(){this.worker.onmessage=(event:MessageEvent<Result<unknown>>)=>{const call=this.pending.get(event.data.id);if(!call)return;this.pending.delete(event.data.id);if(event.data.ok)call.resolve(event.data.value);else call.reject(new Error(event.data.error));};}
   setResolution(resolution:SystemResolution){if(this.resolution===resolution)return;this.resolution=resolution;this.cache.clear();this.cacheBytes=0;}
   private request<T>(body:object,transfer:Transferable[]=[]):Promise<T>{const id=++this.id;return new Promise((resolve,reject)=>{this.pending.set(id,{resolve:resolve as (value:unknown)=>void,reject});this.worker.postMessage({id,...body},transfer);});}
-  private async networkRequest<T>(body:object):Promise<T>{for(let attempt=0;;attempt+=1)try{return await this.request<T>(body);}catch(error){if(attempt>=2||!isTransientNetworkError(error))throw error;perf("network-retry",{attempt:attempt+1,error:error instanceof Error?error.message:String(error)});await new Promise(resolve=>setTimeout(resolve,250*2**attempt));}}
+  private async networkRequest<T>(body:object):Promise<T>{for(let attempt=0;;attempt+=1)try{return await this.request<T>(body);}catch(error){if(attempt<2&&isTransientNetworkError(error)){perf("network-retry",{attempt:attempt+1,error:rawError(error)});await new Promise(resolve=>setTimeout(resolve,250*2**attempt));continue;}throw new Error(formatDuckDBDiagnostic(body,error));}}
   private requestedLod(zoom:number){return lodForZoom(zoom,this.resolution);}
   private cacheKey(zoom:number,bounds:ViewportBounds|undefined){return `${this.selectionKey}|${this.requestedLod(zoom)}|${bounds?.map(value=>value.toFixed(6)).join(",")??"all"}`;}
   private cacheResult(result:WorkerViewportResult,key:string,hit:boolean,bounds:ViewportBounds|undefined,zoom:number):ViewportResult{
@@ -54,9 +74,11 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       for(const entry of entries){let directory=source.handle;const parts=entry.path.split("/");for(const part of parts.slice(0,-1))directory=await directory.getDirectoryHandle(part);const buffer=await(await(await directory.getFileHandle(parts.at(-1)!)).getFile()).arrayBuffer();const file=workerFile(entry,buffer);if("lod" in entry)renderLevels.push({lod:Number(entry.lod),file});else files.push(file);onProgress?.(++completed,entries.length);}
     }
     const workerStarted=performance.now();
-    await this.request({type:"open",files,renderLevels,schemaVersion:manifest.schema_version},[...files,...renderLevels.map(level=>level.file)].flatMap(file=>file.buffer?[file.buffer]:[]));
-    const workerOpenMs=performance.now()-workerStarted;
     const name=source.kind==="directory"?source.handle.name:source.name;
+    const openRequest={type:"open",files,renderLevels,schemaVersion:manifest.schema_version};
+    try{await this.request(openRequest,[...files,...renderLevels.map(level=>level.file)].flatMap(file=>file.buffer?[file.buffer]:[]));}
+    catch(error){throw new Error(formatDuckDBDiagnostic(openRequest,error,{dataset:name,schemaVersion:manifest.schema_version,files:[...files.map(file=>file.name),...renderLevels.map(level=>level.file.name)]}));}
+    const workerOpenMs=performance.now()-workerStarted;
     perf("dataset-open",{dataset:name,totalMs:Math.round(performance.now()-started),manifestMs:Math.round(manifestMs),workerOpenMs:Math.round(workerOpenMs),shards:files.length,renderLevels:renderLevels.length,activityCount:manifest.activity_count});
     return{id:name,name,manifest};
   }
