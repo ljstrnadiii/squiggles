@@ -1,0 +1,53 @@
+name: Hosted map smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify production startup path
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://squiggles.io"
+
+          echo "GET $base/runtime-config.json"
+          config="$(curl --fail --silent --show-error --location --retry 2 "$base/runtime-config.json")"
+          printf '%s\n' "$config"
+          dataset_id="$(python -c 'import json,sys; print(json.load(sys.stdin)["defaultDatasetId"])' <<<"$config")"
+          test -n "$dataset_id"
+
+          manifest_url="$base/datasets/$dataset_id/dataset.json"
+          echo "GET $manifest_url"
+          manifest="$(curl --fail --silent --show-error --location --retry 2 "$manifest_url")"
+          python - <<'PY' <<<"$manifest"
+          import json, sys
+          manifest = json.load(sys.stdin)
+          assert manifest.get("render_pyramid_version") == "3", manifest.get("render_pyramid_version")
+          assert manifest.get("shards"), "manifest has no canonical shards"
+          levels = manifest.get("render_levels") or []
+          assert levels and all(level.get("files") for level in levels), "manifest has no v3 render files"
+          print("schema", manifest.get("schema_version"))
+          print("activities", manifest.get("activity_count"))
+          print("build", (manifest.get("build") or {}).get("id"))
+          print("canonical", manifest["shards"][0]["path"])
+          print("render", levels[0]["files"][0]["path"])
+          PY
+
+          canonical="$(python -c 'import json,sys; print(json.load(sys.stdin)["shards"][0]["path"])' <<<"$manifest")"
+          render="$(python -c 'import json,sys; print(json.load(sys.stdin)["render_levels"][0]["files"][0]["path"])' <<<"$manifest")"
+
+          for path in "$canonical" "$render"; do
+            url="$base/datasets/$dataset_id/$path"
+            echo "RANGE $url"
+            headers="$(mktemp)"
+            curl --fail --silent --show-error --location --retry 2 --range 0-31 --dump-header "$headers" --output /dev/null "$url"
+            cat "$headers"
+            grep -Eq '^HTTP/[^ ]+ (200|206)' "$headers"
+          done
