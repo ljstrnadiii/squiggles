@@ -8,13 +8,12 @@ import type {
   ExecutionEngine,
   QueryResult,
   QueryTab,
-  RenderLevelManifest,
   RouteActivity,
   SystemResolution,
   ViewportBounds,
   ViewportResult,
 } from "./contracts";
-import { lodForZoom, RESOLUTION_VERTEX_BUDGETS, type Lod } from "./lod";
+import { lodForView, RESOLUTION_VERTEX_BUDGETS, type Lod } from "./lod";
 import { normalizeSelectionSql } from "./querySql";
 import {
   activateRenderTab,
@@ -47,13 +46,6 @@ type WorkerFile = {
   }[];
 };
 type WorkerRenderLevel = { lod: Lod; files: WorkerFile[] };
-type LegacyRenderLevel = DatasetFileManifest & {
-  lod: Lod;
-  tolerance_m?: number | null;
-};
-type RawDatasetManifest = Omit<DatasetManifest, "render_levels"> & {
-  render_levels?: (RenderLevelManifest | LegacyRenderLevel)[];
-};
 
 const MEBIBYTE = 1024 ** 2;
 const VIEWPORT_PREFETCH_FRACTION = 0.2;
@@ -79,21 +71,8 @@ function requestOperation(type: unknown) {
   )[String(type)] ?? "DuckDB worker request";
 }
 
-function normalizeManifest(raw: RawDatasetManifest): DatasetManifest {
-  const renderLevels = raw.render_levels?.map((level): RenderLevelManifest => {
-    if ("files" in level) return level;
-    return {
-      lod: level.lod,
-      tolerance_m: level.tolerance_m ?? null,
-      row_count: level.row_count,
-      byte_size: level.byte_size,
-      bbox: level.bbox ?? raw.bbox,
-      file_count: 1,
-      row_group_count: level.row_group_count ?? level.row_groups?.length ?? 0,
-      files: [level],
-    };
-  });
-  return { ...raw, render_levels: renderLevels } as DatasetManifest;
+function latitudeForBounds(bounds: ViewportBounds | undefined, fallback = 0) {
+  return bounds ? (bounds[1] + bounds[3]) / 2 : fallback;
 }
 
 export function formatDuckDBDiagnostic(
@@ -184,28 +163,30 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     }
   }
 
-  private requestedLod(zoom: number) {
-    return lodForZoom(zoom);
+  private requestedLod(zoom: number, latitude: number) {
+    return lodForView(zoom, latitude);
   }
 
   private initialPlan(tab: QueryTab, zoom: number, bounds?: ViewportBounds) {
     if (tab.startingLod != null && !this.consumedPublishedLods.has(tab.id)) {
       this.consumedPublishedLods.add(tab.id);
       const estimateIsSafe =
-        tab.startingBounds != null &&
-        bounds != null &&
-        boundsContains(tab.startingBounds, bounds);
+        tab.startingBounds != null && bounds != null && boundsContains(tab.startingBounds, bounds);
       return {
         lod: tab.startingLod,
         startingVertexEstimate: estimateIsSafe ? tab.startingVertexEstimate : undefined,
       };
     }
-    return { lod: this.requestedLod(zoom), startingVertexEstimate: undefined };
+    return {
+      lod: this.requestedLod(zoom, latitudeForBounds(bounds, tab.mapState.latitude)),
+      startingVertexEstimate: undefined,
+    };
   }
 
   private cacheKey(zoom: number, bounds: ViewportBounds | undefined) {
+    const latitude = latitudeForBounds(bounds);
     const serializedBounds = bounds?.map((value) => value.toFixed(6)).join(",") ?? "all";
-    return `${this.selectionKey}|${this.requestedLod(zoom)}|${serializedBounds}`;
+    return `${this.selectionKey}|${this.requestedLod(zoom, latitude)}|${serializedBounds}`;
   }
 
   private cacheResult(
@@ -218,7 +199,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     if (!hit && !this.cache.has(key)) {
       const bytes = binaryBytes(result.batches);
       if (bytes <= this.cacheBudget) {
-        const requestedLod = this.requestedLod(zoom);
+        const requestedLod = this.requestedLod(zoom, latitudeForBounds(bounds));
         for (const [cachedKey, entry] of this.cache) {
           if (
             entry.requestedLod === requestedLod &&
@@ -261,7 +242,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     let matchedKey = key;
     let entry = this.cache.get(key);
     if (!entry) {
-      const requestedLod = this.requestedLod(zoom);
+      const requestedLod = this.requestedLod(zoom, latitudeForBounds(bounds));
       for (const [candidateKey, candidate] of this.cache) {
         if (
           candidate.requestedLod === requestedLod &&
@@ -294,22 +275,24 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     clearRenderPlanHints();
 
     const manifestStarted = performance.now();
-    const rawManifest =
+    const manifest =
       source.kind === "directory"
         ? (JSON.parse(
             await (await (await source.handle.getFileHandle("dataset.json")).getFile()).text(),
-          ) as RawDatasetManifest)
+          ) as DatasetManifest)
         : await fetch(`${source.baseUrl}/dataset.json`).then((response) => {
             if (!response.ok) {
               throw new Error(`Could not load dataset manifest (${response.status})`);
             }
-            return response.json() as Promise<RawDatasetManifest>;
+            return response.json() as Promise<DatasetManifest>;
           });
-    const manifest = normalizeManifest(rawManifest);
     const manifestMs = performance.now() - manifestStarted;
 
     if (!["1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0"].includes(manifest.schema_version)) {
       throw new Error(`Unsupported dataset schema ${manifest.schema_version}`);
+    }
+    if (!manifest.render_levels?.length || manifest.render_levels.some((level) => !level.files)) {
+      throw new Error("Dataset render format is stale; recompile it with the current compiler");
     }
 
     const files: WorkerFile[] = [];
@@ -330,14 +313,14 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       })),
     });
 
-    const renderEntries = (manifest.render_levels ?? []).flatMap((level) =>
+    const renderEntries = manifest.render_levels.flatMap((level) =>
       level.files.map((file) => ({ lod: level.lod, file })),
     );
     const totalEntries = manifest.shards.length + renderEntries.length;
 
     if (source.kind === "url") {
       for (const shard of manifest.shards) files.push(workerFile(shard));
-      for (const level of manifest.render_levels ?? []) {
+      for (const level of manifest.render_levels) {
         renderLevels.push({ lod: level.lod, files: level.files.map((file) => workerFile(file)) });
       }
       onProgress?.(totalEntries, totalEntries);
@@ -357,7 +340,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       };
 
       for (const shard of manifest.shards) files.push(await load(shard));
-      for (const level of manifest.render_levels ?? []) {
+      for (const level of manifest.render_levels) {
         const levelFiles: WorkerFile[] = [];
         for (const entry of level.files) levelFiles.push(await load(entry));
         renderLevels.push({ lod: level.lod, files: levelFiles });
@@ -468,7 +451,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
 
     const fetchBounds = padViewportBounds(bounds, VIEWPORT_PREFETCH_FRACTION);
     const started = performance.now();
-    const requestedLod = this.requestedLod(zoom);
+    const requestedLod = this.requestedLod(zoom, latitudeForBounds(fetchBounds));
     const result = await this.networkRequest<WorkerViewportResult>({
       type: "render",
       lod: requestedLod,
