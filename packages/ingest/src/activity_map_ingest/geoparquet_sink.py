@@ -60,6 +60,14 @@ RENDER_SCALARS = [
 ]
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _byte_groups(
     table: Table[RenderActivitySchema], target_bytes: int
 ) -> list[Table[RenderActivitySchema]]:
@@ -192,19 +200,16 @@ def _write_render_file(
 ) -> ShardMetadata:
     target = root / relative
     target.parent.mkdir(parents=True, exist_ok=True)
-    output = pa.BufferOutputStream()
-    with pq.ParquetWriter(output, row_groups[0].schema, compression="zstd") as writer:
+    with pq.ParquetWriter(target, row_groups[0].schema, compression="zstd") as writer:
         for row_group in row_groups:
             writer.write_table(row_group, row_group_size=row_group.num_rows)
-    payload = output.getvalue()
-    with target.open("wb") as handle:
-        handle.write(memoryview(payload))
+
     metadata = [_row_group_metadata(group) for group in row_groups]
     return {
         "path": f"render/{relative.as_posix()}",
         "row_count": sum(group.num_rows for group in row_groups),
-        "byte_size": payload.size,
-        "sha256": hashlib.sha256(payload).hexdigest(),
+        "byte_size": target.stat().st_size,
+        "sha256": _file_sha256(target),
         "bbox": [
             min(group["bbox"][0] for group in metadata),
             min(group["bbox"][1] for group in metadata),
@@ -362,23 +367,19 @@ class GeoParquetDataSink(Datasink[list[ShardMetadata]]):
                 target = directory / (
                     f"part-{ctx.task_idx:05d}-{sequence:03d}-{chunk_index:03d}.parquet"
                 )
-                output = pa.BufferOutputStream()
                 pq.write_table(
                     canonical,
-                    output,
+                    target,
                     compression="zstd",
                     row_group_size=self.row_group_size,
                 )
-                payload = output.getvalue()
-                with target.open("wb") as handle:
-                    handle.write(memoryview(payload))
                 source_counts = Counter(canonical["source_type"].to_pylist())
                 shards.append(
                     {
                         "path": f"activities/{target.relative_to(self.path).as_posix()}",
                         "row_count": canonical.num_rows,
-                        "byte_size": payload.size,
-                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "byte_size": target.stat().st_size,
+                        "sha256": _file_sha256(target),
                         "bbox": bounds,
                         "row_group_count": len(row_groups),
                         "row_groups": row_groups,
