@@ -70,7 +70,13 @@ render/
         part-00000.parquet
 ```
 
-A complete LOD that fits below the current ~4 MiB uncompressed Arrow target stays contiguous and normally becomes one file/one row group. Once a level grows beyond that target, the compiler partitions it by `activity_family/start_year`, spatially orders each partition, and writes whole-activity files near the same target. The 4 MiB value is an initial mobile-oriented tuning parameter, not a format guarantee.
+Three independent sizing decisions matter:
+
+- **Logical partitioning** controls pruning. Coarse LODs stay global; detail LODs may use `activity_family/start_year`.
+- **Row groups** target about **4 MiB uncompressed Arrow data** and preserve whole activities. This is the mobile-oriented range-read unit.
+- **Files** target at most about **1 GiB uncompressed Arrow data**. A logical partition therefore normally remains one Parquet file containing many ~4 MiB row groups; only unusually large partitions shard into multiple files.
+
+The 4 MiB and 1 GiB values are tuning targets, not wire-size guarantees. Parquet compression and column pruning generally make actual HTTP range transfers and stored file sizes smaller than their uncompressed Arrow estimates.
 
 This layout lets the browser choose `lod=N` from zoom without opening other levels. For arbitrary SQL, the selected activities' family/year values prune render files before exact vertex estimation or geometry reads. File and row-group bboxes then prune by viewport. Spatial bounds are indexes only: a route may extend outside the viewport or any storage partition and remains one complete activity.
 
@@ -99,9 +105,10 @@ The browser records the last resolved LOD and planned vertex estimate for each r
 ## Scale strategy
 
 - LOD-first Hive render partitions.
-- `activity_family/start_year` pruning for render levels large enough to need partitioning.
+- `activity_family/start_year` pruning for detail render levels.
 - Spatially ordered whole activities.
-- ~4 MiB mobile-oriented render chunks.
+- ~4 MiB render row groups for mobile-oriented range reads.
+- ~1 GiB maximum uncompressed file target, normally one file per logical partition.
 - Manifest file/row-group bboxes and vertex sums.
 - Column pruning and HTTP range reads.
 - Budget-driven coarser-LOD fallback for dense repeated-route hotspots.
