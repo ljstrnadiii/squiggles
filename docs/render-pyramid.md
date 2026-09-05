@@ -2,7 +2,7 @@
 
 Canonical GeoParquet remains the source of truth. Render files are derived and replaceable.
 
-Render pyramid version 3 uses Web Mercator metric simplification tolerances and physically separates every LOD so row groups never mix resolutions:
+Render pyramid version 3 uses Web Mercator metric simplification tolerances:
 
 | LOD | Tolerance |
 | ---: | ---: |
@@ -15,14 +15,29 @@ Render pyramid version 3 uses Web Mercator metric simplification tolerances and 
 | 6 | 0.5 m |
 | 7 | full geometry |
 
-The camera selects the coarsest approximately subpixel LOD for the current zoom. Low, Medium, and High are vertex budgets rather than alternate tolerance definitions. The preset budgets are 750k vertices for Low, 1.25M for Medium, and 1.75M for High.
+The render pyramid is one logical Hive-style dataset with `lod` as the first physical partition:
 
-Compiler metadata records covering bboxes plus total/min/max `vertex_count` and `clean_vertex_count` for every physical render row group. The browser uses those aggregates to estimate a viewport before geometry I/O. If the subpixel LOD exceeds the current vertex budget, the renderer moves one LOD coarser at a time until it is under budget or reaches LOD 0. This intentionally permits a small loss of visible fidelity in pathological dense hotspots in exchange for keeping interaction responsive.
+```text
+render/
+  lod=0/
+    part-00000.parquet
+  lod=1/
+    part-00000.parquet
+  ...
+  lod=5/
+    activity_family=run/
+      start_year=2025/
+        part-00000.parquet
+```
 
-Physical render grouping is byte-bounded while preserving whole activity rows. Very coarse levels therefore naturally collapse to one file / one row group for typical archives, minimizing cold-start requests, while larger archives keep the same tolerance and simply produce more physical chunks.
+A complete LOD below the current ~4 MiB uncompressed Arrow target remains contiguous. Larger levels partition by `activity_family/start_year`; files inside each partition remain byte-bounded while preserving whole activity rows. The target is deliberately a tuning parameter rather than part of the format contract.
 
-Spatial bboxes are pruning metadata, not clipping boundaries: activities remain whole features and may extend outside the current viewport or any storage chunk boundary.
+The camera selects the coarsest approximately subpixel LOD for the current zoom. Low, Medium, and High only define vertex budgets: 750k, 1.25M, and 1.75M vertices. If the preferred level exceeds budget, the renderer walks to coarser levels until it fits or reaches LOD 0.
 
-Published tabs persist their resolved starting LOD and vertex estimate as a startup hint so reopening a saved camera can select a render level without probing multiple Parquet levels. The saved LOD is not a lock; normal adaptive selection resumes after startup.
+Each render row stores `vertex_count` and `clean_vertex_count`. Compiler metadata records covering bboxes plus total/min/max vertex counts for every render file/row group. Universal selections therefore estimate candidate LODs without exploratory Parquet requests. Arbitrary SQL first selects canonical activity IDs and family/year partitions, then limits render files to those partitions before exact estimation or geometry reads.
 
-`render_pyramid_version` is written to dataset manifests and registry metadata. After a production deploy, CI scans dataset registry rows and submits derived AWS Batch rebuilds only for datasets whose render version is stale. Derived rebuilds use canonical full geometry and do not require users to upload or re-import their source archive.
+Spatial bboxes are pruning metadata, not clipping boundaries: activities remain whole features and may extend outside the current viewport or any storage partition.
+
+Published tabs persist their resolved starting LOD and vertex estimate as a one-time startup hint. Reopening a saved camera begins from that known plan; normal adaptive selection resumes afterward.
+
+`render_pyramid_version` is written to dataset manifests and registry metadata. After a production deploy, CI scans dataset registry rows and submits derived AWS Batch rebuilds for stale render versions. Derived rebuilds use canonical full geometry and do not require source re-upload or re-import.
