@@ -20,7 +20,7 @@ start_time TIMESTAMPTZ
 end_time TIMESTAMPTZ
 start_year BIGINT NOT NULL
 start_month BIGINT NOT NULL -- 1 through 12
-activity_family VARCHAR NOT NULL -- run, ride, ski, foot, water, other; Hive partition column
+activity_family VARCHAR NOT NULL -- run, ride, ski, foot, water, other
 original_start_time VARCHAR
 source_url VARCHAR
 distance_m DOUBLE
@@ -51,20 +51,16 @@ spatial_order BIGINT NOT NULL
 distance_source VARCHAR NOT NULL
 moving_time_source VARCHAR NOT NULL
 elevation_source VARCHAR NOT NULL
-Units: distance/elevation are meters, durations are seconds, timestamps are UTC.
-Full geometry and telemetry remain canonical and are internal detail data. When the Clean toggle is
-enabled and the query is run, the logical activities relation projects the clean
-geometry, bounds, summaries, point count, and filtered track_points into the normal
-column names. This lets the same SQL run before or after conservative cleaning without
-mutating the GeoParquet source. Clean reconnects the valid samples around an isolated
-spike; it does not fabricate replacement telemetry values.
 
-Example — runs containing any recorded point above 12,000 feet (3657.6 m):
+Units: distance/elevation are meters, durations are seconds, timestamps are UTC.
+The activities relation is the lightweight metadata/index dataset. Full geometry and
+track-point telemetry remain in canonical detail Parquet and are not exposed to user
+selection SQL. Render overview geometry is stored separately by LOD. When the Clean
+toggle is enabled, the logical activities relation projects clean scalar summaries,
+point count, and bounds into the normal column names so the same SQL can be reused.
+
+Example — runs whose recorded maximum elevation is at least 12,000 feet (3657.6 m):
 SELECT activity_id
 FROM activities
 WHERE lower(sport_type) LIKE '%run%'
-  AND EXISTS (
-    SELECT 1
-    FROM unnest(track_points) AS points(point)
-    WHERE point.elevation_m >= 3657.6
-  )`;
+  AND max_elevation_m >= 3657.6`;
