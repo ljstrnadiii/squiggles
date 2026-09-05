@@ -294,7 +294,9 @@ async function initialize() {
     },
   };
   const selectStarted = performance.now();
+  const selectStarted = performance.now();
   const bundle = await duckdb.selectBundle(bundles);
+  const selectBundleMs = performance.now() - selectStarted;
   const selectBundleMs = performance.now() - selectStarted;
   database = new duckdb.AsyncDuckDB(
     new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING),
