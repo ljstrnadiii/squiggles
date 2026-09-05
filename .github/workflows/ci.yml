@@ -111,7 +111,38 @@ jobs:
           file: Dockerfile.ingest
           push: true
           tags: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/squiggles-ingest:${{ github.sha }}
-      - uses: pulumi/actions@v7
+
+      # Stage only the new Batch job definition first. The currently deployed web app
+      # remains untouched while datasets are rebuilt to the new render format.
+      - name: Stage ingest compiler
+        uses: pulumi/actions@v7
+        id: pulumi-ingest
+        with:
+          command: up
+          stack-name: dev
+          work-dir: infra/aws
+          cloud-url: s3://squiggle-pulumi-state-${{ vars.AWS_ACCOUNT_ID }}-us-west-2?region=us-west-2
+          comment-on-summary: true
+          target: urn:pulumi:dev::activity-map-aws::aws:batch/jobDefinition:JobDefinition::ingest
+        env:
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+          SQUIGGLES_BUDGET_EMAIL: ${{ secrets.BUDGET_EMAIL }}
+          GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          INGEST_IMAGE: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/squiggles-ingest:${{ github.sha }}
+
+      - name: Rebuild stale render pyramids and wait
+        env:
+          METADATA_TABLE_NAME: ${{ steps.pulumi-ingest.outputs.metadataTableName }}
+          INGEST_JOB_QUEUE: ${{ steps.pulumi-ingest.outputs.ingestJobQueue }}
+          INGEST_JOB_DEFINITION: ${{ steps.pulumi-ingest.outputs.ingestJobDefinition }}
+          RENDER_PYRAMID_VERSION: "3"
+        run: python scripts/rebuild_render_pyramids.py
+
+      # Only after every stale dataset has successfully activated the new render
+      # version do we reconcile the full stack and publish the v3-only website.
+      - name: Deploy application
+        uses: pulumi/actions@v7
         id: pulumi
         with:
           command: up
@@ -125,13 +156,6 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           INGEST_IMAGE: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/squiggles-ingest:${{ github.sha }}
-      - name: Rebuild stale render pyramids
-        env:
-          METADATA_TABLE_NAME: ${{ steps.pulumi.outputs.metadataTableName }}
-          INGEST_JOB_QUEUE: ${{ steps.pulumi.outputs.ingestJobQueue }}
-          INGEST_JOB_DEFINITION: ${{ steps.pulumi.outputs.ingestJobDefinition }}
-          RENDER_PYRAMID_VERSION: "3"
-        run: python scripts/rebuild_render_pyramids.py
 
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
