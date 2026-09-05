@@ -28,7 +28,7 @@ from .schema import (
 )
 
 ShardMetadata = dict[str, Any]
-RENDER_ROW_GROUP_TARGET_BYTES = 16 * 1024 * 1024
+RENDER_ROW_GROUP_TARGET_BYTES = 4 * 1024 * 1024
 RENDER_SCALARS = [
     "activity_id",
     "name",
