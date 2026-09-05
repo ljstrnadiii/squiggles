@@ -1,17 +1,27 @@
 import { describe, expect, it } from "vitest";
 
-import { chooseLod, lodForZoom, RESOLUTION_VERTEX_BUDGETS } from "./lod";
+import {
+  chooseLod,
+  lodForView,
+  metersPerPixel,
+  RESOLUTION_VERTEX_BUDGETS,
+} from "./lod";
 
-describe("lodForZoom", () => {
-  it("advances one tolerance level every two zooms", () => {
-    expect(lodForZoom(6)).toBe(0);
-    expect(lodForZoom(8)).toBe(1);
-    expect(lodForZoom(10)).toBe(2);
-    expect(lodForZoom(12)).toBe(3);
-    expect(lodForZoom(14)).toBe(4);
-    expect(lodForZoom(16)).toBe(5);
-    expect(lodForZoom(18)).toBe(6);
-    expect(lodForZoom(20)).toBe(7);
+describe("screen-space LOD fidelity", () => {
+  it("uses Web Mercator ground resolution at the camera latitude", () => {
+    expect(metersPerPixel(12, 40)).toBeCloseTo(14.64, 1);
+    expect(metersPerPixel(12, 60)).toBeLessThan(metersPerPixel(12, 40));
+  });
+
+  it("chooses the coarsest tolerance below one rendered pixel", () => {
+    expect(lodForView(4, 40)).toBe(0);
+    expect(lodForView(6, 40)).toBe(1);
+    expect(lodForView(8, 40)).toBe(2);
+    expect(lodForView(10, 40)).toBe(3);
+    expect(lodForView(12, 40)).toBe(4);
+    expect(lodForView(14, 40)).toBe(5);
+    expect(lodForView(16, 40)).toBe(6);
+    expect(lodForView(18, 40)).toBe(7);
   });
 });
 
@@ -26,9 +36,18 @@ describe("resolution budgets", () => {
 });
 
 describe("chooseLod", () => {
-  const estimates = [20_000, 50_000, 120_000, 300_000, 700_000, 1_600_000, 3_500_000, 8_000_000];
+  const estimates = [
+    20_000,
+    50_000,
+    120_000,
+    300_000,
+    700_000,
+    1_600_000,
+    3_500_000,
+    8_000_000,
+  ];
 
-  it("keeps zoom as a fidelity ceiling even when finer detail fits", () => {
+  it("keeps screen-space fidelity as a ceiling even when finer detail fits", () => {
     expect(chooseLod(estimates, 2, RESOLUTION_VERTEX_BUDGETS.high)).toBe(2);
   });
 
