@@ -33,4 +33,9 @@ jobs:
       - run: uv run ruff format packages/ingest/src/activity_map_ingest packages/ingest/tests/test_ingest.py
       - run: uv run ruff check --fix packages/ingest/src/activity_map_ingest packages/ingest/tests/test_ingest.py
       - run: pnpm --filter @squiggles/web exec eslint src --fix
-      - run: git config user.name 'github-actions[bot]' && git config user.email '41898282+github-actions[bot]@users.noreply.github.com' && git add -A && git commit -m 'perf: finalize metadata and overview split' && git push
+      - run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'perf: finalize metadata and overview split'
+          git push
