@@ -167,8 +167,11 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     bounds?: ViewportBounds,
     viewportSize?: ViewportSize,
   ): Lod {
-    if (bounds && viewportSize?.width && viewportSize.height) {
-      return lodForViewport(bounds, viewportSize.width, viewportSize.height);
+    const map = viewportSize ? null : document.querySelector<HTMLElement>("section.map");
+    const size = viewportSize ??
+      (map ? { width: map.clientWidth, height: map.clientHeight } : undefined);
+    if (bounds && size?.width && size.height) {
+      return lodForViewport(bounds, size.width, size.height);
     }
     return lodForView(zoom);
   }
