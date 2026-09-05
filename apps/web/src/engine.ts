@@ -40,7 +40,13 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   private request<T>(body:object,transfer:Transferable[]=[]):Promise<T>{const id=++this.id;return new Promise((resolve,reject)=>{this.pending.set(id,{resolve:resolve as (value:unknown)=>void,reject});this.worker.postMessage({id,...body},transfer);});}
   private async networkRequest<T>(body:object):Promise<T>{for(let attempt=0;;attempt+=1)try{return await this.request<T>(body);}catch(error){if(attempt<2&&isTransientNetworkError(error)){perf("network-retry",{attempt:attempt+1,error:rawError(error)});await new Promise(resolve=>setTimeout(resolve,250*2**attempt));continue;}throw new Error(formatDuckDBDiagnostic(body,error));}}
   private requestedLod(zoom:number){return lodForZoom(zoom);}
-  private initialLod(tab:QueryTab,zoom:number){if(tab.startingLod!=null&&!this.consumedPublishedLods.has(tab.id)){this.consumedPublishedLods.add(tab.id);return tab.startingLod;}return this.requestedLod(zoom);}
+  private initialPlan(tab:QueryTab,zoom:number){
+    if(tab.startingLod!=null&&!this.consumedPublishedLods.has(tab.id)){
+      this.consumedPublishedLods.add(tab.id);
+      return {lod:tab.startingLod,startingVertexEstimate:tab.startingVertexEstimate};
+    }
+    return {lod:this.requestedLod(zoom),startingVertexEstimate:undefined};
+  }
   private cacheKey(zoom:number,bounds:ViewportBounds|undefined){return `${this.selectionKey}|${this.requestedLod(zoom)}|${bounds?.map(value=>value.toFixed(6)).join(",")??"all"}`;}
   private cacheResult(result:WorkerViewportResult,key:string,hit:boolean,bounds:ViewportBounds|undefined,zoom:number):ViewportResult{
     if(!hit&&!this.cache.has(key)){
@@ -93,10 +99,10 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     const nextClean=tab.style.cleanEnabled;
     const baseSql=normalizeSelectionSql(tab.sql);
     const sql=applySpatialFilterSql(baseSql,tab.spatialFilter);
-    const requestedLod=this.initialLod(tab,zoom);
-    const result=await this.networkRequest<QueryResult&WorkerViewportResult>({type:"execute",sql,lod:requestedLod,budget:RESOLUTION_VERTEX_BUDGETS[this.resolution],bounds,clean:nextClean});
+    const plan=this.initialPlan(tab,zoom);
+    const result=await this.networkRequest<QueryResult&WorkerViewportResult>({type:"execute",sql,lod:plan.lod,budget:RESOLUTION_VERTEX_BUDGETS[this.resolution],bounds,clean:nextClean,startingVertexEstimate:plan.startingVertexEstimate});
     this.clean=nextClean;this.selectionKey=`${this.datasetRevision}|${this.clean?1:0}|${sql}`;
-    perf("selection-execute",{totalMs:Math.round(performance.now()-started),zoom:Number(zoom.toFixed(2)),requestedLod,plannedLod:result.lod,selected:result.summary.activityCount,rendered:result.activityCount,vertices:result.vertexCount,geometryBytes:result.geometryBufferBytes,candidateBytes:result.scan.candidateBytes,expectedRowGroups:result.scan.expectedRowGroupCount});
+    perf("selection-execute",{totalMs:Math.round(performance.now()-started),zoom:Number(zoom.toFixed(2)),requestedLod:plan.lod,plannedLod:result.lod,selected:result.summary.activityCount,rendered:result.activityCount,vertices:result.vertexCount,geometryBytes:result.geometryBufferBytes,candidateBytes:result.scan.candidateBytes,expectedRowGroups:result.scan.expectedRowGroupCount});
     return {...result,...this.cacheResult(result,this.cacheKey(zoom,bounds),false,bounds,zoom)};
   }
   async renderViewport(zoom:number,bounds:ViewportBounds):Promise<ViewportResult>{
