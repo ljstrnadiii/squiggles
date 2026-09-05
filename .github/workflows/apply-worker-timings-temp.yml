@@ -20,31 +20,58 @@ jobs:
 
           worker = Path('apps/web/src/duckdb.worker.ts')
           text = worker.read_text()
+          anchor = 'let registeredRenderLevels = new Map<Lod, RegisteredFile[]>();\n'
+          if 'let initializationTimings =' not in text:
+              text = text.replace(anchor, anchor + 'let initializationTimings = { selectBundleMs: 0, instantiateMs: 0, connectMs: 0 };\n', 1)
+
           text = text.replace(
-              'let registeredRenderLevels = new Map<Lod, RegisteredFile[]>();\n',
-              '''let registeredRenderLevels = new Map<Lod, RegisteredFile[]>();\nlet initializationTimings = { selectBundleMs: 0, instantiateMs: 0, connectMs: 0 };\n''',
+              '  const bundle = await duckdb.selectBundle(bundles);\n',
+              '  const selectStarted = performance.now();\n  const bundle = await duckdb.selectBundle(bundles);\n  const selectBundleMs = performance.now() - selectStarted;\n',
+              1,
           )
-          old_init = '''async function initialize() {\n  if (database) return database;\n  const bundles: duckdb.DuckDBBundles = {\n    mvp: {\n      mainModule: new URL("@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm", import.meta.url).href,\n      mainWorker: new URL(\n        "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js",\n        import.meta.url,\n      ).href,\n    },\n    eh: {\n      mainModule: new URL("@duckdb/duckdb-wasm/dist/duckdb-eh.wasm", import.meta.url).href,\n      mainWorker: new URL(\n        "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js",\n        import.meta.url,\n      ).href,\n    },\n  };\n  const bundle = await duckdb.selectBundle(bundles);\n  database = new duckdb.AsyncDuckDB(\n    new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING),\n    new Worker(bundle.mainWorker!),\n  );\n  await database.instantiate(bundle.mainModule, bundle.pthreadWorker);\n  connection = await database.connect();\n  return database;\n}\n'''
-          new_init = '''async function initialize() {\n  if (database) return database;\n  const bundles: duckdb.DuckDBBundles = {\n    mvp: {\n      mainModule: new URL("@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm", import.meta.url).href,\n      mainWorker: new URL(\n        "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js",\n        import.meta.url,\n      ).href,\n    },\n    eh: {\n      mainModule: new URL("@duckdb/duckdb-wasm/dist/duckdb-eh.wasm", import.meta.url).href,\n      mainWorker: new URL(\n        "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js",\n        import.meta.url,\n      ).href,\n    },\n  };\n  const selectStarted = performance.now();\n  const bundle = await duckdb.selectBundle(bundles);\n  const selectBundleMs = performance.now() - selectStarted;\n  database = new duckdb.AsyncDuckDB(\n    new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING),\n    new Worker(bundle.mainWorker!),\n  );\n  const instantiateStarted = performance.now();\n  await database.instantiate(bundle.mainModule, bundle.pthreadWorker);\n  const instantiateMs = performance.now() - instantiateStarted;\n  const connectStarted = performance.now();\n  connection = await database.connect();\n  const connectMs = performance.now() - connectStarted;\n  initializationTimings = { selectBundleMs, instantiateMs, connectMs };\n  return database;\n}\n'''
-          if old_init not in text:
-              raise SystemExit('initialize block not found')
-          text = text.replace(old_init, new_init)
-          old_open = '''  try {\n    const db = await initialize();\n    if (request.type === "open") {\n      registeredFiles = request.files;\n      registeredRenderLevels = new Map(\n        request.renderLevels.map((level) => [level.lod, level.files]),\n      );\n      selectionAll = false;\n      const renderFilesToRegister = request.renderLevels.flatMap((level) => level.files);\n      for (const file of [...request.files, ...renderFilesToRegister]) {\n        if (file.buffer) {\n          await db.registerFileBuffer(file.name, new Uint8Array(file.buffer));\n        } else if (file.url) {\n          await db.registerFileURL(file.name, file.url, duckdb.DuckDBDataProtocol.HTTP, false);\n        }\n      }\n      await connection!.query(\n        `CREATE OR REPLACE VIEW activity_source AS ${canonicalSourceSql(request.files)}`,\n      );\n      await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");\n      supportsClean = ["1.2.0", "1.3.0", "1.4.0"].includes(request.schemaVersion);\n      cleanViewEnabled = false;\n      self.postMessage({ id: request.id, ok: true, value: true });\n      return;\n    }\n'''
-          new_open = '''  try {\n    const initializeStarted = performance.now();\n    const db = await initialize();\n    const initializeMs = performance.now() - initializeStarted;\n    if (request.type === "open") {\n      registeredFiles = request.files;\n      registeredRenderLevels = new Map(\n        request.renderLevels.map((level) => [level.lod, level.files]),\n      );\n      selectionAll = false;\n      const renderFilesToRegister = request.renderLevels.flatMap((level) => level.files);\n      const registrationStarted = performance.now();\n      for (const file of [...request.files, ...renderFilesToRegister]) {\n        if (file.buffer) {\n          await db.registerFileBuffer(file.name, new Uint8Array(file.buffer));\n        } else if (file.url) {\n          await db.registerFileURL(file.name, file.url, duckdb.DuckDBDataProtocol.HTTP, false);\n        }\n      }\n      const registerFilesMs = performance.now() - registrationStarted;\n      const activitySourceStarted = performance.now();\n      await connection!.query(\n        `CREATE OR REPLACE VIEW activity_source AS ${canonicalSourceSql(request.files)}`,\n      );\n      const activitySourceViewMs = performance.now() - activitySourceStarted;\n      const activitiesStarted = performance.now();\n      await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");\n      const activitiesViewMs = performance.now() - activitiesStarted;\n      supportsClean = ["1.2.0", "1.3.0", "1.4.0"].includes(request.schemaVersion);\n      cleanViewEnabled = false;\n      respond(request.id, {\n        initializeMs,\n        ...initializationTimings,\n        registerFilesMs,\n        activitySourceViewMs,\n        activitiesViewMs,\n      });\n      return;\n    }\n'''
-          if old_open not in text:
-              raise SystemExit('open block not found')
-          worker.write_text(text.replace(old_open, new_open))
+          text = text.replace(
+              '  await database.instantiate(bundle.mainModule, bundle.pthreadWorker);\n  connection = await database.connect();\n',
+              '  const instantiateStarted = performance.now();\n  await database.instantiate(bundle.mainModule, bundle.pthreadWorker);\n  const instantiateMs = performance.now() - instantiateStarted;\n  const connectStarted = performance.now();\n  connection = await database.connect();\n  const connectMs = performance.now() - connectStarted;\n  initializationTimings = { selectBundleMs, instantiateMs, connectMs };\n',
+              1,
+          )
+          text = text.replace(
+              '  try {\n    const db = await initialize();\n    if (request.type === "open") {\n',
+              '  try {\n    const initializeStarted = performance.now();\n    const db = await initialize();\n    const initializeMs = performance.now() - initializeStarted;\n    if (request.type === "open") {\n',
+              1,
+          )
+          text = text.replace(
+              '      const renderFilesToRegister = request.renderLevels.flatMap((level) => level.files);\n      for (const file of [...request.files, ...renderFilesToRegister]) {\n',
+              '      const renderFilesToRegister = request.renderLevels.flatMap((level) => level.files);\n      const registrationStarted = performance.now();\n      for (const file of [...request.files, ...renderFilesToRegister]) {\n',
+              1,
+          )
+          text = text.replace(
+              '      await connection!.query(\n        `CREATE OR REPLACE VIEW activity_source AS ${canonicalSourceSql(request.files)}`,\n      );\n      await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");\n',
+              '      const registerFilesMs = performance.now() - registrationStarted;\n      const activitySourceStarted = performance.now();\n      await connection!.query(\n        `CREATE OR REPLACE VIEW activity_source AS ${canonicalSourceSql(request.files)}`,\n      );\n      const activitySourceViewMs = performance.now() - activitySourceStarted;\n      const activitiesStarted = performance.now();\n      await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");\n      const activitiesViewMs = performance.now() - activitiesStarted;\n',
+              1,
+          )
+          text = text.replace(
+              '      self.postMessage({ id: request.id, ok: true, value: true });\n      return;\n',
+              '      respond(request.id, {\n        initializeMs,\n        ...initializationTimings,\n        registerFilesMs,\n        activitySourceViewMs,\n        activitiesViewMs,\n      });\n      return;\n',
+              1,
+          )
+          required = ['selectBundleMs', 'instantiateMs', 'connectMs', 'registerFilesMs', 'activitySourceViewMs', 'activitiesViewMs']
+          if not all(name in text for name in required):
+              raise SystemExit('worker timing instrumentation incomplete')
+          worker.write_text(text)
 
           engine = Path('apps/web/src/engine.ts')
           text = engine.read_text()
-          text = text.replace(
-              'type WorkerRenderLevel = { lod: Lod; files: WorkerFile[] };\n',
-              '''type WorkerRenderLevel = { lod: Lod; files: WorkerFile[] };\ntype WorkerOpenTiming = {\n  initializeMs: number;\n  selectBundleMs: number;\n  instantiateMs: number;\n  connectMs: number;\n  registerFilesMs: number;\n  activitySourceViewMs: number;\n  activitiesViewMs: number;\n};\n''',
-          )
-          text = text.replace(
-              '''      await this.request(\n        openRequest,\n        [...files, ...allRenderFiles].flatMap((file) => (file.buffer ? [file.buffer] : [])),\n      );\n''',
-              '''      const workerTiming = await this.request<WorkerOpenTiming>(\n        openRequest,\n        [...files, ...allRenderFiles].flatMap((file) => (file.buffer ? [file.buffer] : [])),\n      );\n      perf("worker-open-phases", {\n        initializeMs: Math.round(workerTiming.initializeMs),\n        selectBundleMs: Math.round(workerTiming.selectBundleMs),\n        instantiateMs: Math.round(workerTiming.instantiateMs),\n        connectMs: Math.round(workerTiming.connectMs),\n        registerFilesMs: Math.round(workerTiming.registerFilesMs),\n        activitySourceViewMs: Math.round(workerTiming.activitySourceViewMs),\n        activitiesViewMs: Math.round(workerTiming.activitiesViewMs),\n      });\n''',
-          )
+          type_anchor = 'type WorkerRenderLevel = { lod: Lod; files: WorkerFile[] };\n'
+          if 'type WorkerOpenTiming =' not in text:
+              text = text.replace(type_anchor, type_anchor + '''type WorkerOpenTiming = {\n  initializeMs: number;\n  selectBundleMs: number;\n  instantiateMs: number;\n  connectMs: number;\n  registerFilesMs: number;\n  activitySourceViewMs: number;\n  activitiesViewMs: number;\n};\n''', 1)
+          old_request = '''      await this.request(\n        openRequest,\n        [...files, ...allRenderFiles].flatMap((file) => (file.buffer ? [file.buffer] : [])),\n      );\n'''
+          new_request = '''      const workerTiming = await this.request<WorkerOpenTiming>(\n        openRequest,\n        [...files, ...allRenderFiles].flatMap((file) => (file.buffer ? [file.buffer] : [])),\n      );\n      perf("worker-open-phases", {\n        initializeMs: Math.round(workerTiming.initializeMs),\n        selectBundleMs: Math.round(workerTiming.selectBundleMs),\n        instantiateMs: Math.round(workerTiming.instantiateMs),\n        connectMs: Math.round(workerTiming.connectMs),\n        registerFilesMs: Math.round(workerTiming.registerFilesMs),\n        activitySourceViewMs: Math.round(workerTiming.activitySourceViewMs),\n        activitiesViewMs: Math.round(workerTiming.activitiesViewMs),\n      });\n'''
+          if 'perf("worker-open-phases"' not in text:
+              if old_request not in text:
+                  raise SystemExit('engine open request anchor not found')
+              text = text.replace(old_request, new_request, 1)
+          if not all(name in text for name in required):
+              raise SystemExit('engine timing instrumentation incomplete')
           engine.write_text(text)
           PY
       - name: Commit instrumentation
