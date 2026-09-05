@@ -12,10 +12,7 @@ export function activityFamilyFromCanonicalPath(path: string): string {
 
 export function canonicalSourceSql(files: CanonicalFile[]): string {
   if (!files.length) throw new Error("Dataset has no canonical files");
-  return files
-    .map((file) => {
-      const family = activityFamilyFromCanonicalPath(file.name);
-      return `SELECT *,${sqlString(family)} AS activity_family FROM read_parquet(${sqlString(file.name)},hive_partitioning=false)`;
-    })
-    .join(" UNION ALL ");
+  for (const file of files) activityFamilyFromCanonicalPath(file.name);
+  const paths = files.map((file) => sqlString(file.name)).join(",");
+  return `SELECT * FROM read_parquet([${paths}],hive_partitioning=true)`;
 }
