@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { QueryTab, ViewportResult } from "./contracts";
-import { BrowserDuckDBEngine, cacheBudget } from "./engine";
+import { BrowserDuckDBEngine, cacheBudget, formatDuckDBDiagnostic } from "./engine";
 import { lodForZoom } from "./lod";
 import { defaultTab } from "./storage";
 
@@ -103,6 +103,21 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     expect(cacheBudget("low")).toBe(128 * 1024 ** 2);
     expect(cacheBudget("medium")).toBe(256 * 1024 ** 2);
     expect(cacheBudget("high")).toBe(512 * 1024 ** 2);
+  });
+
+  it("formats copyable DuckDB diagnostics without exposing file URLs", () => {
+    const message = formatDuckDBDiagnostic(
+      { type: "execute", sql: "SELECT activity_id FROM activities", lod: 2, budget: 750000, bounds: [-105, 39, -104, 40], clean: false },
+      new Error("Invalid Error: stoi: no conversion"),
+      { dataset: "archive", schemaVersion: "1.4.0", files: ["activities/a.parquet", "render/lod-2.parquet"] },
+    );
+    expect(message).toContain("Squiggles DuckDB failure");
+    expect(message).toContain("Request: execute");
+    expect(message).toContain("Schema: 1.4.0");
+    expect(message).toContain("activities/a.parquet");
+    expect(message).toContain("SELECT activity_id FROM activities");
+    expect(message).toContain("stoi: no conversion");
+    expect(message).not.toContain("https://");
   });
 
   it("retries a transient Parquet range-request failure", async () => {
