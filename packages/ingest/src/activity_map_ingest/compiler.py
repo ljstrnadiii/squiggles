@@ -34,7 +34,7 @@ from .schema import (
     validate_arrow_table,
 )
 
-COMPILER_VERSION = "0.5.0"
+COMPILER_VERSION = "0.6.0"
 SUPPORTED = (".fit", ".fit.gz", ".gpx", ".gpx.gz", ".tcx", ".tcx.gz")
 
 
@@ -567,8 +567,6 @@ def compile_source(options: CompileOptions, adapter: ActivitySourceAdapter) -> d
             activity_count = accepted.count()
             if activity_count:
                 if options.num_cpus == 1:
-                    # Ray's hash-shuffle aggregator requires a second scheduling slot.
-                    # Preserve the single-CPU development/test path without deadlocking.
                     partitioned = accepted.sort(
                         ["activity_family", "spatial_order", "activity_id"]
                     ).repartition(target_num_rows_per_block=options.target_shard_rows)
@@ -646,22 +644,28 @@ def validate_dataset(path: Path) -> dict[str, Any]:
             if maximum is not None and maximum > target:
                 raise ValueError(f"LOD target exceeded in {shard['path']}: {geometry}")
     for level in render_levels:
-        file = path / level["path"]
-        if not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest() != level["sha256"]:
-            raise ValueError(f"missing or invalid render level: {level['path']}")
-        table = pq.ParquetFile(file).read()
-        if table.num_rows != manifest["activity_count"]:
-            raise ValueError(f"render level row count differs: {level['path']}")
-        if not pc.all(
-            pc.equal(pc.list_value_length(table["geometry"]), table["vertex_count"])
-        ).as_py():
-            raise ValueError(f"render vertex counts differ: {level['path']}")
-        if not pc.all(
-            pc.equal(pc.list_value_length(table["geometry_clean"]), table["clean_vertex_count"])
-        ).as_py():
-            raise ValueError(f"clean render vertex counts differ: {level['path']}")
-        if b"geo" not in (pq.read_schema(file).metadata or {}):
-            raise ValueError(f"GeoParquet metadata missing: {level['path']}")
+        files = level.get("files", [])
+        if not files:
+            raise ValueError(f"render level {level['lod']} contains no files")
+        level_rows = 0
+        for entry in files:
+            file = path / entry["path"]
+            if not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest() != entry["sha256"]:
+                raise ValueError(f"missing or invalid render file: {entry['path']}")
+            table = pq.ParquetFile(file).read()
+            level_rows += table.num_rows
+            if not pc.all(
+                pc.equal(pc.list_value_length(table["geometry"]), table["vertex_count"])
+            ).as_py():
+                raise ValueError(f"render vertex counts differ: {entry['path']}")
+            if not pc.all(
+                pc.equal(pc.list_value_length(table["geometry_clean"]), table["clean_vertex_count"])
+            ).as_py():
+                raise ValueError(f"clean render vertex counts differ: {entry['path']}")
+            if b"geo" not in (pq.read_schema(file).metadata or {}):
+                raise ValueError(f"GeoParquet metadata missing: {entry['path']}")
+        if level_rows != manifest["activity_count"] or level_rows != level.get("row_count"):
+            raise ValueError(f"render level row count differs: LOD {level['lod']}")
     pattern = str(path / "activities" / "activity_family=*" / "*.parquet")
     connection = duckdb.connect()
     endpoint_checks = " OR ".join(
