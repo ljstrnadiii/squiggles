@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import * as duckdb from "@duckdb/duckdb-wasm";
 
+import { canonicalSourceSql } from "./canonicalSource";
 import type {
   BinaryRouteBatch,
   ResolutionRenderPlans,
@@ -367,8 +368,8 @@ function parquetRelation(files: RegisteredFile[], hivePartitioning: boolean): st
 }
 
 function viewportRelation(files: RegisteredFile[], clean: boolean): string | null {
-  const source = parquetRelation(files, true);
-  if (!source) return null;
+  if (files.length === 0) return null;
+  const source = `(${canonicalSourceSql(files)})`;
   if (!clean) return source;
   return `(SELECT * REPLACE (
     geometry_clean AS geometry,
@@ -679,9 +680,8 @@ self.onmessage = async (event: MessageEvent<Request>) => {
           await db.registerFileURL(file.name, file.url, duckdb.DuckDBDataProtocol.HTTP, false);
         }
       }
-      const paths = request.files.map((file) => `'${file.name.replaceAll("'", "''")}'`).join(",");
       await connection!.query(
-        `CREATE OR REPLACE VIEW activity_source AS SELECT * FROM read_parquet([${paths}],hive_partitioning=true)`,
+        `CREATE OR REPLACE VIEW activity_source AS ${canonicalSourceSql(request.files)}`,
       );
       await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");
       supportsClean = ["1.2.0", "1.3.0", "1.4.0"].includes(request.schemaVersion);
