@@ -17,6 +17,13 @@
 - No NAT Gateway, RDS/Aurora, EKS, OpenSearch, ElastiCache, or always-on compute without an explicit decision.
 - Keep development infrastructure under $50/month.
 - Measure performance changes before and after when practical.
-- Do not assume MVT beats direct Arrow rendering; benchmark through `RenderPlan`.
+- Do not assume an alternate render format beats direct Arrow rendering; benchmark before introducing another render stack.
+- Prefer clear refactors and deletion of stale abstractions when touching an area; do not preserve technical debt merely to minimize the diff.
+- Optimize TypeScript, DuckDB, GeoParquet, and compiler code for straightforward human readability so domain contributors can follow the data flow without reverse engineering legacy layers.
+- Prefer one obvious implementation path over compatibility shims or parallel old/new paths unless backward compatibility is an explicit requirement.
+- Keep names and physical data-layout concepts aligned across compiler manifests, browser contracts, and DuckDB execution.
+- Any change to the physical render dataset layout, render manifest contract, fixed LOD tolerances, or compiler semantics that requires rebuilding derived render data must bump `RENDER_PYRAMID_VERSION` in the same PR. Do not merge a format-changing PR with the old version number.
+- PR CI must compile and validate the current dataset format from synthetic source data so compiler, manifest, GeoParquet, and browser contracts can be developed before merge. Never expose production AWS credentials to untrusted PR code merely to rebuild real user archives.
+- “Subpixel” render fidelity means screen-space error: choose the coarsest simplification tolerance below one rendered CSS pixel at the current Web Mercator camera scale. Do not infer route fidelity from basemap imagery GSD or provider overview metadata.
 - MCP/AI are normal API clients with no privileged data access.
-- Work in small stages; update tests and docs with behavior changes.
+- Work in coherent stages; update tests and docs with behavior changes, and avoid unnecessary intermediate data-format migrations when one complete migration is practical.

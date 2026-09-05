@@ -1,32 +1,43 @@
 import { describe, expect, it } from "vitest";
 
-import { chooseLod, lodForZoom, RESOLUTION_VERTEX_BUDGETS } from "./lod";
+import {
+  chooseLod,
+  lodForView,
+  lodForViewport,
+  metersPerPixel,
+  metersPerPixelForViewport,
+  RESOLUTION_VERTEX_BUDGETS,
+} from "./lod";
 
-describe("lodForZoom", () => {
-  it("advances one tolerance level every two zooms for low resolution", () => {
-    expect(lodForZoom(6, "low")).toBe(0);
-    expect(lodForZoom(8, "low")).toBe(1);
-    expect(lodForZoom(10, "low")).toBe(2);
-    expect(lodForZoom(12, "low")).toBe(3);
-    expect(lodForZoom(14, "low")).toBe(4);
-    expect(lodForZoom(16, "low")).toBe(5);
-    expect(lodForZoom(18, "low")).toBe(6);
-    expect(lodForZoom(20, "low")).toBe(7);
+describe("screen-space LOD fidelity", () => {
+  it("measures Web Mercator meters per CSS pixel without latitude scaling", () => {
+    expect(metersPerPixel(12)).toBeCloseTo(19.11, 1);
+    expect(metersPerPixel(12)).toBe(metersPerPixel(12));
   });
 
-  it("maps low to the old medium level and shifts medium/high finer", () => {
-    expect(lodForZoom(12, "low")).toBe(3);
-    expect(lodForZoom(12, "medium")).toBe(4);
-    expect(lodForZoom(12, "high")).toBe(5);
-    expect(lodForZoom(2, "low")).toBe(0);
-    expect(lodForZoom(2, "medium")).toBe(1);
-    expect(lodForZoom(2, "high")).toBe(2);
-    expect(lodForZoom(22, "high")).toBe(7);
+  it("derives the same resolution from projected viewport extent and CSS pixels", () => {
+    const bounds: [number, number, number, number] = [-105.5, 39.9, -105.1, 40.2];
+    const width = 1024;
+    const height = 768;
+    const resolution = metersPerPixelForViewport(bounds, width, height);
+    expect(resolution).toBeGreaterThan(0);
+    expect(lodForViewport(bounds, width, height)).toBeGreaterThanOrEqual(0);
+  });
+
+  it("chooses the coarsest tolerance below one rendered pixel", () => {
+    expect(lodForView(4)).toBe(0);
+    expect(lodForView(6)).toBe(1);
+    expect(lodForView(8)).toBe(2);
+    expect(lodForView(10)).toBe(3);
+    expect(lodForView(12)).toBe(4);
+    expect(lodForView(14)).toBe(5);
+    expect(lodForView(16)).toBe(6);
+    expect(lodForView(18)).toBe(7);
   });
 });
 
 describe("resolution budgets", () => {
-  it("shifts each preset to the next vertex budget", () => {
+  it("changes only the vertex budget", () => {
     expect(RESOLUTION_VERTEX_BUDGETS).toEqual({
       low: 750_000,
       medium: 1_250_000,
@@ -36,9 +47,18 @@ describe("resolution budgets", () => {
 });
 
 describe("chooseLod", () => {
-  const estimates = [20_000, 50_000, 120_000, 300_000, 700_000, 1_600_000, 3_500_000, 8_000_000];
+  const estimates = [
+    20_000,
+    50_000,
+    120_000,
+    300_000,
+    700_000,
+    1_600_000,
+    3_500_000,
+    8_000_000,
+  ];
 
-  it("keeps zoom as a fidelity ceiling even when finer detail fits", () => {
+  it("keeps screen-space fidelity as a ceiling even when finer detail fits", () => {
     expect(chooseLod(estimates, 2, RESOLUTION_VERTEX_BUDGETS.high)).toBe(2);
   });
 

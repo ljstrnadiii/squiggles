@@ -192,7 +192,6 @@ def test_zip_traversal_is_rejected(tmp_path: Path) -> None:
 
 
 def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
-    # Use Ray's local-compatible pipeline while keeping the fixture deliberately tiny.
     source, output = _fixture(tmp_path / "source"), tmp_path / "dataset"
     progress: list[tuple[int, int]] = []
     manifest = compile_strava(
@@ -208,6 +207,7 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
     assert manifest["activity_count"] == 2
     assert manifest["rejection_count"] == 1
     assert manifest["schema_version"] == "1.4.0"
+    assert manifest["render_pyramid_version"] == "3"
     assert all("activity_family=" in shard["path"] for shard in manifest["shards"])
     assert all("start_year=" not in shard["path"] for shard in manifest["shards"])
     assert all("start_month=" not in shard["path"] for shard in manifest["shards"])
@@ -217,18 +217,38 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
         sum(group["row_count"] for group in shard["row_groups"]) == shard["row_count"]
         for shard in manifest["shards"]
     )
-    assert [level["lod"] for level in manifest["render_levels"]] == list(range(8))
-    assert all(level["path"].startswith("render/lod-") for level in manifest["render_levels"])
+
+    levels = manifest["render_levels"]
+    assert [level["lod"] for level in levels] == list(range(8))
+    assert all(level["spatial_layout"] == "str" for level in levels)
+    assert all(level["files"] for level in levels)
     assert all(
-        sum(group["vertex_count"]["sum"] for group in level["row_groups"]) > 0
-        for level in manifest["render_levels"]
+        file["path"].startswith(f"render/lod={level['lod']}/part-")
+        for level in levels
+        for file in level["files"]
     )
     assert all(
-        group["vertex_count"]["sum"] + group["clean_vertex_count"]["sum"] <= 1_000_000
-        or group["row_count"] == 1
-        for level in manifest["render_levels"]
-        for group in level["row_groups"]
+        "activity_family=" not in file["path"] and "start_year=" not in file["path"]
+        for level in levels
+        for file in level["files"]
     )
+    assert all(level["file_count"] == len(level["files"]) for level in levels)
+    assert all(
+        sum(file["row_count"] for file in level["files"]) == manifest["activity_count"]
+        for level in levels
+    )
+    assert all(
+        sum(group["vertex_count"]["sum"] for file in level["files"] for group in file["row_groups"])
+        > 0
+        for level in levels
+    )
+    assert all(
+        group["estimated_uncompressed_bytes"] <= 4 * 1024 * 1024 or group["row_count"] == 1
+        for level in levels
+        for file in level["files"]
+        for group in file["row_groups"]
+    )
+
     activity_table = pq.ParquetFile(output / manifest["shards"][0]["path"]).read()
     assert activity_table["start_year"].to_pylist() == [2025]
     assert activity_table["start_month"].to_pylist() == [1]
@@ -262,8 +282,12 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
     published = versioned_manifest(rebuilt, "schema-1.4.0-test")
     assert published["build"]["id"] == "schema-1.4.0-test"
     assert all(
-        entry["path"].startswith("builds/schema-1.4.0-test/")
-        for entry in [*published["shards"], *published["render_levels"]]
+        entry["path"].startswith("builds/schema-1.4.0-test/") for entry in published["shards"]
+    )
+    assert all(
+        file["path"].startswith("builds/schema-1.4.0-test/render/lod=")
+        for level in published["render_levels"]
+        for file in level["files"]
     )
 
 

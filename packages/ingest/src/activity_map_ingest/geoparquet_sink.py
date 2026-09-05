@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections import Counter
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -28,12 +29,17 @@ from .schema import (
 )
 
 ShardMetadata = dict[str, Any]
-RENDER_ROW_GROUP_TARGET_VERTICES = 1_000_000
+RENDER_ROW_GROUP_TARGET_BYTES = 4 * 1024 * 1024
+RENDER_FILE_TARGET_BYTES = 1024 * 1024 * 1024
+_WEB_MERCATOR_RADIUS_M = 6_378_137.0
+_WEB_MERCATOR_MAX_LAT = 85.05112878
 RENDER_SCALARS = [
     "activity_id",
     "name",
     "sport_type",
     "start_time",
+    "start_year",
+    "activity_family",
     "distance_m",
     "elevation_gain_m",
     "max_elevation_m",
@@ -54,24 +60,98 @@ RENDER_SCALARS = [
 ]
 
 
-def _render_row_groups(
-    table: Table[RenderActivitySchema],
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _byte_groups(
+    table: Table[RenderActivitySchema], target_bytes: int
 ) -> list[Table[RenderActivitySchema]]:
-    raw = table["vertex_count"].to_pylist()
-    clean = table["clean_vertex_count"].to_pylist()
+    """Split an ordered table into whole-activity groups near an uncompressed target."""
     groups: list[Table[RenderActivitySchema]] = []
     start = 0
-    vertices = 0
-    for index, (raw_count, clean_count) in enumerate(zip(raw, clean, strict=True)):
-        next_vertices = int(raw_count) + int(clean_count)
-        if index > start and vertices + next_vertices > RENDER_ROW_GROUP_TARGET_VERTICES:
+    estimated_bytes = 0
+    for index in range(table.num_rows):
+        row_bytes = max(1, table.slice(index, 1).nbytes)
+        if index > start and estimated_bytes + row_bytes > target_bytes:
             groups.append(cast(Table[RenderActivitySchema], table.slice(start, index - start)))
             start = index
-            vertices = 0
-        vertices += next_vertices
+            estimated_bytes = 0
+        estimated_bytes += row_bytes
     if start < table.num_rows:
         groups.append(cast(Table[RenderActivitySchema], table.slice(start)))
     return groups
+
+
+def _mercator_xy(longitude: float, latitude: float) -> tuple[float, float]:
+    latitude = max(-_WEB_MERCATOR_MAX_LAT, min(_WEB_MERCATOR_MAX_LAT, latitude))
+    return (
+        _WEB_MERCATOR_RADIUS_M * math.radians(longitude),
+        _WEB_MERCATOR_RADIUS_M * math.log(math.tan(math.pi / 4 + math.radians(latitude) / 2)),
+    )
+
+
+def _str_order(
+    table: Table[RenderActivitySchema], target_bytes: int
+) -> Table[RenderActivitySchema]:
+    """Sort-Tile-Recursive order tuned for compact, roughly square viewport row groups."""
+    if table.num_rows <= 1:
+        return table
+
+    average_row_bytes = max(1.0, table.nbytes / table.num_rows)
+    target_rows = max(1, int(target_bytes / average_row_bytes))
+    leaf_count = max(1, math.ceil(table.num_rows / target_rows))
+
+    xmin = table["xmin"].to_pylist()
+    ymin = table["ymin"].to_pylist()
+    xmax = table["xmax"].to_pylist()
+    ymax = table["ymax"].to_pylist()
+    centers: list[tuple[int, float, float]] = []
+    projected_bounds: list[tuple[float, float, float, float]] = []
+    for index in range(table.num_rows):
+        left, bottom = _mercator_xy(float(xmin[index]), float(ymin[index]))
+        right, top = _mercator_xy(float(xmax[index]), float(ymax[index]))
+        projected_bounds.append((left, bottom, right, top))
+        centers.append((index, (left + right) / 2, (bottom + top) / 2))
+
+    extent_left = min(bounds[0] for bounds in projected_bounds)
+    extent_bottom = min(bounds[1] for bounds in projected_bounds)
+    extent_right = max(bounds[2] for bounds in projected_bounds)
+    extent_top = max(bounds[3] for bounds in projected_bounds)
+    width = max(1.0, extent_right - extent_left)
+    height = max(1.0, extent_top - extent_bottom)
+    aspect_ratio = width / height
+
+    # Standard STR uses sqrt(leaf_count) x-slices. Scaling by the projected
+    # extent's aspect ratio keeps leaf bboxes closer to square for map viewports.
+    x_slices = max(1, min(leaf_count, math.ceil(math.sqrt(leaf_count * aspect_ratio))))
+    slice_rows = math.ceil(table.num_rows / x_slices)
+
+    centers.sort(key=lambda item: (item[1], item[2], item[0]))
+    ordered_indices: list[int] = []
+    for offset in range(0, table.num_rows, slice_rows):
+        stripe = centers[offset : offset + slice_rows]
+        stripe.sort(key=lambda item: (item[2], item[1], item[0]))
+        ordered_indices.extend(item[0] for item in stripe)
+    return cast(Table[RenderActivitySchema], table.take(pa.array(ordered_indices, type=pa.int64())))
+
+
+def _secondary_order(table: Table[RenderActivitySchema]) -> Table[RenderActivitySchema]:
+    """Keep STR membership intact while adding locality for common non-spatial filters."""
+    return cast(
+        Table[RenderActivitySchema],
+        table.sort_by(
+            [
+                ("activity_family", "ascending"),
+                ("start_year", "ascending"),
+                ("activity_id", "ascending"),
+            ]
+        ),
+    )
 
 
 def _table_bounds(table: pa.Table) -> list[float]:
@@ -94,19 +174,100 @@ def _render_geometry(
     )
 
 
+def _row_group_metadata(table: Table[RenderActivitySchema]) -> ShardMetadata:
+    vertex = table["vertex_count"]
+    clean_vertex = table["clean_vertex_count"]
+    return {
+        "row_count": table.num_rows,
+        "bbox": _table_bounds(table),
+        "estimated_uncompressed_bytes": table.nbytes,
+        "vertex_count": {
+            "sum": pc.sum(vertex).as_py(),
+            "min": pc.min(vertex).as_py(),
+            "max": pc.max(vertex).as_py(),
+        },
+        "clean_vertex_count": {
+            "sum": pc.sum(clean_vertex).as_py(),
+            "min": pc.min(clean_vertex).as_py(),
+            "max": pc.max(clean_vertex).as_py(),
+        },
+    }
+
+
+def _write_render_file(
+    row_groups: list[Table[RenderActivitySchema]], root: Path, relative: Path
+) -> ShardMetadata:
+    target = root / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with pq.ParquetWriter(target, row_groups[0].schema, compression="zstd") as writer:
+        for row_group in row_groups:
+            writer.write_table(row_group, row_group_size=row_group.num_rows)
+
+    metadata = [_row_group_metadata(group) for group in row_groups]
+    return {
+        "path": f"render/{relative.as_posix()}",
+        "row_count": sum(group.num_rows for group in row_groups),
+        "byte_size": target.stat().st_size,
+        "sha256": _file_sha256(target),
+        "bbox": [
+            min(group["bbox"][0] for group in metadata),
+            min(group["bbox"][1] for group in metadata),
+            max(group["bbox"][2] for group in metadata),
+            max(group["bbox"][3] for group in metadata),
+        ],
+        "row_group_count": len(metadata),
+        "row_groups": metadata,
+    }
+
+
+def _render_files(table: Table[RenderActivitySchema], root: Path, lod: int) -> list[ShardMetadata]:
+    ordered = _str_order(table, RENDER_ROW_GROUP_TARGET_BYTES)
+    row_groups = [
+        _secondary_order(group) for group in _byte_groups(ordered, RENDER_ROW_GROUP_TARGET_BYTES)
+    ]
+    files: list[ShardMetadata] = []
+    pending: list[Table[RenderActivitySchema]] = []
+    pending_bytes = 0
+    sequence = 0
+
+    def flush() -> None:
+        nonlocal pending, pending_bytes, sequence
+        if not pending:
+            return
+        files.append(
+            _write_render_file(
+                pending,
+                root,
+                Path(f"lod={lod}") / f"part-{sequence:05d}.parquet",
+            )
+        )
+        pending = []
+        pending_bytes = 0
+        sequence += 1
+
+    for row_group in row_groups:
+        if pending and pending_bytes + row_group.nbytes > RENDER_FILE_TARGET_BYTES:
+            flush()
+        pending.append(row_group)
+        pending_bytes += row_group.nbytes
+    flush()
+    return files
+
+
 def write_render_pyramid(
     table: pa.Table, path: Path, progress_callback: Callable[[int, int], None] | None = None
 ) -> list[ShardMetadata]:
-    """Write immutable render artifacts from full canonical geometry."""
+    """Write immutable LOD-first render artifacts with STR-packed row groups."""
     path.mkdir(parents=True, exist_ok=True)
-    combined = table.sort_by([("spatial_order", "ascending"), ("activity_id", "ascending")])
-    levels = []
+    combined = table.sort_by([("activity_id", "ascending")])
+    levels: list[ShardMetadata] = []
     for lod, tolerance_m in enumerate(RENDER_TOLERANCES_M):
         geometry = _render_geometry(combined["geometry"], tolerance_m)
         clean_geometry = _render_geometry(combined["geometry_clean"], tolerance_m)
         arrays = [combined[name] for name in RENDER_SCALARS]
         arrays.extend(
             [
+                combined["spatial_order"],
                 pc.cast(pc.list_value_length(geometry), pa.int64()),
                 pc.cast(pc.list_value_length(clean_geometry), pa.int64()),
                 geometry,
@@ -123,44 +284,19 @@ def write_render_pyramid(
                 {**(render.schema.metadata or {}), **render_geo_metadata(_table_bounds(render))}
             ),
         )
-        payload_groups = _render_row_groups(render)
-        row_groups = []
-        for group in payload_groups:
-            row_groups.append(
-                {
-                    "row_count": group.num_rows,
-                    "bbox": _table_bounds(group),
-                    "vertex_count": {
-                        "sum": pc.sum(group["vertex_count"]).as_py(),
-                        "min": pc.min(group["vertex_count"]).as_py(),
-                        "max": pc.max(group["vertex_count"]).as_py(),
-                    },
-                    "clean_vertex_count": {
-                        "sum": pc.sum(group["clean_vertex_count"]).as_py(),
-                        "min": pc.min(group["clean_vertex_count"]).as_py(),
-                        "max": pc.max(group["clean_vertex_count"]).as_py(),
-                    },
-                }
-            )
-        target = path / f"lod-{lod}.parquet"
-        output = pa.BufferOutputStream()
-        with pq.ParquetWriter(output, render.schema, compression="zstd") as writer:
-            for group in payload_groups:
-                writer.write_table(group, row_group_size=group.num_rows)
-        payload = output.getvalue()
-        with target.open("wb") as handle:
-            handle.write(memoryview(payload))
+
+        files = _render_files(render, path, lod)
         levels.append(
             {
                 "lod": lod,
                 "tolerance_m": tolerance_m,
-                "path": f"render/{target.name}",
+                "spatial_layout": "str",
                 "row_count": render.num_rows,
-                "byte_size": payload.size,
-                "sha256": hashlib.sha256(payload).hexdigest(),
+                "byte_size": sum(int(file["byte_size"]) for file in files),
                 "bbox": _table_bounds(render),
-                "row_group_count": len(row_groups),
-                "row_groups": row_groups,
+                "file_count": len(files),
+                "row_group_count": sum(int(file["row_group_count"]) for file in files),
+                "files": files,
             }
         )
         if progress_callback:
@@ -227,23 +363,19 @@ class GeoParquetDataSink(Datasink[list[ShardMetadata]]):
                 target = directory / (
                     f"part-{ctx.task_idx:05d}-{sequence:03d}-{chunk_index:03d}.parquet"
                 )
-                output = pa.BufferOutputStream()
                 pq.write_table(
                     canonical,
-                    output,
+                    target,
                     compression="zstd",
                     row_group_size=self.row_group_size,
                 )
-                payload = output.getvalue()
-                with target.open("wb") as handle:
-                    handle.write(memoryview(payload))
                 source_counts = Counter(canonical["source_type"].to_pylist())
                 shards.append(
                     {
                         "path": f"activities/{target.relative_to(self.path).as_posix()}",
                         "row_count": canonical.num_rows,
-                        "byte_size": payload.size,
-                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "byte_size": target.stat().st_size,
+                        "sha256": _file_sha256(target),
                         "bbox": bounds,
                         "row_group_count": len(row_groups),
                         "row_groups": row_groups,
@@ -259,7 +391,7 @@ class GeoParquetDataSink(Datasink[list[ShardMetadata]]):
 
 
 class RenderPyramidDataSink(Datasink[list[ShardMetadata]]):
-    """Write one spatially ordered, render-only GeoParquet for every LOD."""
+    """Write one LOD-first render dataset with STR-packed row groups."""
 
     def __init__(self, path: str) -> None:
         self.path = path

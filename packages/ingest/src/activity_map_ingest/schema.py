@@ -97,6 +97,9 @@ class RenderActivitySchema(pa_model.DataFrameModel):
     activity_id: str
     name: str
     sport_type: str
+    activity_family: str
+    start_year: int = pa_model.Field(ge=1970, le=9999)
+    spatial_order: int = pa_model.Field(ge=0)
     point_count: int = pa_model.Field(ge=2)
     clean_point_count: int = pa_model.Field(ge=2)
     vertex_count: int = pa_model.Field(ge=2)
@@ -184,11 +187,13 @@ def geo_metadata(bounds: list[float]) -> dict[bytes, bytes]:
 
 
 def render_arrow_schema() -> pa.Schema:
+    canonical = activity_arrow_schema()
     names = [
         "activity_id",
         "name",
         "sport_type",
         "start_time",
+        "start_year",
         "distance_m",
         "elevation_gain_m",
         "max_elevation_m",
@@ -207,7 +212,6 @@ def render_arrow_schema() -> pa.Schema:
         "point_count",
         "clean_point_count",
     ]
-    canonical = activity_arrow_schema()
     fields = [canonical.field(name) for name in names]
     geometry_metadata = {
         b"ARROW:extension:name": b"geoarrow.linestring",
@@ -215,7 +219,10 @@ def render_arrow_schema() -> pa.Schema:
     }
     return pa.schema(
         [
-            *fields,
+            *fields[:5],
+            pa.field("activity_family", pa.string(), False),
+            *fields[5:],
+            pa.field("spatial_order", pa.int64(), False),
             pa.field("vertex_count", pa.int64(), False),
             pa.field("clean_vertex_count", pa.int64(), False),
             pa.field("geometry", line_type, False, metadata=geometry_metadata),
@@ -265,6 +272,4 @@ def validate_arrow_table(table: Table[ActivitySchema]) -> Table[ActivitySchema]:
     for expected_field, actual_field in zip(expected, table.schema, strict=True):
         if expected_field.type != actual_field.type:
             raise ValueError(f"invalid Arrow type for {actual_field.name}: {actual_field.type}")
-    # Pandera's PyArrow backend provides scalar/data validation; nested and extension metadata
-    # remain covered by the explicit schema checks above.
     return ActivitySchema.validate(table, lazy=True)
