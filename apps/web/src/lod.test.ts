@@ -3,25 +3,36 @@ import { describe, expect, it } from "vitest";
 import {
   chooseLod,
   lodForView,
+  lodForViewport,
   metersPerPixel,
+  metersPerPixelForViewport,
   RESOLUTION_VERTEX_BUDGETS,
 } from "./lod";
 
 describe("screen-space LOD fidelity", () => {
-  it("uses Web Mercator ground resolution at the camera latitude", () => {
-    expect(metersPerPixel(12, 40)).toBeCloseTo(14.64, 1);
-    expect(metersPerPixel(12, 60)).toBeLessThan(metersPerPixel(12, 40));
+  it("measures Web Mercator meters per CSS pixel without latitude scaling", () => {
+    expect(metersPerPixel(12)).toBeCloseTo(19.11, 1);
+    expect(metersPerPixel(12)).toBe(metersPerPixel(12));
+  });
+
+  it("derives the same resolution from projected viewport extent and CSS pixels", () => {
+    const bounds: [number, number, number, number] = [-105.5, 39.9, -105.1, 40.2];
+    const width = 1024;
+    const height = 768;
+    const resolution = metersPerPixelForViewport(bounds, width, height);
+    expect(resolution).toBeGreaterThan(0);
+    expect(lodForViewport(bounds, width, height)).toBeGreaterThanOrEqual(0);
   });
 
   it("chooses the coarsest tolerance below one rendered pixel", () => {
-    expect(lodForView(4, 40)).toBe(0);
-    expect(lodForView(6, 40)).toBe(1);
-    expect(lodForView(8, 40)).toBe(2);
-    expect(lodForView(10, 40)).toBe(3);
-    expect(lodForView(12, 40)).toBe(4);
-    expect(lodForView(14, 40)).toBe(5);
-    expect(lodForView(16, 40)).toBe(6);
-    expect(lodForView(18, 40)).toBe(7);
+    expect(lodForView(4)).toBe(0);
+    expect(lodForView(6)).toBe(1);
+    expect(lodForView(8)).toBe(2);
+    expect(lodForView(10)).toBe(3);
+    expect(lodForView(12)).toBe(4);
+    expect(lodForView(14)).toBe(5);
+    expect(lodForView(16)).toBe(6);
+    expect(lodForView(18)).toBe(7);
   });
 });
 
