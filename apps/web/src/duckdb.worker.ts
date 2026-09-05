@@ -13,8 +13,8 @@ type ArrowTable = { batches: readonly ArrowBatch[] };
 type RegisteredRowGroup = { rowCount: number; bbox: Bounds; vertexSum?: number; cleanVertexSum?: number };
 type RegisteredFile = { name: string; buffer?: ArrayBuffer; url?: string; bbox?: Bounds; byteSize: number; rowCount: number; rowGroups?: RegisteredRowGroup[] };
 type Request =
-  | { id: number; type: "open"; files: RegisteredFile[]; renderLevels: { lod: Lod; file: RegisteredFile }[]; schemaVersion: string }
-  | { id: number; type: "execute"; sql: string; lod: Lod; budget: number; bounds?: Bounds; clean: boolean }
+  | { id: number; type: "open"; files: RegisteredFile[]; renderLevels: { lod: Lod; files: RegisteredFile[] }[]; schemaVersion: string }
+  | { id: number; type: "execute"; sql: string; lod: Lod; budget: number; bounds?: Bounds; clean: boolean; startingVertexEstimate?: number }
   | { id: number; type: "render"; lod: Lod; budget: number; bounds: Bounds; clean: boolean }
   | { id: number; type: "summary"; bounds?: Bounds; clean: boolean }
   | { id: number; type: "table"; bounds?: Bounds; clean: boolean }
@@ -25,8 +25,9 @@ let connection: duckdb.AsyncDuckDBConnection | null = null;
 let supportsClean = false;
 let cleanViewEnabled = false;
 let selectionAll = false;
+let selectedPartitions: Set<string> | null = null;
 let registeredFiles: RegisteredFile[] = [];
-let registeredRenderLevels = new Map<Lod, RegisteredFile>();
+let registeredRenderLevels = new Map<Lod, RegisteredFile[]>();
 const scalar = (value: unknown) => typeof value === "bigint" ? Number(value) : value;
 const coordinates = (value: unknown): [number, number][] => value == null ? [] : Array.from(value as Iterable<Iterable<number>>, pair => Array.from(pair) as [number, number]);
 
@@ -110,9 +111,7 @@ export function binaryRouteBatches(table: ArrowTable, geometryName: string): Bin
     const values = primitiveCoordinates?.values;
     const pairOffsets = fixedCoordinates?.valueOffsets instanceof Int32Array ? fixedCoordinates.valueOffsets : null;
     const fixedPairs = fixedCoordinates?.stride === 2;
-    if (!(offsets instanceof Int32Array) || !(values instanceof Float64Array) || (!fixedPairs && pairOffsets === null)) {
-      return materializedRouteBatch(batch, geometry, columns);
-    }
+    if (!(offsets instanceof Int32Array) || !(values instanceof Float64Array) || (!fixedPairs && pairOffsets === null)) return materializedRouteBatch(batch, geometry, columns);
     const firstPoint = offsets[0];
     const lastPoint = offsets[batch.numRows];
     const firstValue = fixedPairs ? firstPoint * 2 : pairOffsets![firstPoint];
@@ -129,24 +128,15 @@ export function binaryRouteBatches(table: ArrowTable, geometryName: string): Bin
       const routeStart = offsets[activityIndex] - firstPoint;
       const routeEnd = offsets[activityIndex + 1] - firstPoint;
       if (routeEnd <= routeStart) continue;
-      starts.push(routeStart);
-      owners.push(activityIndex);
+      starts.push(routeStart); owners.push(activityIndex);
       for (let point = routeStart + 1; point < routeEnd; point += 1) {
         const previous: [number, number] = [positions[(point - 1) * 2], positions[(point - 1) * 2 + 1]];
         const current: [number, number] = [positions[point * 2], positions[point * 2 + 1]];
-        if (distanceMeters(previous, current) > 20_000) {
-          starts.push(point);
-          owners.push(activityIndex);
-        }
+        if (distanceMeters(previous, current) > 20_000) { starts.push(point); owners.push(activityIndex); }
       }
     }
     starts.push(positions.length / 2);
-    return {
-      activities: Array.from({ length: batch.numRows }, (_, index) => metadataAt(columns, index)),
-      positions,
-      startIndices: Uint32Array.from(starts),
-      segmentActivityIndices: Uint32Array.from(owners),
-    };
+    return { activities: Array.from({ length: batch.numRows }, (_, index) => metadataAt(columns, index)), positions, startIndices: Uint32Array.from(starts), segmentActivityIndices: Uint32Array.from(owners) };
   });
 }
 
@@ -154,16 +144,12 @@ function transferables(value: unknown): Transferable[] {
   if (!value || typeof value !== "object" || !("batches" in value)) return [];
   const buffers = new Set<ArrayBuffer>();
   for (const batch of (value as { batches: BinaryRouteBatch[] }).batches) {
-    for (const array of [batch.positions, batch.startIndices, batch.segmentActivityIndices]) {
-      if (array.buffer instanceof ArrayBuffer) buffers.add(array.buffer);
-    }
+    for (const array of [batch.positions, batch.startIndices, batch.segmentActivityIndices]) if (array.buffer instanceof ArrayBuffer) buffers.add(array.buffer);
   }
   return [...buffers];
 }
 
-function respond(id: number, value: unknown) {
-  self.postMessage({ id, ok: true, value }, transferables(value));
-}
+function respond(id: number, value: unknown) { self.postMessage({ id, ok: true, value }, transferables(value)); }
 
 async function initialize() {
   if (database) return database;
@@ -207,9 +193,7 @@ function boundsIntersect(left: Bounds | undefined, right: Bounds | undefined): b
 
 function viewportScan(bounds?: Bounds, source = registeredFiles) {
   const files = bounds ? source.filter(file => boundsIntersect(file.bbox, bounds)) : source;
-  const groups = (file: RegisteredFile): RegisteredRowGroup[] => file.rowGroups?.length
-    ? file.rowGroups
-    : [{ rowCount: file.rowCount, bbox: file.bbox ?? [-180, -90, 180, 90] }];
+  const groups = (file: RegisteredFile): RegisteredRowGroup[] => file.rowGroups?.length ? file.rowGroups : [{ rowCount: file.rowCount, bbox: file.bbox ?? [-180, -90, 180, 90] }];
   const candidateGroups = files.flatMap(groups);
   const expectedGroups = bounds ? candidateGroups.filter(group => boundsIntersect(group.bbox, bounds)) : candidateGroups;
   return {
@@ -228,10 +212,15 @@ function viewportScan(bounds?: Bounds, source = registeredFiles) {
   };
 }
 
-function viewportRelation(files: RegisteredFile[], clean: boolean): string | null {
+function parquetRelation(files: RegisteredFile[], hivePartitioning: boolean): string | null {
   if (files.length === 0) return null;
   const paths = files.map(file => `'${file.name.replaceAll("'", "''")}'`).join(",");
-  const source = `read_parquet([${paths}],hive_partitioning=true)`;
+  return `read_parquet([${paths}],hive_partitioning=${hivePartitioning})`;
+}
+
+function viewportRelation(files: RegisteredFile[], clean: boolean): string | null {
+  const source = parquetRelation(files, true);
+  if (!source) return null;
   if (!clean) return source;
   return `(SELECT * REPLACE (
     geometry_clean AS geometry,
@@ -253,84 +242,86 @@ function viewportRelation(files: RegisteredFile[], clean: boolean): string | nul
 async function configureActivitiesView(clean: boolean) {
   const enabled = clean && supportsClean;
   if (enabled === cleanViewEnabled) return;
-  if (!enabled) {
-    await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");
-  } else {
-    await connection!.query(`CREATE OR REPLACE TEMP VIEW activities AS SELECT * REPLACE (
-      geometry_clean AS geometry,
-      geometry_clean_lod0 AS geometry_lod0,
-      geometry_clean_lod1 AS geometry_lod1,
-      geometry_clean_lod2 AS geometry_lod2,
-      geometry_clean_lod3 AS geometry_lod3,
-      coalesce(clean_distance_m,distance_m) AS distance_m,
-      coalesce(clean_elevation_gain_m,elevation_gain_m) AS elevation_gain_m,
-      coalesce(clean_elevation_loss_m,elevation_loss_m) AS elevation_loss_m,
-      coalesce(clean_min_elevation_m,min_elevation_m) AS min_elevation_m,
-      coalesce(clean_max_elevation_m,max_elevation_m) AS max_elevation_m,
-      clean_point_count AS point_count,
-      clean_xmin AS xmin, clean_ymin AS ymin, clean_xmax AS xmax, clean_ymax AS ymax,
-      list_filter(track_points,p->p.clean) AS track_points
-    ) FROM activity_source`);
-  }
+  if (!enabled) await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");
+  else await connection!.query(`CREATE OR REPLACE TEMP VIEW activities AS SELECT * REPLACE (
+    geometry_clean AS geometry,
+    geometry_clean_lod0 AS geometry_lod0,
+    geometry_clean_lod1 AS geometry_lod1,
+    geometry_clean_lod2 AS geometry_lod2,
+    geometry_clean_lod3 AS geometry_lod3,
+    coalesce(clean_distance_m,distance_m) AS distance_m,
+    coalesce(clean_elevation_gain_m,elevation_gain_m) AS elevation_gain_m,
+    coalesce(clean_elevation_loss_m,elevation_loss_m) AS elevation_loss_m,
+    coalesce(clean_min_elevation_m,min_elevation_m) AS min_elevation_m,
+    coalesce(clean_max_elevation_m,max_elevation_m) AS max_elevation_m,
+    clean_point_count AS point_count,
+    clean_xmin AS xmin, clean_ymin AS ymin, clean_xmax AS xmax, clean_ymax AS ymax,
+    list_filter(track_points,p->p.clean) AS track_points
+  ) FROM activity_source`);
   cleanViewEnabled = enabled;
 }
 
-function selectionJoin(): string {
-  return selectionAll ? "" : " SEMI JOIN current_selection s USING(activity_id)";
+function selectionJoin(): string { return selectionAll ? "" : " SEMI JOIN current_selection s USING(activity_id)"; }
+
+function filePartitionKey(file: RegisteredFile): string | null {
+  const family = /activity_family=([^/]+)/.exec(file.name)?.[1];
+  const year = /start_year=([^/]+)/.exec(file.name)?.[1];
+  return family && year ? `${family}/${year}` : null;
+}
+
+function renderFiles(level: Lod): RegisteredFile[] {
+  const files = registeredRenderLevels.get(level) ?? [];
+  if (selectionAll || selectedPartitions == null) return files;
+  return files.filter(file => {
+    const key = filePartitionKey(file);
+    return key == null || selectedPartitions!.has(key);
+  });
 }
 
 function manifestVertexEstimate(level: Lod, bounds: Bounds | undefined, clean: boolean): number | null {
-  const file = registeredRenderLevels.get(level);
-  if (!file?.rowGroups?.length) return null;
+  const { files } = viewportScan(bounds, renderFiles(level));
   let total = 0;
-  for (const group of file.rowGroups) {
-    if (bounds && !boundsIntersect(group.bbox, bounds)) continue;
-    const vertices = clean ? group.cleanVertexSum ?? group.vertexSum : group.vertexSum;
-    if (vertices == null) return null;
-    total += vertices;
+  for (const file of files) {
+    for (const group of file.rowGroups ?? []) {
+      if (bounds && !boundsIntersect(group.bbox, bounds)) continue;
+      const vertices = clean ? group.cleanVertexSum ?? group.vertexSum : group.vertexSum;
+      if (vertices == null) return null;
+      total += vertices;
+    }
   }
   return total;
 }
 
-function availableRenderLods(): Lod[] {
-  return [...registeredRenderLevels.keys()].sort((left, right) => left - right);
-}
-
-function clampAvailableLod(requested: Lod): Lod {
-  const levels = availableRenderLods();
-  if (!levels.length) return Math.min(requested, 4) as Lod;
-  return levels.filter(level => level <= requested).at(-1) ?? levels[0];
-}
-
-function previousAvailableLod(current: Lod): Lod | null {
-  return availableRenderLods().filter(level => level < current).at(-1) ?? null;
-}
+function availableRenderLods(): Lod[] { return [...registeredRenderLevels.keys()].sort((left, right) => left - right); }
+function clampAvailableLod(requested: Lod): Lod { const levels = availableRenderLods(); if (!levels.length) throw new Error("Dataset has no render pyramid; recompile it with the current Squiggles compiler"); return levels.filter(level => level <= requested).at(-1) ?? levels[0]; }
+function previousAvailableLod(current: Lod): Lod | null { return availableRenderLods().filter(level => level < current).at(-1) ?? null; }
 
 async function exactVertexEstimate(level: Lod, bounds: Bounds | undefined, clean: boolean): Promise<number> {
-  const file = registeredRenderLevels.get(level);
-  if (!file) return Number.POSITIVE_INFINITY;
+  const { files } = viewportScan(bounds, renderFiles(level));
+  const relation = parquetRelation(files, false);
+  if (!relation) return 0;
   const geometryCount = clean ? "clean_vertex_count" : "vertex_count";
-  const relation = `read_parquet('${file.name.replaceAll("'", "''")}')`;
   const estimate = await connection!.query(`SELECT coalesce(sum(a.${geometryCount}),0) total FROM ${relation} a${selectionJoin()} WHERE ${viewportPredicate(bounds, clean)}`);
   const row = estimate.toArray()[0] as unknown as Record<string, unknown>;
   return Number(scalar(row.total));
 }
 
-async function planRenderLod(requested: Lod, budget: number, bounds: Bounds | undefined, clean: boolean): Promise<{ lod: Lod; estimate: number }> {
+async function planRenderLod(requested: Lod, budget: number, bounds: Bounds | undefined, clean: boolean, startingEstimate?: number): Promise<{ lod: Lod; estimate: number }> {
   let level = clampAvailableLod(requested);
+  let publishedEstimate = startingEstimate;
   while (true) {
-    const cheap = selectionAll ? manifestVertexEstimate(level, bounds, clean) : null;
-    const estimate = cheap != null && cheap <= budget ? cheap : await exactVertexEstimate(level, bounds, clean);
+    const manifestEstimate = manifestVertexEstimate(level, bounds, clean);
+    const estimate = publishedEstimate ?? (selectionAll && manifestEstimate != null ? manifestEstimate : await exactVertexEstimate(level, bounds, clean));
     if (estimate <= budget) return { lod: level, estimate };
     const previous = previousAvailableLod(level);
     if (previous == null) return { lod: level, estimate };
     level = previous;
+    publishedEstimate = undefined;
   }
 }
 
 async function rawVertexEstimate(bounds: Bounds | undefined, fallback: number): Promise<number> {
-  const levels = availableRenderLods();
-  const full = levels.at(-1);
+  const full = availableRenderLods().at(-1);
   if (selectionAll && full != null) return manifestVertexEstimate(full, bounds, false) ?? fallback;
   if (selectionAll) return fallback;
   const estimate = await connection!.query(`SELECT coalesce(sum(a.point_count),0) total FROM current_selection a WHERE ${viewportPredicate(bounds)}`);
@@ -338,20 +329,15 @@ async function rawVertexEstimate(bounds: Bounds | undefined, fallback: number): 
   return Number(scalar(row.total));
 }
 
-async function render(lod: Lod, budget: number, bounds?: Bounds, clean = false) {
-  const plan = await planRenderLod(lod, budget, bounds, clean);
+async function render(lod: Lod, budget: number, bounds?: Bounds, clean = false, startingEstimate?: number) {
+  const plan = await planRenderLod(lod, budget, bounds, clean, startingEstimate);
   const plannedLod = plan.lod;
-  const renderFile = registeredRenderLevels.get(plannedLod);
-  const scan = viewportScan(bounds, renderFile ? [renderFile] : registeredFiles);
+  const scan = viewportScan(bounds, renderFiles(plannedLod));
   const rawEstimate = await rawVertexEstimate(bounds, plan.estimate);
   if (scan.files.length === 0) return { lod: plannedLod, batches: [], activityCount: 0, geometryBufferBytes: 0, vertexCount: 0, plannedVertexEstimate: plan.estimate, rawVertexEstimate: rawEstimate, vertexBudget: budget, scan: scan.metrics };
-  const relation = renderFile
-    ? `read_parquet('${renderFile.name.replaceAll("'", "''")}')`
-    : viewportRelation(scan.files, clean);
+  const relation = parquetRelation(scan.files, false);
   if (!relation) return { lod: plannedLod, batches: [], activityCount: 0, geometryBufferBytes: 0, vertexCount: 0, plannedVertexEstimate: 0, rawVertexEstimate: rawEstimate, vertexBudget: budget, scan: scan.metrics };
-  const geometry = renderFile
-    ? (clean ? "geometry_clean" : "geometry")
-    : plannedLod === 4 ? (clean ? "geometry_clean" : "geometry") : `geometry_${clean ? "clean_" : ""}lod${plannedLod}`;
+  const geometry = clean ? "geometry_clean" : "geometry";
   const distance = clean ? "coalesce(a.clean_distance_m,a.distance_m)" : "a.distance_m";
   const gain = clean ? "coalesce(a.clean_elevation_gain_m,a.elevation_gain_m)" : "a.elevation_gain_m";
   const maximum = clean ? "coalesce(a.clean_max_elevation_m,a.max_elevation_m)" : "a.max_elevation_m";
@@ -384,9 +370,11 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     const db = await initialize();
     if (request.type === "open") {
       registeredFiles = request.files;
-      registeredRenderLevels = new Map(request.renderLevels.map(level => [level.lod, level.file]));
+      registeredRenderLevels = new Map(request.renderLevels.map(level => [level.lod, level.files]));
       selectionAll = false;
-      for (const file of [...request.files, ...request.renderLevels.map(level => level.file)]) {
+      selectedPartitions = null;
+      const renderFiles = request.renderLevels.flatMap(level => level.files);
+      for (const file of [...request.files, ...renderFiles]) {
         if (file.buffer) await db.registerFileBuffer(file.name, new Uint8Array(file.buffer));
         else if (file.url) await db.registerFileURL(file.name, file.url, duckdb.DuckDBDataProtocol.HTTP, false);
       }
@@ -438,15 +426,18 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     await configureActivitiesView(request.clean);
     selectionAll = isUniversalSelectionSql(request.sql);
     if (selectionAll) {
+      selectedPartitions = null;
       await connection!.query("DROP TABLE IF EXISTS current_selection");
     } else {
       const probe = await connection!.query(`WITH selected AS (${request.sql}) SELECT * FROM selected LIMIT 0`);
       if (!probe.schema.fields.some(field => field.name === "activity_id")) throw new Error("SQL must return an activity_id column");
       await connection!.query("DROP TABLE IF EXISTS current_selection");
-      await connection!.query(`CREATE TEMP TABLE current_selection AS WITH selected AS (${request.sql}) SELECT DISTINCT CAST(a.activity_id AS VARCHAR) activity_id,a.point_count,a.xmin,a.ymin,a.xmax,a.ymax FROM activities a SEMI JOIN selected s USING(activity_id)`);
+      await connection!.query(`CREATE TEMP TABLE current_selection AS WITH selected AS (${request.sql}) SELECT DISTINCT CAST(a.activity_id AS VARCHAR) activity_id,a.point_count,a.xmin,a.ymin,a.xmax,a.ymax,a.activity_family,a.start_year FROM activities a SEMI JOIN selected s USING(activity_id)`);
+      const partitions = await connection!.query("SELECT DISTINCT activity_family,start_year FROM current_selection");
+      selectedPartitions = new Set(partitions.toArray().map(value => { const row = value as unknown as Record<string, unknown>; return `${String(row.activity_family)}/${Number(scalar(row.start_year))}`; }));
     }
     const clean = request.clean && supportsClean;
-    const viewport = await render(request.lod, request.budget, request.bounds, clean);
+    const viewport = await render(request.lod, request.budget, request.bounds, clean, request.startingVertexEstimate);
     const summary = await summarize(undefined, clean);
     respond(request.id, { queryId: String(request.id), summary, renderPlan: { type: "arrow", activityIds: [] }, ...viewport });
   } catch (error) {
