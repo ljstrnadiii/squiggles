@@ -8,6 +8,7 @@ describe("DuckDB worker startup", () => {
     const workerPath = fileURLToPath(new URL("./duckdb.worker.ts", import.meta.url));
     const source = readFileSync(workerPath, "utf8");
 
+    // Keep startup free of unused extension installation/loading work.
     expect(source).not.toContain("INSTALL spatial");
     expect(source).not.toContain("LOAD spatial");
   });
