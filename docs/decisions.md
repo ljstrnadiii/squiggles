@@ -7,13 +7,13 @@
 - **Browser engine:** DuckDB-Wasm in a Web Worker.
 - **Rendering:** Arrow/GeoArrow buffers into deck.gl/WebGL.
 - **Large-data rule:** avoid GeoJSON/object expansion.
-- **Spatial layout:** spatially ordered rows + manifest/file/row-group bboxes.
+- **Spatial layout:** STR-packed render row groups + manifest/file/row-group bboxes.
 - **Rendering scale:** fixed-tolerance LOD pyramid + runtime vertex budget.
-- **Render storage:** one logical render dataset, Hive-partitioned by `lod` first; large LODs additionally partition by `activity_family/start_year`.
+- **Render storage:** one logical render dataset with `lod` as the first physical partition; no family/year Hive fan-out.
 - **Geometry identity:** render activities remain whole and are never clipped to spatial tile boundaries.
 - **LOD semantics:** zoom/pixel scale selects the fidelity ceiling; Low/Medium/High change only the vertex budget.
 - **Budget fallback:** dense viewports may move to a coarser LOD to stay interactive.
-- **Viewport reads:** bbox and query-partition pruning happen from manifest metadata before geometry reads where possible.
+- **Viewport reads:** bbox pruning happens from manifest metadata before geometry reads where possible.
 - **Published startup:** persist the resolved starting LOD and vertex estimate as a one-time startup hint.
 - **Caching:** in-memory viewport geometry cache with bounded memory.
 - **Hosted delivery:** private S3 origins behind CloudFront.
@@ -30,6 +30,7 @@
 
 - PMTiles as a parallel rendering datastore.
 - Spatially clipping activities into tile fragments.
+- Render-file fan-out by `activity_family/start_year`.
 - PostGIS/RDS/Aurora as canonical storage.
 - NAT Gateway for the development architecture.
 - EKS or always-on application compute.
@@ -41,11 +42,12 @@
 ## Performance decisions
 
 - The render pyramid uses roughly one fixed-tolerance level per two zoom levels.
-- Render chunks target about 4 MiB of uncompressed Arrow data as an initial mobile-oriented tuning value; benchmark before treating it as permanent.
-- Very small/coarse LODs should naturally collapse to one file rather than being forced into analytical partitions.
-- Once an LOD grows beyond the chunk target, `activity_family/start_year` partitions provide query pruning and files remain byte-bounded within those partitions.
+- Row groups target about 4 MiB of uncompressed Arrow data as an initial mobile-oriented tuning value.
+- Render files target about 1 GiB uncompressed Arrow data so an LOD normally remains one file with many row groups.
+- STR is the primary render ordering strategy because the dominant access pattern is a rectangular viewport over all activities.
+- STR stripe count is adjusted for Web Mercator extent aspect ratio to favor compact, approximately square row-group bboxes.
+- `activity_family`, `start_year`, then `activity_id` are secondary ordering keys inside each STR group rather than physical partition keys.
 - Compiler metadata stores bbox and vertex-count aggregates so universal selections can fall back through LODs without exploratory Parquet requests.
-- Arbitrary SQL selections use the selected activities' family/year partitions to avoid unrelated render files before exact vertex estimation or geometry reads.
 - Direct Arrow rendering remains the default; alternate render stacks require benchmark evidence.
 - Performance changes should be evaluated with startup/render diagnostics and consistent dataset/query/camera inputs.
 
