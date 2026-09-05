@@ -8,13 +8,14 @@ export type MapStyle = { color: string; lineWidthScale: number; basemap: Basemap
 export type ViewportBounds = [west: number, south: number, east: number, north: number];
 export type SpatialPredicate = "intersects" | "within";
 export type SpatialFilter = { predicate: SpatialPredicate; polygon: [number, number][]; visible: boolean };
+export type RenderLod = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export type Dataset = { id: string; name: string; manifest: DatasetManifest };
 export type DatasetSource =
   | { kind: "directory"; handle: FileSystemDirectoryHandle }
   | { kind: "url"; baseUrl: string; name: string };
 export type Activity = { activityId: string; name: string; sportType: string };
-export type QueryTab = { id: string; title: string; sql: string; mapState: MapState; style: MapStyle; spatialFilter?: SpatialFilter };
+export type QueryTab = { id: string; title: string; sql: string; mapState: MapState; style: MapStyle; spatialFilter?: SpatialFilter; startingLod?: RenderLod; startingVertexEstimate?: number };
 export type SummaryStats = { activityCount: number; distanceM: number; elapsedSeconds: number; movingSeconds: number; elevationGainM: number; elevationLossM: number; minElevationM: number | null; maxElevationM: number | null; maxDistanceM: number | null; activeDays: number; droppedJumpPoints: number; droppedElevationPoints: number; sportCounts: { sport: string; count: number }[]; firstActivity: string | null; lastActivity: string | null };
 export type RenderPlan = { type: "arrow"; activityIds: string[] } | { type: "mvt"; urlTemplate: string };
 export type QueryResult = { queryId: string; summary: SummaryStats; renderPlan: RenderPlan };
@@ -23,7 +24,7 @@ export type Share = { id: string; tabId: string; datasetId: string };
 export type VertexStats = { sum: number; min: number; max: number };
 export type RowGroupManifest = { row_count: number; bbox: ViewportBounds; vertex_count?: VertexStats; clean_vertex_count?: VertexStats };
 export type DatasetFileManifest = { path: string; row_count: number; byte_size: number; sha256: string; bbox?: ViewportBounds; row_group_count?: number; row_groups?: RowGroupManifest[] };
-export type RenderLevelManifest = DatasetFileManifest & { lod: 0 | 1 | 2 | 3 | 4 };
+export type RenderLevelManifest = DatasetFileManifest & { lod: RenderLod; tolerance_m?: number | null };
 export type DatasetManifest = { schema_version: string; activity_count: number; rejection_count: number; bbox: ViewportBounds; shards: DatasetFileManifest[]; render_levels?: RenderLevelManifest[] };
 export type ElevationSample = { distanceM: number; elevationM: number; position: [number, number] };
 export type RouteMetadata = { activityId: string; name: string; sportType: string; startTime: string | null; distanceM: number | null; elevationGainM: number | null; maxElevationM: number | null; sourceUrl: string | null };
@@ -41,7 +42,7 @@ export type BinaryRouteBatch = {
 };
 export type ScanMetrics = { candidateFragmentCount: number; totalFragmentCount: number; candidateBytes: number; totalBytes: number; expectedRowGroupCount: number; candidateRowGroupCount: number; totalRowGroupCount: number; expectedRowCount: number; keptRowCount: number };
 export type RenderCacheMetrics = { hit: boolean; bytes: number; budgetBytes: number; entries: number; evictions: number };
-export type ViewportResult = { batches: BinaryRouteBatch[]; activityCount: number; geometryBufferBytes: number; lod: 0 | 1 | 2 | 3 | 4; vertexCount: number; plannedVertexEstimate: number; rawVertexEstimate: number; vertexBudget: number; scan: ScanMetrics; cache: RenderCacheMetrics };
+export type ViewportResult = { batches: BinaryRouteBatch[]; activityCount: number; geometryBufferBytes: number; lod: RenderLod; vertexCount: number; plannedVertexEstimate: number; rawVertexEstimate: number; vertexBudget: number; scan: ScanMetrics; cache: RenderCacheMetrics };
 export interface ExecutionEngine {
   setResolution(resolution: SystemResolution): void;
   openDataset(source: DatasetSource, onProgress?: (completed: number, total: number) => void): Promise<Dataset>;
