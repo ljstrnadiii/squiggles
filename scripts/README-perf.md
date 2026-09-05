@@ -1,0 +1,1 @@
+The hosted browser smoke logs slow network requests so worker-open regressions can be diagnosed from Actions without manual browser capture. Keep success-path artifacts disabled; failure-only traces/screenshots remain the default.
