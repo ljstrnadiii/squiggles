@@ -26,19 +26,19 @@ jobs:
           manifest_url="$base/datasets/$dataset_id/dataset.json"
           echo "GET $manifest_url"
           manifest="$(curl --fail --silent --show-error --location --retry 2 "$manifest_url")"
-          python - <<'PY' <<<"$manifest"
-          import json, sys
-          manifest = json.load(sys.stdin)
-          assert manifest.get("render_pyramid_version") == "3", manifest.get("render_pyramid_version")
-          assert manifest.get("shards"), "manifest has no canonical shards"
-          levels = manifest.get("render_levels") or []
-          assert levels and all(level.get("files") for level in levels), "manifest has no v3 render files"
-          print("schema", manifest.get("schema_version"))
-          print("activities", manifest.get("activity_count"))
-          print("build", (manifest.get("build") or {}).get("id"))
-          print("canonical", manifest["shards"][0]["path"])
-          print("render", levels[0]["files"][0]["path"])
-          PY
+          MANIFEST="$manifest" python -c '
+import json, os
+manifest = json.loads(os.environ["MANIFEST"])
+assert manifest.get("render_pyramid_version") == "3", manifest.get("render_pyramid_version")
+assert manifest.get("shards"), "manifest has no canonical shards"
+levels = manifest.get("render_levels") or []
+assert levels and all(level.get("files") for level in levels), "manifest has no v3 render files"
+print("schema", manifest.get("schema_version"))
+print("activities", manifest.get("activity_count"))
+print("build", (manifest.get("build") or {}).get("id"))
+print("canonical", manifest["shards"][0]["path"])
+print("render", levels[0]["files"][0]["path"])
+'
 
           canonical="$(python -c 'import json,sys; print(json.load(sys.stdin)["shards"][0]["path"])' <<<"$manifest")"
           render="$(python -c 'import json,sys; print(json.load(sys.stdin)["render_levels"][0]["files"][0]["path"])' <<<"$manifest")"
