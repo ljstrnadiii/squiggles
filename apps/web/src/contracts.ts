@@ -14,6 +14,7 @@ export type MapStyle = {
   cleanEnabled: boolean;
 };
 export type ViewportBounds = [west: number, south: number, east: number, north: number];
+export type ViewportSize = { width: number; height: number };
 export type SpatialPredicate = "intersects" | "within";
 export type SpatialFilter = {
   predicate: SpatialPredicate;
@@ -170,8 +171,13 @@ export interface ExecutionEngine {
     tab: QueryTab,
     zoom: number,
     bounds?: ViewportBounds,
+    viewportSize?: ViewportSize,
   ): Promise<QueryResult & ViewportResult>;
-  renderViewport(zoom: number, bounds: ViewportBounds): Promise<ViewportResult>;
+  renderViewport(
+    zoom: number,
+    bounds: ViewportBounds,
+    viewportSize?: ViewportSize,
+  ): Promise<ViewportResult>;
   getSummary(bounds?: ViewportBounds): Promise<SummaryStats>;
   getActivities(bounds?: ViewportBounds): Promise<ActivityListItem[]>;
   getActivity(activityId: string): Promise<RouteActivity | null>;
