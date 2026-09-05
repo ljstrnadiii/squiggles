@@ -87,6 +87,91 @@ section.toolbar[aria-label="Query and map settings"] header > button[aria-label^
   margin-left: 0 !important;
 }
 
+.enhancement-diagnostics {
+  position: fixed;
+  z-index: 1000;
+  top: 66px;
+  right: 12px;
+  width: min(520px, calc(100vw - 24px));
+  max-height: calc(100dvh - 78px);
+  overflow: auto;
+  padding: 16px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 18px 55px var(--shadow);
+}
+
+.enhancement-diagnostics header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.enhancement-diagnostics header div {
+  display: grid;
+  gap: 3px;
+}
+
+.enhancement-diagnostics header span {
+  font-size: 11px;
+  letter-spacing: .12em;
+  color: var(--muted);
+}
+
+.enhancement-diagnostics header strong {
+  font-size: 20px;
+}
+
+.enhancement-diagnostics header button {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 24px;
+}
+
+.enhancement-diagnostics table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.enhancement-diagnostics th,
+.enhancement-diagnostics td {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  font-size: 13px;
+}
+
+.enhancement-diagnostics th {
+  width: 42%;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.diagnostics-user-agent {
+  overflow-wrap: anywhere;
+}
+
+.enhancement-diagnostics p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.diagnostics-copy {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--input);
+  color: var(--text);
+}
+
 @media (max-width: 700px) {
   section.rich-stats[aria-label="Detailed selection statistics"] {
     top: auto;
@@ -132,5 +217,18 @@ section.toolbar[aria-label="Query and map settings"] header > button[aria-label^
     max-height: none;
     margin: 0;
     border-radius: 0;
+  }
+
+  .enhancement-diagnostics {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    max-height: calc(100dvh - 54px);
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 10px 10px 0 0;
   }
 }
