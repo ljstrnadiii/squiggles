@@ -22,7 +22,7 @@ import pyarrow.parquet as pq
 import ray
 from pandera.typing.pyarrow import Table
 
-from .geoparquet_sink import GeoParquetDataSink, RenderPyramidDataSink
+from .geoparquet_sink import GeoParquetDataSink, MetadataDataSink, RenderPyramidDataSink
 from .parsers import TrackPoint, checksum, clean_track, haversine_distance, parse_track, simplify
 from .render_lod import RENDER_LEVEL_COUNT, RENDER_PYRAMID_VERSION
 from .schema import (
@@ -462,6 +462,7 @@ def _finalize_dataset(
     rejects: list[dict[str, Any]],
     output: Path,
     shards: list[dict[str, Any]],
+    metadata_files: list[dict[str, Any]],
     render_levels: list[dict[str, Any]],
 ) -> dict[str, Any]:
     output.mkdir(parents=True, exist_ok=True)
@@ -508,6 +509,7 @@ def _finalize_dataset(
         "bbox": bounds,
         "first_activity": first,
         "last_activity": last,
+        "metadata": sorted(metadata_files, key=lambda item: item["path"]),
         "shards": [
             {
                 key: value
@@ -588,6 +590,10 @@ def compile_source(options: CompileOptions, adapter: ActivitySourceAdapter) -> d
                     target_shard_rows=options.target_shard_rows,
                 )
                 partitioned.write_datasink(sink)
+                metadata_sink = MetadataDataSink(str(Path(output_tmp) / "metadata"))
+                accepted.sort(["spatial_order", "activity_id"]).repartition(1).write_datasink(
+                    metadata_sink
+                )
                 render_sink = RenderPyramidDataSink(str(Path(output_tmp) / "render"))
                 accepted.sort(["spatial_order", "activity_id"]).repartition(1).write_datasink(
                     render_sink
@@ -599,7 +605,7 @@ def compile_source(options: CompileOptions, adapter: ActivitySourceAdapter) -> d
             ray.shutdown()
         if not activity_count:
             raise ValueError("no valid spatial activities were produced")
-        manifest = _finalize_dataset(rejects, Path(output_tmp), sink.shards, render_sink.levels)
+        manifest = _finalize_dataset(rejects, Path(output_tmp), sink.shards, metadata_sink.files, render_sink.levels)
         validate_dataset(Path(output_tmp))
         rate = len(rejects) / (activity_count + len(rejects))
         if options.max_rejections is not None and len(rejects) > options.max_rejections:
@@ -626,6 +632,20 @@ def validate_dataset(path: Path) -> dict[str, Any]:
     shards = manifest.get("shards", [])
     if not shards:
         raise ValueError("manifest contains no activity shards")
+    metadata_files = manifest.get("metadata", [])
+    if not metadata_files:
+        raise ValueError("manifest contains no metadata files")
+    metadata_rows = 0
+    for entry in metadata_files:
+        file = path / entry["path"]
+        if not file.is_file() or _sha256_file(file) != entry["sha256"]:
+            raise ValueError(f"missing or invalid metadata file: {entry['path']}")
+        table = pq.ParquetFile(file).read()
+        metadata_rows += table.num_rows
+        if any(name.startswith("geometry") or name == "track_points" for name in table.column_names):
+            raise ValueError(f"metadata file contains heavy columns: {entry['path']}")
+    if metadata_rows != manifest["activity_count"]:
+        raise ValueError("metadata activity count differs")
     render_levels = manifest.get("render_levels", [])
     if [level.get("lod") for level in render_levels] != list(range(RENDER_LEVEL_COUNT)):
         raise ValueError(f"manifest must contain render levels 0 through {RENDER_LEVEL_COUNT - 1}")
@@ -638,19 +658,6 @@ def validate_dataset(path: Path) -> dict[str, Any]:
         metadata = pq.read_schema(file).metadata or {}
         if b"geo" not in metadata:
             raise ValueError(f"GeoParquet metadata missing: {shard['path']}")
-        for geometry, target in {
-            "geometry_lod0": 40,
-            "geometry_lod1": 100,
-            "geometry_lod2": 400,
-            "geometry_lod3": 2000,
-            "geometry_clean_lod0": 40,
-            "geometry_clean_lod1": 100,
-            "geometry_clean_lod2": 400,
-            "geometry_clean_lod3": 2000,
-        }.items():
-            maximum = pc.max(pc.list_value_length(table[geometry])).as_py()
-            if maximum is not None and maximum > target:
-                raise ValueError(f"LOD target exceeded in {shard['path']}: {geometry}")
     for level in render_levels:
         files = level.get("files", [])
         if not files:
@@ -670,6 +677,9 @@ def validate_dataset(path: Path) -> dict[str, Any]:
                 pc.equal(pc.list_value_length(table["geometry_clean"]), table["clean_vertex_count"])
             ).as_py():
                 raise ValueError(f"clean render vertex counts differ: {entry['path']}")
+            allowed = {"activity_id", "xmin", "ymin", "xmax", "ymax", "clean_xmin", "clean_ymin", "clean_xmax", "clean_ymax", "spatial_order", "vertex_count", "clean_vertex_count", "geometry", "geometry_clean"}
+            if set(table.column_names) != allowed:
+                raise ValueError(f"render file contains non-index metadata: {entry['path']}")
             if b"geo" not in (pq.read_schema(file).metadata or {}):
                 raise ValueError(f"GeoParquet metadata missing: {entry['path']}")
         if level_rows != manifest["activity_count"] or level_rows != level.get("row_count"):

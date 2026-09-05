@@ -7,7 +7,7 @@ import pandera.pyarrow as pa_model
 import pyarrow as pa
 from pandera.typing.pyarrow import Table
 
-SCHEMA_VERSION = "1.4.0"
+SCHEMA_VERSION = "1.5.0"
 GEOMETRY_COLUMNS = (
     "geometry",
     "geometry_lod0",
@@ -95,13 +95,7 @@ class RejectionSchema(pa_model.DataFrameModel):
 
 class RenderActivitySchema(pa_model.DataFrameModel):
     activity_id: str
-    name: str
-    sport_type: str
-    activity_family: str
-    start_year: int = pa_model.Field(ge=1970, le=9999)
     spatial_order: int = pa_model.Field(ge=0)
-    point_count: int = pa_model.Field(ge=2)
-    clean_point_count: int = pa_model.Field(ge=2)
     vertex_count: int = pa_model.Field(ge=2)
     clean_vertex_count: int = pa_model.Field(ge=2)
 
@@ -186,49 +180,32 @@ def geo_metadata(bounds: list[float]) -> dict[bytes, bytes]:
     return {b"geo": json.dumps(payload, separators=(",", ":")).encode()}
 
 
+def metadata_arrow_schema() -> pa.Schema:
+    canonical = activity_arrow_schema()
+    fields = [field for field in canonical if field.name not in {*GEOMETRY_COLUMNS, "track_points"}]
+    return pa.schema([*fields, pa.field("activity_family", pa.string(), False)])
+
+
 def render_arrow_schema() -> pa.Schema:
     canonical = activity_arrow_schema()
     names = [
         "activity_id",
-        "name",
-        "sport_type",
-        "start_time",
-        "start_year",
-        "distance_m",
-        "elevation_gain_m",
-        "max_elevation_m",
-        "clean_distance_m",
-        "clean_elevation_gain_m",
-        "clean_max_elevation_m",
-        "source_url",
-        "xmin",
-        "ymin",
-        "xmax",
-        "ymax",
-        "clean_xmin",
-        "clean_ymin",
-        "clean_xmax",
-        "clean_ymax",
-        "point_count",
-        "clean_point_count",
+        "xmin", "ymin", "xmax", "ymax",
+        "clean_xmin", "clean_ymin", "clean_xmax", "clean_ymax",
     ]
     fields = [canonical.field(name) for name in names]
     geometry_metadata = {
         b"ARROW:extension:name": b"geoarrow.linestring",
         b"ARROW:extension:metadata": json.dumps({"crs": "OGC:CRS84"}).encode(),
     }
-    return pa.schema(
-        [
-            *fields[:5],
-            pa.field("activity_family", pa.string(), False),
-            *fields[5:],
-            pa.field("spatial_order", pa.int64(), False),
-            pa.field("vertex_count", pa.int64(), False),
-            pa.field("clean_vertex_count", pa.int64(), False),
-            pa.field("geometry", line_type, False, metadata=geometry_metadata),
-            pa.field("geometry_clean", line_type, False, metadata=geometry_metadata),
-        ]
-    )
+    return pa.schema([
+        *fields,
+        pa.field("spatial_order", pa.int64(), False),
+        pa.field("vertex_count", pa.int64(), False),
+        pa.field("clean_vertex_count", pa.int64(), False),
+        pa.field("geometry", line_type, False, metadata=geometry_metadata),
+        pa.field("geometry_clean", line_type, False, metadata=geometry_metadata),
+    ])
 
 
 def render_geo_metadata(bounds: list[float]) -> dict[bytes, bytes]:

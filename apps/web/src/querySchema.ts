@@ -1,4 +1,4 @@
-export const QUERY_SCHEMA = `Squiggles DuckDB query contract (schema 1.4.0)
+export const QUERY_SCHEMA = `Squiggles DuckDB query contract (schema 1.5.0)
 
 Query rules:
 - Return a SELECT query whose result includes activity_id.
@@ -51,30 +51,8 @@ spatial_order BIGINT NOT NULL
 distance_source VARCHAR NOT NULL
 moving_time_source VARCHAR NOT NULL
 elevation_source VARCHAR NOT NULL
-geometry DOUBLE[2][] NOT NULL -- full CRS84 [longitude, latitude] LineString
-geometry_lod0 DOUBLE[2][] NOT NULL -- about 40 vertices
-geometry_lod1 DOUBLE[2][] NOT NULL -- about 100 vertices
-geometry_lod2 DOUBLE[2][] NOT NULL -- about 400 vertices
-geometry_lod3 DOUBLE[2][] NOT NULL -- about 2000 vertices
-geometry_clean DOUBLE[2][] NOT NULL -- conservative cleaned full-resolution route
-geometry_clean_lod0 DOUBLE[2][] NOT NULL
-geometry_clean_lod1 DOUBLE[2][] NOT NULL
-geometry_clean_lod2 DOUBLE[2][] NOT NULL
-geometry_clean_lod3 DOUBLE[2][] NOT NULL
-track_points STRUCT(
-  sequence INTEGER,
-  timestamp TIMESTAMPTZ,
-  longitude DOUBLE,
-  latitude DOUBLE,
-  elevation_m DOUBLE,
-  heart_rate DOUBLE,
-  cadence DOUBLE,
-  power DOUBLE,
-  clean BOOLEAN -- false only for a point excluded by conservative cleaning
-)[] NOT NULL
-
 Units: distance/elevation are meters, durations are seconds, timestamps are UTC.
-Raw geometry, telemetry, and summaries remain canonical. When the Clean toggle is
+Full geometry and telemetry remain canonical and are internal detail data. When the Clean toggle is
 enabled and the query is run, the logical activities relation projects the clean
 geometry, bounds, summaries, point count, and filtered track_points into the normal
 column names. This lets the same SQL run before or after conservative cleaning without
