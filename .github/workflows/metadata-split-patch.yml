@@ -1,0 +1,27 @@
+name: Metadata split patch helper
+
+on:
+  push:
+    branches:
+      - perf/metadata-overview-split
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: "${{ github.event.head_commit.message != 'feat: split metadata from overview geometry' }}"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: perf/metadata-overview-split
+      - name: Apply format split
+        run: |
+          python scripts/apply_metadata_split.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add packages apps scripts
+          git diff --cached --quiet && exit 0
+          git commit -m "feat: split metadata from overview geometry"
+          git push origin HEAD:perf/metadata-overview-split
