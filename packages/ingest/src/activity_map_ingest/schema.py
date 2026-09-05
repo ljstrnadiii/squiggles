@@ -263,3 +263,13 @@ def validate_render_table(
                 f"invalid render Arrow type for {actual_field.name}: {actual_field.type}"
             )
     return RenderActivitySchema.validate(table)
+
+
+def validate_arrow_table(table: Table[ActivitySchema]) -> Table[ActivitySchema]:
+    expected = activity_arrow_schema()
+    if table.schema.names != expected.names:
+        raise ValueError("activity table columns do not match the canonical schema")
+    for expected_field, actual_field in zip(expected, table.schema, strict=True):
+        if expected_field.type != actual_field.type:
+            raise ValueError(f"invalid Arrow type for {actual_field.name}: {actual_field.type}")
+    return ActivitySchema.validate(table, lazy=True)
