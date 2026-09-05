@@ -1,1 +1,0 @@
-Baseline hosted browser workerOpenMs: ~29175 ms. Instrumentation PR only; no runtime behavior change.
