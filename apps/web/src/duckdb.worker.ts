@@ -47,6 +47,7 @@ type Request =
       id: number;
       type: "open";
       files: RegisteredFile[];
+      metadataFiles: RegisteredFile[];
       renderLevels: { lod: Lod; files: RegisteredFile[] }[];
       schemaVersion: string;
     }
@@ -59,6 +60,7 @@ type Request =
       bounds?: Bounds;
       clean: boolean;
       startingVertexEstimate?: number;
+      needsCanonicalGeometry: boolean;
     }
   | {
       id: number;
@@ -70,6 +72,7 @@ type Request =
     }
   | { id: number; type: "summary"; bounds?: Bounds; clean: boolean }
   | { id: number; type: "table"; bounds?: Bounds; clean: boolean }
+  | { id: number; type: "metadata"; activityId: string; clean: boolean }
   | { id: number; type: "activity"; activityId: string; clean: boolean };
 
 let database: duckdb.AsyncDuckDB | null = null;
@@ -78,6 +81,8 @@ let supportsClean = false;
 let cleanViewEnabled = false;
 let selectionAll = false;
 let registeredFiles: RegisteredFile[] = [];
+let registeredCanonicalFiles: RegisteredFile[] = [];
+let canonicalViewReady = false;
 let registeredRenderLevels = new Map<Lod, RegisteredFile[]>();
 let initializationTimings = { selectBundleMs: 0, instantiateMs: 0, connectMs: 0 };
 
@@ -140,16 +145,16 @@ function column(batch: ArrowBatch, name: string): ArrowVector {
 }
 
 function metadataAt(columns: Map<string, ArrowVector>, index: number): RouteMetadata {
-  const value = (name: string) => scalar(columns.get(name)!.get(index));
+  const activityId = String(scalar(columns.get("activity_id")!.get(index)));
   return {
-    activityId: String(value("activity_id")),
-    name: String(value("name")),
-    sportType: String(value("sport_type")),
-    startTime: value("start_time")?.toString() ?? null,
-    distanceM: value("distance_m") as number | null,
-    elevationGainM: value("elevation_gain_m") as number | null,
-    maxElevationM: value("max_elevation_m") as number | null,
-    sourceUrl: value("source_url") as string | null,
+    activityId,
+    name: "",
+    sportType: "",
+    startTime: null,
+    distanceM: null,
+    elevationGainM: null,
+    maxElevationM: null,
+    sourceUrl: null,
   };
 }
 
@@ -185,16 +190,7 @@ function materializedRouteBatch(
 
 export function binaryRouteBatches(table: ArrowTable, geometryName: string): BinaryRouteBatch[] {
   return table.batches.map((batch) => {
-    const names = [
-      "activity_id",
-      "name",
-      "sport_type",
-      "start_time",
-      "distance_m",
-      "elevation_gain_m",
-      "max_elevation_m",
-      "source_url",
-    ];
+    const names = ["activity_id"];
     const columns = new Map(names.map((name) => [name, column(batch, name)]));
     const geometry = column(batch, geometryName);
     if (geometry.data.length !== 1) return materializedRouteBatch(batch, geometry, columns);
@@ -376,23 +372,17 @@ function parquetRelation(files: RegisteredFile[], hivePartitioning: boolean): st
 }
 
 function viewportRelation(files: RegisteredFile[], clean: boolean): string | null {
-  if (files.length === 0) return null;
-  const source = `(${canonicalSourceSql(files)})`;
+  const source = parquetRelation(files, false);
+  if (!source) return null;
   if (!clean) return source;
   return `(SELECT * REPLACE (
-    geometry_clean AS geometry,
-    geometry_clean_lod0 AS geometry_lod0,
-    geometry_clean_lod1 AS geometry_lod1,
-    geometry_clean_lod2 AS geometry_lod2,
-    geometry_clean_lod3 AS geometry_lod3,
     coalesce(clean_distance_m,distance_m) AS distance_m,
     coalesce(clean_elevation_gain_m,elevation_gain_m) AS elevation_gain_m,
     coalesce(clean_elevation_loss_m,elevation_loss_m) AS elevation_loss_m,
     coalesce(clean_min_elevation_m,min_elevation_m) AS min_elevation_m,
     coalesce(clean_max_elevation_m,max_elevation_m) AS max_elevation_m,
     clean_point_count AS point_count,
-    clean_xmin AS xmin, clean_ymin AS ymin, clean_xmax AS xmax, clean_ymax AS ymax,
-    list_filter(track_points,p->p.clean) AS track_points
+    clean_xmin AS xmin, clean_ymin AS ymin, clean_xmax AS xmax, clean_ymax AS ymax
   ) FROM ${source})`;
 }
 
@@ -401,7 +391,6 @@ async function configureActivitiesView(clean: boolean) {
   if (enabled === cleanViewEnabled) return;
   if (!enabled) {
     await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");
-    await connection!.query("CREATE OR REPLACE TEMP VIEW activity_geometry AS SELECT activity_id,geometry,geometry_clean,xmin,ymin,xmax,ymax,clean_xmin,clean_ymin,clean_xmax,clean_ymax FROM canonical_source");
   } else {
     await connection!.query(`CREATE OR REPLACE TEMP VIEW activities AS SELECT * REPLACE (
       coalesce(clean_distance_m,distance_m) AS distance_m,
@@ -412,9 +401,21 @@ async function configureActivitiesView(clean: boolean) {
       clean_point_count AS point_count,
       clean_xmin AS xmin, clean_ymin AS ymin, clean_xmax AS xmax, clean_ymax AS ymax
     ) FROM activity_source`);
-    await connection!.query("CREATE OR REPLACE TEMP VIEW activity_geometry AS SELECT activity_id,geometry_clean AS geometry,geometry_clean,xmin,ymin,xmax,ymax,clean_xmin,clean_ymin,clean_xmax,clean_ymax FROM canonical_source");
   }
   cleanViewEnabled = enabled;
+}
+
+async function ensureCanonicalGeometry(clean: boolean) {
+  if (!canonicalViewReady) {
+    await connection!.query(
+      `CREATE OR REPLACE VIEW canonical_source AS ${canonicalSourceSql(registeredCanonicalFiles)}`,
+    );
+    canonicalViewReady = true;
+  }
+  const geometry = clean ? "geometry_clean AS geometry" : "geometry";
+  await connection!.query(
+    `CREATE OR REPLACE TEMP VIEW activity_geometry AS SELECT activity_id,${geometry},xmin,ymin,xmax,ymax,clean_xmin,clean_ymin,clean_xmax,clean_ymax FROM canonical_source`,
+  );
 }
 
 function selectionJoin(): string {
@@ -576,11 +577,8 @@ async function render(
   }
 
   const geometry = clean ? "geometry_clean" : "geometry";
-  const distance = clean ? "coalesce(m.clean_distance_m,m.distance_m)" : "m.distance_m";
-  const gain = clean ? "coalesce(m.clean_elevation_gain_m,m.elevation_gain_m)" : "m.elevation_gain_m";
-  const maximum = clean ? "coalesce(m.clean_max_elevation_m,m.max_elevation_m)" : "m.max_elevation_m";
   const result = await connection!.query(
-    `SELECT a.activity_id,m.name,m.sport_type,CAST(m.start_time AS VARCHAR) start_time,${distance} distance_m,${gain} elevation_gain_m,${maximum} max_elevation_m,m.source_url,a.${geometry} FROM ${relation} a JOIN activities m USING(activity_id)${selectionJoin()} WHERE ${viewportPredicate(bounds, clean)}`,
+    `SELECT a.activity_id,a.${geometry} FROM ${relation} a${selectionJoin()} WHERE ${viewportPredicate(bounds, clean)}`,
   );
   const batches = binaryRouteBatches(result, geometry);
   const vertexCount = batches.reduce((total, batch) => total + batch.positions.length / 2, 0);
@@ -695,8 +693,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       );
       const activitySourceViewMs = performance.now() - activitySourceStarted;
       await connection!.query(`CREATE OR REPLACE VIEW canonical_source AS ${canonicalSourceSql(request.files)}`);
-      await connection!.query("CREATE OR REPLACE TEMP VIEW activity_geometry AS SELECT activity_id,geometry,geometry_clean,xmin,ymin,xmax,ymax,clean_xmin,clean_ymin,clean_xmax,clean_ymax FROM canonical_source");
-      const activitiesStarted = performance.now();
+        const activitiesStarted = performance.now();
       await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");
       const activitiesViewMs = performance.now() - activitiesStarted;
       supportsClean = ["1.2.0", "1.3.0", "1.4.0", "1.5.0"].includes(request.schemaVersion);
@@ -711,11 +708,40 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       return;
     }
 
+    if (request.type === "metadata") {
+      if (request.clean && !supportsClean) {
+        throw new Error("Clean view requires dataset schema 1.2.0 or newer; recompile first");
+      }
+      await configureActivitiesView(request.clean);
+      const table = await connection!.query(
+        `SELECT activity_id,name,sport_type,CAST(start_time AS VARCHAR) start_time,distance_m,elevation_gain_m,max_elevation_m,source_url FROM activities WHERE activity_id='${request.activityId.replaceAll("'", "''")}' LIMIT 1`,
+      );
+      const row = table.toArray()[0] as unknown as Record<string, unknown> | undefined;
+      self.postMessage({
+        id: request.id,
+        ok: true,
+        value: row
+          ? {
+              activityId: String(scalar(row.activity_id)),
+              name: String(row.name),
+              sportType: String(row.sport_type),
+              startTime: row.start_time?.toString() ?? null,
+              distanceM: scalar(row.distance_m) as number | null,
+              elevationGainM: scalar(row.elevation_gain_m) as number | null,
+              maxElevationM: scalar(row.max_elevation_m) as number | null,
+              sourceUrl: row.source_url as string | null,
+            }
+          : null,
+      });
+      return;
+    }
+
     if (request.type === "activity") {
       if (request.clean && !supportsClean) {
         throw new Error("Clean view requires dataset schema 1.2.0 or newer; recompile first");
       }
       const clean = request.clean && supportsClean;
+      await ensureCanonicalGeometry(clean);
       const geometry = clean ? "geometry_clean" : "geometry";
       const points = clean ? "list_filter(track_points,p->p.clean)" : "track_points";
       const table = await connection!.query(
@@ -797,6 +823,9 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       throw new Error("Clean view requires dataset schema 1.2.0 or newer; recompile first");
     }
     await configureActivitiesView(request.clean);
+    if (request.needsCanonicalGeometry) {
+      await ensureCanonicalGeometry(request.clean && supportsClean);
+    }
     selectionAll = isUniversalSelectionSql(request.sql);
     if (selectionAll) {
       await connection!.query("DROP TABLE IF EXISTS current_selection");

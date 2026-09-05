@@ -181,5 +181,6 @@ export interface ExecutionEngine {
   ): Promise<ViewportResult>;
   getSummary(bounds?: ViewportBounds): Promise<SummaryStats>;
   getActivities(bounds?: ViewportBounds): Promise<ActivityListItem[]>;
+  getRouteMetadata(activityId: string): Promise<RouteMetadata | null>;
   getActivity(activityId: string): Promise<RouteActivity | null>;
 }

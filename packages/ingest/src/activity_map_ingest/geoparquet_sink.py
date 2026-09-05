@@ -36,8 +36,14 @@ _WEB_MERCATOR_RADIUS_M = 6_378_137.0
 _WEB_MERCATOR_MAX_LAT = 85.05112878
 RENDER_SCALARS = [
     "activity_id",
-    "xmin", "ymin", "xmax", "ymax",
-    "clean_xmin", "clean_ymin", "clean_xmax", "clean_ymax",
+    "xmin",
+    "ymin",
+    "xmax",
+    "ymax",
+    "clean_xmin",
+    "clean_ymin",
+    "clean_xmax",
+    "clean_ymax",
 ]
 
 
@@ -374,15 +380,17 @@ def write_metadata_dataset(table: pa.Table, path: Path) -> list[ShardMetadata]:
         for offset in range(0, metadata.num_rows, row_group_size)
     ]
     row_groups = [{"row_count": group.num_rows, "bbox": _table_bounds(group)} for group in groups]
-    return [{
-        "path": "metadata/part-00000.parquet",
-        "row_count": metadata.num_rows,
-        "byte_size": target.stat().st_size,
-        "sha256": _file_sha256(target),
-        "bbox": _table_bounds(metadata),
-        "row_group_count": len(row_groups),
-        "row_groups": row_groups,
-    }]
+    return [
+        {
+            "path": "metadata/part-00000.parquet",
+            "row_count": metadata.num_rows,
+            "byte_size": target.stat().st_size,
+            "sha256": _file_sha256(target),
+            "bbox": _table_bounds(metadata),
+            "row_group_count": len(row_groups),
+            "row_groups": row_groups,
+        }
+    ]
 
 
 class MetadataDataSink(Datasink[list[ShardMetadata]]):

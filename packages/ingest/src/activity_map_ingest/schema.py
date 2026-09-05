@@ -190,22 +190,30 @@ def render_arrow_schema() -> pa.Schema:
     canonical = activity_arrow_schema()
     names = [
         "activity_id",
-        "xmin", "ymin", "xmax", "ymax",
-        "clean_xmin", "clean_ymin", "clean_xmax", "clean_ymax",
+        "xmin",
+        "ymin",
+        "xmax",
+        "ymax",
+        "clean_xmin",
+        "clean_ymin",
+        "clean_xmax",
+        "clean_ymax",
     ]
     fields = [canonical.field(name) for name in names]
     geometry_metadata = {
         b"ARROW:extension:name": b"geoarrow.linestring",
         b"ARROW:extension:metadata": json.dumps({"crs": "OGC:CRS84"}).encode(),
     }
-    return pa.schema([
-        *fields,
-        pa.field("spatial_order", pa.int64(), False),
-        pa.field("vertex_count", pa.int64(), False),
-        pa.field("clean_vertex_count", pa.int64(), False),
-        pa.field("geometry", line_type, False, metadata=geometry_metadata),
-        pa.field("geometry_clean", line_type, False, metadata=geometry_metadata),
-    ])
+    return pa.schema(
+        [
+            *fields,
+            pa.field("spatial_order", pa.int64(), False),
+            pa.field("vertex_count", pa.int64(), False),
+            pa.field("clean_vertex_count", pa.int64(), False),
+            pa.field("geometry", line_type, False, metadata=geometry_metadata),
+            pa.field("geometry_clean", line_type, False, metadata=geometry_metadata),
+        ]
+    )
 
 
 def render_geo_metadata(bounds: list[float]) -> dict[bytes, bytes]:

@@ -76,6 +76,7 @@ function requestOperation(type: unknown) {
       render: "render viewport",
       summary: "summarize selection",
       table: "list activities",
+      metadata: "load activity metadata",
       activity: "load activity detail",
     } as Record<string, string>
   )[String(type)] ?? "DuckDB worker request";
@@ -433,6 +434,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       bounds,
       clean: nextClean,
       startingVertexEstimate: plan.startingVertexEstimate,
+      needsCanonicalGeometry: Boolean(tab.spatialFilter?.polygon.length && tab.spatialFilter.polygon.length >= 3),
     });
 
     this.clean = nextClean;
@@ -444,7 +446,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       zoom: Number(zoom.toFixed(2)),
       requestedLod: plan.lod,
       plannedLod: result.lod,
-      selected: result.summary.activityCount,
+      selected: result.selectedCount,
       rendered: result.activityCount,
       vertices: result.vertexCount,
       geometryBytes: result.geometryBufferBytes,
@@ -512,6 +514,10 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
 
   getActivities(bounds?: ViewportBounds): Promise<ActivityListItem[]> {
     return this.networkRequest({ type: "table", bounds, clean: this.clean });
+  }
+
+  getRouteMetadata(activityId: string): Promise<import("./contracts").RouteMetadata | null> {
+    return this.networkRequest({ type: "metadata", activityId, clean: this.clean });
   }
 
   getActivity(activityId: string): Promise<RouteActivity | null> {

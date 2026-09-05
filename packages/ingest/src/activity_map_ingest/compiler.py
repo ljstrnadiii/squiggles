@@ -645,8 +645,7 @@ def validate_dataset(path: Path) -> dict[str, Any]:
         table = pq.ParquetFile(file).read()
         metadata_rows += table.num_rows
         if any(
-            name.startswith("geometry") or name == "track_points"
-            for name in table.column_names
+            name.startswith("geometry") or name == "track_points" for name in table.column_names
         ):
             raise ValueError(f"metadata file contains heavy columns: {entry['path']}")
     if metadata_rows != manifest["activity_count"]:
