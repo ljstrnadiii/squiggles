@@ -61,13 +61,13 @@ function lodForMetersPerPixel(pixelMeters: number): Lod {
 
 /**
  * Choose the coarsest fixed-tolerance LOD whose projected simplification error is below
- * one rendered CSS pixel. For the current unpitched Web Mercator camera, zoom-derived
- * projected resolution is mathematically equivalent to projected viewport extent / CSS size.
+ * one rendered CSS pixel when only camera zoom is available.
  */
-export function lodForView(zoom: number, _latitude?: number): Lod {
+export function lodForView(zoom: number): Lod {
   return lodForMetersPerPixel(metersPerPixel(zoom));
 }
 
+/** Choose the fidelity LOD from the actual visible projected extent and CSS dimensions. */
 export function lodForViewport(
   bounds: ViewportBounds,
   widthCssPixels: number,
