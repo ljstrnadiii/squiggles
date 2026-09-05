@@ -2,18 +2,16 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-describe("DuckDB spatial selection startup", () => {
-  it("loads the spatial extension lazily for SQL that uses ST_ functions", () => {
+describe("DuckDB spatial capability", () => {
+  it("loads the spatial extension during engine initialization", () => {
     const worker = readFileSync(join(process.cwd(), "src/duckdb.worker.ts"), "utf8");
-
-    expect(worker).toContain("async function ensureSpatialExtension");
-    expect(worker).toContain('sqlUsesSpatial(request.sql)');
-    expect(worker).toContain('await connection!.query("INSTALL spatial; LOAD spatial")');
-
     const initializeBody = worker.slice(
       worker.indexOf("async function initialize()"),
       worker.indexOf("function viewportPredicate"),
     );
-    expect(initializeBody).not.toContain("INSTALL spatial");
+
+    expect(initializeBody).toContain('await connection!.query("INSTALL spatial; LOAD spatial")');
+    expect(worker).not.toContain("sqlUsesSpatial(request.sql)");
+    expect(worker).not.toContain("async function ensureSpatialExtension");
   });
 });
