@@ -4,6 +4,12 @@ import type { QueryTab, ViewportResult } from "./contracts";
 import { BrowserDuckDBEngine, cacheBudget, formatDuckDBDiagnostic } from "./engine";
 import { defaultTab } from "./storage";
 
+const resolutionPlans = {
+  low: { lod: 1 as const, vertexEstimate: 500_000 },
+  medium: { lod: 2 as const, vertexEstimate: 900_000 },
+  high: { lod: 2 as const, vertexEstimate: 900_000 },
+};
+
 const viewport = (): Omit<ViewportResult, "cache"> => ({
   batches: [
     {
@@ -29,8 +35,9 @@ const viewport = (): Omit<ViewportResult, "cache"> => ({
   lod: 2,
   vertexCount: 2,
   plannedVertexEstimate: 2,
+  resolutionPlans,
   rawVertexEstimate: 2,
-  vertexBudget: 100,
+  vertexBudget: 1_250_000,
   scan: {
     candidateFragmentCount: 1,
     totalFragmentCount: 1,
@@ -254,7 +261,7 @@ describe("BrowserDuckDBEngine viewport cache", () => {
         type: "execute",
         sql: "SELECT activity_id FROM activities",
         lod: 2,
-        budget: 750000,
+        resolution: "medium",
         bounds: [-105, 39, -104, 40],
         clean: false,
       },
@@ -267,6 +274,7 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     );
     expect(message).toContain("Squiggles DuckDB failure");
     expect(message).toContain("Request: execute");
+    expect(message).toContain("Resolution: medium");
     expect(message).toContain("Schema: 1.4.0");
     expect(message).toContain("activities/a.parquet");
     expect(message).toContain("SELECT activity_id FROM activities");
