@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections import Counter
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -30,6 +31,8 @@ from .schema import (
 ShardMetadata = dict[str, Any]
 RENDER_ROW_GROUP_TARGET_BYTES = 4 * 1024 * 1024
 RENDER_FILE_TARGET_BYTES = 1024 * 1024 * 1024
+_WEB_MERCATOR_RADIUS_M = 6_378_137.0
+_WEB_MERCATOR_MAX_LAT = 85.05112878
 RENDER_SCALARS = [
     "activity_id",
     "name",
@@ -60,7 +63,7 @@ RENDER_SCALARS = [
 def _byte_groups(
     table: Table[RenderActivitySchema], target_bytes: int
 ) -> list[Table[RenderActivitySchema]]:
-    """Split a table into whole-activity groups near a target uncompressed size."""
+    """Split an ordered table into whole-activity groups near an uncompressed target."""
     groups: list[Table[RenderActivitySchema]] = []
     start = 0
     estimated_bytes = 0
@@ -74,6 +77,74 @@ def _byte_groups(
     if start < table.num_rows:
         groups.append(cast(Table[RenderActivitySchema], table.slice(start)))
     return groups
+
+
+def _mercator_xy(longitude: float, latitude: float) -> tuple[float, float]:
+    latitude = max(-_WEB_MERCATOR_MAX_LAT, min(_WEB_MERCATOR_MAX_LAT, latitude))
+    return (
+        _WEB_MERCATOR_RADIUS_M * math.radians(longitude),
+        _WEB_MERCATOR_RADIUS_M
+        * math.log(math.tan(math.pi / 4 + math.radians(latitude) / 2)),
+    )
+
+
+def _str_order(
+    table: Table[RenderActivitySchema], target_bytes: int
+) -> Table[RenderActivitySchema]:
+    """Sort-Tile-Recursive order tuned for compact, roughly square viewport row groups."""
+    if table.num_rows <= 1:
+        return table
+
+    average_row_bytes = max(1.0, table.nbytes / table.num_rows)
+    target_rows = max(1, int(target_bytes / average_row_bytes))
+    leaf_count = max(1, math.ceil(table.num_rows / target_rows))
+
+    xmin = table["xmin"].to_pylist()
+    ymin = table["ymin"].to_pylist()
+    xmax = table["xmax"].to_pylist()
+    ymax = table["ymax"].to_pylist()
+    centers: list[tuple[int, float, float]] = []
+    projected_bounds: list[tuple[float, float, float, float]] = []
+    for index in range(table.num_rows):
+        left, bottom = _mercator_xy(float(xmin[index]), float(ymin[index]))
+        right, top = _mercator_xy(float(xmax[index]), float(ymax[index]))
+        projected_bounds.append((left, bottom, right, top))
+        centers.append((index, (left + right) / 2, (bottom + top) / 2))
+
+    extent_left = min(bounds[0] for bounds in projected_bounds)
+    extent_bottom = min(bounds[1] for bounds in projected_bounds)
+    extent_right = max(bounds[2] for bounds in projected_bounds)
+    extent_top = max(bounds[3] for bounds in projected_bounds)
+    width = max(1.0, extent_right - extent_left)
+    height = max(1.0, extent_top - extent_bottom)
+    aspect_ratio = width / height
+
+    # Standard STR uses sqrt(leaf_count) x-slices. Scaling by the projected
+    # extent's aspect ratio keeps leaf bboxes closer to square for map viewports.
+    x_slices = max(1, min(leaf_count, math.ceil(math.sqrt(leaf_count * aspect_ratio))))
+    slice_rows = math.ceil(table.num_rows / x_slices)
+
+    centers.sort(key=lambda item: (item[1], item[2], item[0]))
+    ordered_indices: list[int] = []
+    for offset in range(0, table.num_rows, slice_rows):
+        stripe = centers[offset : offset + slice_rows]
+        stripe.sort(key=lambda item: (item[2], item[1], item[0]))
+        ordered_indices.extend(item[0] for item in stripe)
+    return cast(Table[RenderActivitySchema], table.take(pa.array(ordered_indices, type=pa.int64())))
+
+
+def _secondary_order(table: Table[RenderActivitySchema]) -> Table[RenderActivitySchema]:
+    """Keep STR membership intact while adding locality for common non-spatial filters."""
+    return cast(
+        Table[RenderActivitySchema],
+        table.sort_by(
+            [
+                ("activity_family", "ascending"),
+                ("start_year", "ascending"),
+                ("activity_id", "ascending"),
+            ]
+        ),
+    )
 
 
 def _table_bounds(table: pa.Table) -> list[float]:
@@ -145,36 +216,14 @@ def _write_render_file(
     }
 
 
-def _render_partitions(
-    table: Table[RenderActivitySchema], lod: int
-) -> list[tuple[Path, Table[RenderActivitySchema]]]:
-    """Keep coarse global LODs contiguous; partition larger detail levels for pruning."""
-    base = Path(f"lod={lod}")
-    if lod <= 2:
-        return [(base, table)]
-
-    partitions: list[tuple[Path, Table[RenderActivitySchema]]] = []
-    families = sorted(set(table["activity_family"].to_pylist()))
-    for family in families:
-        family_table = table.filter(pc.equal(table["activity_family"], family))
-        years = sorted(set(int(value) for value in family_table["start_year"].to_pylist()))
-        for year in years:
-            year_table = cast(
-                Table[RenderActivitySchema],
-                family_table.filter(pc.equal(family_table["start_year"], year)).sort_by(
-                    [("spatial_order", "ascending"), ("activity_id", "ascending")]
-                ),
-            )
-            partitions.append(
-                (base / f"activity_family={family}" / f"start_year={year}", year_table)
-            )
-    return partitions
-
-
 def _render_files(
-    table: Table[RenderActivitySchema], root: Path, partition_path: Path
+    table: Table[RenderActivitySchema], root: Path, lod: int
 ) -> list[ShardMetadata]:
-    row_groups = _byte_groups(table, RENDER_ROW_GROUP_TARGET_BYTES)
+    ordered = _str_order(table, RENDER_ROW_GROUP_TARGET_BYTES)
+    row_groups = [
+        _secondary_order(group)
+        for group in _byte_groups(ordered, RENDER_ROW_GROUP_TARGET_BYTES)
+    ]
     files: list[ShardMetadata] = []
     pending: list[Table[RenderActivitySchema]] = []
     pending_bytes = 0
@@ -188,7 +237,7 @@ def _render_files(
             _write_render_file(
                 pending,
                 root,
-                partition_path / f"part-{sequence:05d}.parquet",
+                Path(f"lod={lod}") / f"part-{sequence:05d}.parquet",
             )
         )
         pending = []
@@ -207,9 +256,9 @@ def _render_files(
 def write_render_pyramid(
     table: pa.Table, path: Path, progress_callback: Callable[[int, int], None] | None = None
 ) -> list[ShardMetadata]:
-    """Write immutable Hive-partitioned render artifacts from canonical geometry."""
+    """Write immutable LOD-first render artifacts with STR-packed row groups."""
     path.mkdir(parents=True, exist_ok=True)
-    combined = table.sort_by([("spatial_order", "ascending"), ("activity_id", "ascending")])
+    combined = table.sort_by([("activity_id", "ascending")])
     levels: list[ShardMetadata] = []
     for lod, tolerance_m in enumerate(RENDER_TOLERANCES_M):
         geometry = _render_geometry(combined["geometry"], tolerance_m)
@@ -235,14 +284,12 @@ def write_render_pyramid(
             ),
         )
 
-        files: list[ShardMetadata] = []
-        for partition_path, partition in _render_partitions(render, lod):
-            files.extend(_render_files(partition, path, partition_path))
-
+        files = _render_files(render, path, lod)
         levels.append(
             {
                 "lod": lod,
                 "tolerance_m": tolerance_m,
+                "spatial_layout": "str",
                 "row_count": render.num_rows,
                 "byte_size": sum(int(file["byte_size"]) for file in files),
                 "bbox": _table_bounds(render),
@@ -347,7 +394,7 @@ class GeoParquetDataSink(Datasink[list[ShardMetadata]]):
 
 
 class RenderPyramidDataSink(Datasink[list[ShardMetadata]]):
-    """Write one Hive-partitioned render dataset containing every fixed-tolerance LOD."""
+    """Write one LOD-first render dataset with STR-packed row groups."""
 
     def __init__(self, path: str) -> None:
         self.path = path
