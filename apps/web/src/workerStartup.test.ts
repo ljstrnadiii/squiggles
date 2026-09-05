@@ -16,6 +16,7 @@ describe("DuckDB worker startup", () => {
     const worker = readFileSync(join(process.cwd(), "src/duckdb.worker.ts"), "utf8");
     const engine = readFileSync(join(process.cwd(), "src/engine.ts"), "utf8");
 
+    // These timings make production worker-open regressions actionable.
     for (const phase of [
       "selectBundleMs",
       "instantiateMs",
