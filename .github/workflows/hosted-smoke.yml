@@ -3,7 +3,6 @@ name: Hosted map smoke
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -16,3 +15,15 @@ jobs:
       - uses: actions/checkout@v7
       - name: Verify production startup path
         run: python scripts/check_hosted_map.py
+      - name: Install browser smoke dependency
+        run: python -m pip install playwright==1.55.0
+      - name: Exercise production map in Chrome
+        run: python scripts/check_hosted_browser.py
+      - name: Upload browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hosted-browser-failure
+          path: browser-smoke-artifacts
+          if-no-files-found: ignore
+          retention-days: 3
