@@ -21,13 +21,7 @@ export async function publishView(
     const hint = renderPlanHint(tab.id);
     return {
       ...tab,
-      ...(hint
-        ? {
-            startingLod: hint.lod,
-            startingVertexEstimate: hint.vertexEstimate,
-            startingBounds: hint.bounds,
-          }
-        : {}),
+      ...(hint ? { startingPlans: hint.plans, startingBounds: hint.bounds } : {}),
       mapState: {
         longitude: tab.mapState.longitude,
         latitude: tab.mapState.latitude,
