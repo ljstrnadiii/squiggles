@@ -30,7 +30,7 @@ type CacheEntry = {
   result: WorkerViewportResult;
   bytes: number;
   bounds?: ViewportBounds;
-  lod: Lod;
+  requestedLod: Lod;
 };
 type WorkerFile = {
   name: string;
@@ -188,12 +188,16 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     return lodForZoom(zoom);
   }
 
-  private initialPlan(tab: QueryTab, zoom: number) {
+  private initialPlan(tab: QueryTab, zoom: number, bounds?: ViewportBounds) {
     if (tab.startingLod != null && !this.consumedPublishedLods.has(tab.id)) {
       this.consumedPublishedLods.add(tab.id);
+      const estimateIsSafe =
+        tab.startingBounds != null &&
+        bounds != null &&
+        boundsContains(tab.startingBounds, bounds);
       return {
         lod: tab.startingLod,
-        startingVertexEstimate: tab.startingVertexEstimate,
+        startingVertexEstimate: estimateIsSafe ? tab.startingVertexEstimate : undefined,
       };
     }
     return { lod: this.requestedLod(zoom), startingVertexEstimate: undefined };
@@ -214,14 +218,19 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     if (!hit && !this.cache.has(key)) {
       const bytes = binaryBytes(result.batches);
       if (bytes <= this.cacheBudget) {
-        const lod = this.requestedLod(zoom);
+        const requestedLod = this.requestedLod(zoom);
         for (const [cachedKey, entry] of this.cache) {
-          if (entry.lod === lod && bounds && entry.bounds && boundsContains(bounds, entry.bounds)) {
+          if (
+            entry.requestedLod === requestedLod &&
+            bounds &&
+            entry.bounds &&
+            boundsContains(bounds, entry.bounds)
+          ) {
             this.cache.delete(cachedKey);
             this.cacheBytes -= entry.bytes;
           }
         }
-        this.cache.set(key, { result, bytes, bounds, lod });
+        this.cache.set(key, { result, bytes, bounds, requestedLod });
         this.cacheBytes += bytes;
         while (this.cacheBytes > this.cacheBudget && this.cache.size > 1) {
           const oldest = this.cache.entries().next().value as [string, CacheEntry] | undefined;
@@ -252,9 +261,13 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     let matchedKey = key;
     let entry = this.cache.get(key);
     if (!entry) {
-      const lod = this.requestedLod(zoom);
+      const requestedLod = this.requestedLod(zoom);
       for (const [candidateKey, candidate] of this.cache) {
-        if (candidate.lod === lod && candidate.bounds && boundsContains(candidate.bounds, bounds)) {
+        if (
+          candidate.requestedLod === requestedLod &&
+          candidate.bounds &&
+          boundsContains(candidate.bounds, bounds)
+        ) {
           matchedKey = candidateKey;
           entry = candidate;
           break;
@@ -399,7 +412,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     const nextClean = tab.style.cleanEnabled;
     const baseSql = normalizeSelectionSql(tab.sql);
     const sql = applySpatialFilterSql(baseSql, tab.spatialFilter);
-    const plan = this.initialPlan(tab, zoom);
+    const plan = this.initialPlan(tab, zoom, bounds);
     const result = await this.networkRequest<QueryResult & WorkerViewportResult>({
       type: "execute",
       sql,
@@ -413,7 +426,11 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     this.clean = nextClean;
     this.selectionKey = `${this.datasetRevision}|${this.clean ? 1 : 0}|${sql}`;
     activateRenderTab(tab.id);
-    recordRenderPlan(tab.id, { lod: result.lod, vertexEstimate: result.plannedVertexEstimate });
+    recordRenderPlan(tab.id, {
+      lod: result.lod,
+      vertexEstimate: result.plannedVertexEstimate,
+      bounds,
+    });
     perf("selection-execute", {
       totalMs: Math.round(performance.now() - started),
       zoom: Number(zoom.toFixed(2)),
@@ -436,7 +453,11 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     const requestedKey = this.cacheKey(zoom, bounds);
     const cached = this.cached(requestedKey, bounds, zoom);
     if (cached) {
-      recordActiveRenderPlan({ lod: cached.lod, vertexEstimate: cached.plannedVertexEstimate });
+      recordActiveRenderPlan({
+        lod: cached.lod,
+        vertexEstimate: cached.plannedVertexEstimate,
+        bounds,
+      });
       perf("viewport-cache-hit", {
         zoom: Number(zoom.toFixed(2)),
         lod: cached.lod,
@@ -455,7 +476,11 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       bounds: fetchBounds,
       clean: this.clean,
     });
-    recordActiveRenderPlan({ lod: result.lod, vertexEstimate: result.plannedVertexEstimate });
+    recordActiveRenderPlan({
+      lod: result.lod,
+      vertexEstimate: result.plannedVertexEstimate,
+      bounds: fetchBounds,
+    });
     perf("viewport-fetch", {
       totalMs: Math.round(performance.now() - started),
       zoom: Number(zoom.toFixed(2)),
