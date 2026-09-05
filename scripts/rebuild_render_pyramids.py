@@ -57,6 +57,14 @@ def value(item: dict[str, Any], name: str) -> str | None:
     return raw.get("S") if isinstance(raw, dict) else None
 
 
+def stale_registry_items(table_name: str, render_version: str) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in registry_items(table_name)
+        if value(item, "renderVersion") != render_version
+    ]
+
+
 def wait_for_jobs(job_ids: list[str], poll_seconds: int = 20) -> None:
     remaining = set(job_ids)
     while remaining:
@@ -88,14 +96,11 @@ def main() -> None:
     queue = required("INGEST_JOB_QUEUE")
     definition = required("INGEST_JOB_DEFINITION")
     render_version = required("RENDER_PYRAMID_VERSION")
-    stale = [
-        item
-        for item in registry_items(table_name)
-        if value(item, "renderVersion") != render_version
-    ]
+    stale = stale_registry_items(table_name, render_version)
     if not stale:
         print(f"All datasets already use render pyramid v{render_version}.")
         return
+
     timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
     jobs: list[str] = []
     for item in stale:
@@ -138,6 +143,14 @@ def main() -> None:
 
     print(f"Waiting for {len(jobs)} stale dataset render rebuild(s) to finish.")
     wait_for_jobs(jobs)
+
+    still_stale = stale_registry_items(table_name, render_version)
+    if still_stale:
+        dataset_ids = [value(item, "datasetId") or "unknown" for item in still_stale]
+        raise RuntimeError(
+            "render rebuild jobs succeeded but dataset registry is still stale: "
+            + ", ".join(dataset_ids)
+        )
     print(f"All datasets now use render pyramid v{render_version}.")
 
 
