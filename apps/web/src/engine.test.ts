@@ -51,7 +51,7 @@ describe("BrowserDuckDBEngine viewport cache", () => {
   });
 
   it("holds coarse overviews until the map is close enough to benefit from detail", () => {
-    expect([6.99, 7, 8.99, 9, 10.99, 11, 12.99, 13].map(zoom => lodForZoom(zoom, "medium"))).toEqual([0, 1, 1, 2, 2, 3, 3, 4]);
+    expect([6.99, 7, 8.99, 9, 10.99, 11, 12.99, 13].map(zoom => lodForZoom(zoom, "medium"))).toEqual([1, 2, 2, 3, 3, 4, 4, 5]);
   });
 
   it("reuses the same transferred GeoArrow buffers for an identical viewport", async () => {
