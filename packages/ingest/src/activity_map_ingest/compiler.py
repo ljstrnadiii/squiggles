@@ -605,7 +605,9 @@ def compile_source(options: CompileOptions, adapter: ActivitySourceAdapter) -> d
             ray.shutdown()
         if not activity_count:
             raise ValueError("no valid spatial activities were produced")
-        manifest = _finalize_dataset(rejects, Path(output_tmp), sink.shards, metadata_sink.files, render_sink.levels)
+        manifest = _finalize_dataset(
+            rejects, Path(output_tmp), sink.shards, metadata_sink.files, render_sink.levels
+        )
         validate_dataset(Path(output_tmp))
         rate = len(rejects) / (activity_count + len(rejects))
         if options.max_rejections is not None and len(rejects) > options.max_rejections:
@@ -642,7 +644,10 @@ def validate_dataset(path: Path) -> dict[str, Any]:
             raise ValueError(f"missing or invalid metadata file: {entry['path']}")
         table = pq.ParquetFile(file).read()
         metadata_rows += table.num_rows
-        if any(name.startswith("geometry") or name == "track_points" for name in table.column_names):
+        if any(
+            name.startswith("geometry") or name == "track_points"
+            for name in table.column_names
+        ):
             raise ValueError(f"metadata file contains heavy columns: {entry['path']}")
     if metadata_rows != manifest["activity_count"]:
         raise ValueError("metadata activity count differs")
@@ -677,7 +682,22 @@ def validate_dataset(path: Path) -> dict[str, Any]:
                 pc.equal(pc.list_value_length(table["geometry_clean"]), table["clean_vertex_count"])
             ).as_py():
                 raise ValueError(f"clean render vertex counts differ: {entry['path']}")
-            allowed = {"activity_id", "xmin", "ymin", "xmax", "ymax", "clean_xmin", "clean_ymin", "clean_xmax", "clean_ymax", "spatial_order", "vertex_count", "clean_vertex_count", "geometry", "geometry_clean"}
+            allowed = {
+                "activity_id",
+                "xmin",
+                "ymin",
+                "xmax",
+                "ymax",
+                "clean_xmin",
+                "clean_ymin",
+                "clean_xmax",
+                "clean_ymax",
+                "spatial_order",
+                "vertex_count",
+                "clean_vertex_count",
+                "geometry",
+                "geometry_clean",
+            }
             if set(table.column_names) != allowed:
                 raise ValueError(f"render file contains non-index metadata: {entry['path']}")
             if b"geo" not in (pq.read_schema(file).metadata or {}):

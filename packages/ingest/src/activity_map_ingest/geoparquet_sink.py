@@ -394,7 +394,11 @@ class MetadataDataSink(Datasink[list[ShardMetadata]]):
         Path(self.path).mkdir(parents=True, exist_ok=True)
 
     def write(self, blocks: Iterable[Block], ctx: TaskContext) -> list[ShardMetadata]:
-        tables = [BlockAccessor.for_block(block).to_arrow() for block in blocks if BlockAccessor.for_block(block).num_rows() > 0]
+        tables = [
+            BlockAccessor.for_block(block).to_arrow()
+            for block in blocks
+            if BlockAccessor.for_block(block).num_rows() > 0
+        ]
         if not tables:
             return []
         return write_metadata_dataset(pa.concat_tables(tables), Path(self.path))
