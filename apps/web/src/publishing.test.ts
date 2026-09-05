@@ -31,9 +31,14 @@ describe("published maps", () => {
     expect(result.url).toBe("/p/abcd1234");
   });
 
-  it("persists the resolved render plan and source viewport as a startup hint", async () => {
+  it("persists low medium and high render plans with their source viewport", async () => {
     const bounds: [number, number, number, number] = [-105.4, 39.9, -105.1, 40.2];
-    recordRenderPlan(defaultTab.id, { lod: 4, vertexEstimate: 420_000, bounds });
+    const plans = {
+      low: { lod: 3 as const, vertexEstimate: 700_000 },
+      medium: { lod: 4 as const, vertexEstimate: 1_100_000 },
+      high: { lod: 5 as const, vertexEstimate: 1_600_000 },
+    };
+    recordRenderPlan(defaultTab.id, { plans, bounds });
     const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ slug: "abcd1234", url: "/p/abcd1234" }), {
         status: 200,
@@ -48,8 +53,7 @@ describe("published maps", () => {
     );
     const body = JSON.parse(String(fetcher.mock.calls[0][1]!.body));
     expect(body.tabs[0]).toMatchObject({
-      startingLod: 4,
-      startingVertexEstimate: 420_000,
+      startingPlans: plans,
       startingBounds: bounds,
     });
   });
