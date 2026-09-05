@@ -1,0 +1,1 @@
+Production baseline before optimization: hosted Chrome workerOpenMs ≈ 29,175 ms on 2026-09-05. Treat this as the red performance reproduction; remove/update this marker once the same smoke demonstrates the optimized startup.
