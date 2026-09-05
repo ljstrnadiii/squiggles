@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { QueryTab, ViewportResult } from "./contracts";
 import { BrowserDuckDBEngine, cacheBudget, formatDuckDBDiagnostic } from "./engine";
-import { lodForZoom } from "./lod";
 import { defaultTab } from "./storage";
 
 const viewport = (): Omit<ViewportResult, "cache"> => ({
@@ -58,53 +57,53 @@ function workerRecorder(posted: Record<string, unknown>[]) {
   };
 }
 
+function v3Manifest() {
+  return {
+    schema_version: "1.4.0",
+    activity_count: 1,
+    rejection_count: 0,
+    bbox: [-105, 40, -104, 41],
+    shards: [{ path: "activities/a.parquet", row_count: 1, byte_size: 10, sha256: "a" }],
+    render_levels: [
+      {
+        lod: 0,
+        tolerance_m: 2048,
+        row_count: 1,
+        byte_size: 5,
+        bbox: [-105, 40, -104, 41],
+        file_count: 1,
+        row_group_count: 1,
+        files: [
+          {
+            path: "render/lod=0/part-00000.parquet",
+            row_count: 1,
+            byte_size: 5,
+            sha256: "b",
+            bbox: [-105, 40, -104, 41],
+            row_group_count: 1,
+            row_groups: [
+              {
+                row_count: 1,
+                bbox: [-105, 40, -104, 41],
+                vertex_count: { sum: 2, min: 2, max: 2 },
+                clean_vertex_count: { sum: 2, min: 2, max: 2 },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 describe("BrowserDuckDBEngine viewport cache", () => {
-  it("registers a partitioned render level separately from canonical shards", async () => {
+  it("registers v3 render files separately from canonical shards", async () => {
     const posted: Record<string, unknown>[] = [];
     const originalWorker = globalThis.Worker;
     globalThis.Worker = workerRecorder(posted) as unknown as typeof Worker;
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          schema_version: "1.4.0",
-          activity_count: 1,
-          rejection_count: 0,
-          bbox: [-105, 40, -104, 41],
-          shards: [
-            { path: "activities/a.parquet", row_count: 1, byte_size: 10, sha256: "a" },
-          ],
-          render_levels: [
-            {
-              lod: 0,
-              tolerance_m: 2048,
-              row_count: 1,
-              byte_size: 5,
-              bbox: [-105, 40, -104, 41],
-              file_count: 1,
-              row_group_count: 1,
-              files: [
-                {
-                  path: "render/lod=0/part-00000.parquet",
-                  row_count: 1,
-                  byte_size: 5,
-                  sha256: "b",
-                  bbox: [-105, 40, -104, 41],
-                  row_group_count: 1,
-                  row_groups: [
-                    {
-                      row_count: 1,
-                      bbox: [-105, 40, -104, 41],
-                      vertex_count: { sum: 2, min: 2, max: 2 },
-                      clean_vertex_count: { sum: 2, min: 2, max: 2 },
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
-        }),
-      ),
-    );
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify(v3Manifest())));
 
     const engine = new BrowserDuckDBEngine();
     await engine.openDataset({
@@ -139,38 +138,20 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     globalThis.Worker = originalWorker;
   });
 
-  it("normalizes a v2 one-file render level while rebuilds are in flight", async () => {
-    const posted: Record<string, unknown>[] = [];
+  it("rejects stale render manifests instead of carrying compatibility code", async () => {
     const originalWorker = globalThis.Worker;
-    globalThis.Worker = workerRecorder(posted) as unknown as typeof Worker;
+    globalThis.Worker = workerRecorder([]) as unknown as typeof Worker;
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
-          schema_version: "1.4.0",
-          activity_count: 1,
-          rejection_count: 0,
-          bbox: [-105, 40, -104, 41],
-          shards: [
-            { path: "activities/a.parquet", row_count: 1, byte_size: 10, sha256: "a" },
-          ],
+          ...v3Manifest(),
           render_levels: [
             {
               lod: 0,
-              tolerance_m: 2048,
               path: "render/lod-0.parquet",
               row_count: 1,
               byte_size: 5,
               sha256: "b",
-              bbox: [-105, 40, -104, 41],
-              row_group_count: 1,
-              row_groups: [
-                {
-                  row_count: 1,
-                  bbox: [-105, 40, -104, 41],
-                  vertex_count: { sum: 2, min: 2, max: 2 },
-                  clean_vertex_count: { sum: 2, min: 2, max: 2 },
-                },
-              ],
             },
           ],
         }),
@@ -178,34 +159,16 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     );
 
     const engine = new BrowserDuckDBEngine();
-    await engine.openDataset({
-      kind: "url",
-      baseUrl: "https://example.test/dataset",
-      name: "test",
-    });
-
-    expect(posted[0]).toMatchObject({
-      renderLevels: [
-        {
-          lod: 0,
-          files: [
-            {
-              name: "render/lod-0.parquet",
-              url: "https://example.test/dataset/render/lod-0.parquet",
-            },
-          ],
-        },
-      ],
-    });
+    await expect(
+      engine.openDataset({
+        kind: "url",
+        baseUrl: "https://example.test/dataset",
+        name: "test",
+      }),
+    ).rejects.toThrow("Dataset render format is stale");
 
     fetchMock.mockRestore();
     globalThis.Worker = originalWorker;
-  });
-
-  it("advances one tolerance level every two zooms", () => {
-    expect([6.99, 7, 8.99, 9, 10.99, 11, 12.99, 13].map((zoom) => lodForZoom(zoom))).toEqual([
-      0, 1, 1, 2, 2, 3, 3, 4,
-    ]);
   });
 
   it("reuses the same transferred GeoArrow buffers for an identical viewport", async () => {
@@ -221,7 +184,9 @@ describe("BrowserDuckDBEngine viewport cache", () => {
           renderPlan: { type: "arrow", activityIds: ["a"] },
           ...viewport(),
         };
-        queueMicrotask(() => this.onmessage?.({ data: { id: message.id, ok: true, value } } as MessageEvent));
+        queueMicrotask(() =>
+          this.onmessage?.({ data: { id: message.id, ok: true, value } } as MessageEvent),
+        );
       }
     }
 
@@ -243,7 +208,7 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     globalThis.Worker = originalWorker;
   });
 
-  it("reuses a cached same-LOD viewport when zooming into a contained area", async () => {
+  it("reuses a cached same-fidelity viewport when zooming into a contained area", async () => {
     const posted: unknown[] = [];
     class WorkerMock {
       onmessage: ((event: MessageEvent) => void) | null = null;
@@ -256,7 +221,9 @@ describe("BrowserDuckDBEngine viewport cache", () => {
           renderPlan: { type: "arrow", activityIds: ["a"] },
           ...viewport(),
         };
-        queueMicrotask(() => this.onmessage?.({ data: { id: message.id, ok: true, value } } as MessageEvent));
+        queueMicrotask(() =>
+          this.onmessage?.({ data: { id: message.id, ok: true, value } } as MessageEvent),
+        );
       }
     }
 
@@ -268,8 +235,8 @@ describe("BrowserDuckDBEngine viewport cache", () => {
       style: { ...defaultTab.style },
       sql: "SELECT activity_id FROM activities",
     };
-    await engine.execute(tab, 13.25, [-106, 39, -104, 41]);
-    const result = await engine.renderViewport(13.75, [-105.5, 39.5, -104.5, 40.5]);
+    await engine.execute(tab, 12.1, [-106, 39, -104, 41]);
+    const result = await engine.renderViewport(12.4, [-105.5, 39.5, -104.5, 40.5]);
     expect(posted).toHaveLength(1);
     expect(result.cache.hit).toBe(true);
     globalThis.Worker = originalWorker;
