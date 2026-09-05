@@ -11,4 +11,22 @@ describe("DuckDB worker startup", () => {
     expect(source).not.toContain("INSTALL spatial");
     expect(source).not.toContain("LOAD spatial");
   });
+
+  it("reports the expensive worker-open phases", () => {
+    const worker = readFileSync(join(process.cwd(), "src/duckdb.worker.ts"), "utf8");
+    const engine = readFileSync(join(process.cwd(), "src/engine.ts"), "utf8");
+
+    for (const phase of [
+      "selectBundleMs",
+      "instantiateMs",
+      "connectMs",
+      "registerFilesMs",
+      "activitySourceViewMs",
+      "activitiesViewMs",
+    ]) {
+      expect(worker).toContain(phase);
+      expect(engine).toContain(phase);
+    }
+    expect(engine).toContain('perf("worker-open-phases"');
+  });
 });
