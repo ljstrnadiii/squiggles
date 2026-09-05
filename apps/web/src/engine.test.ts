@@ -23,7 +23,7 @@ const viewport = (): Omit<ViewportResult, "cache"> => ({
 });
 
 describe("BrowserDuckDBEngine viewport cache", () => {
-  it("registers optional render pyramid files separately from canonical shards", async () => {
+  it("registers a partitioned render level separately from canonical shards", async () => {
     const posted: Record<string, unknown>[] = [];
     class WorkerMock {
       onmessage: ((event: MessageEvent) => void) | null = null;
@@ -37,21 +37,24 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       schema_version: "1.4.0", activity_count: 1, rejection_count: 0, bbox: [-105, 40, -104, 41],
       shards: [{ path: "activities/a.parquet", row_count: 1, byte_size: 10, sha256: "a" }],
-      render_levels: [{ lod: 0, path: "render/lod-0.parquet", row_count: 1, byte_size: 5, sha256: "b", row_groups: [{ row_count: 1, bbox: [-105, 40, -104, 41], vertex_count: { sum: 2, min: 2, max: 2 }, clean_vertex_count: { sum: 2, min: 2, max: 2 } }] }],
+      render_levels: [{
+        lod: 0, tolerance_m: 2048, row_count: 1, byte_size: 5, bbox: [-105, 40, -104, 41], file_count: 1, row_group_count: 1,
+        files: [{ path: "render/lod=0/part-00000.parquet", row_count: 1, byte_size: 5, sha256: "b", bbox: [-105, 40, -104, 41], row_group_count: 1, row_groups: [{ row_count: 1, bbox: [-105, 40, -104, 41], vertex_count: { sum: 2, min: 2, max: 2 }, clean_vertex_count: { sum: 2, min: 2, max: 2 } }] }],
+      }],
     })));
     const engine = new BrowserDuckDBEngine();
     await engine.openDataset({ kind: "url", baseUrl: "https://example.test/dataset", name: "test" });
     expect(posted[0]).toMatchObject({
       type: "open",
       files: [{ name: "activities/a.parquet", url: "https://example.test/dataset/activities/a.parquet" }],
-      renderLevels: [{ lod: 0, file: { name: "render/lod-0.parquet", url: "https://example.test/dataset/render/lod-0.parquet", rowGroups: [{ vertexSum: 2, cleanVertexSum: 2 }] } }],
+      renderLevels: [{ lod: 0, files: [{ name: "render/lod=0/part-00000.parquet", url: "https://example.test/dataset/render/lod=0/part-00000.parquet", rowGroups: [{ vertexSum: 2, cleanVertexSum: 2 }] }] }],
     });
     fetchMock.mockRestore();
     globalThis.Worker = originalWorker;
   });
 
-  it("holds coarse overviews until the map is close enough to benefit from detail", () => {
-    expect([6.99, 7, 8.99, 9, 10.99, 11, 12.99, 13].map(zoom => lodForZoom(zoom, "medium"))).toEqual([1, 2, 2, 3, 3, 4, 4, 5]);
+  it("advances one tolerance level every two zooms", () => {
+    expect([6.99, 7, 8.99, 9, 10.99, 11, 12.99, 13].map(zoom => lodForZoom(zoom))).toEqual([0, 1, 1, 2, 2, 3, 3, 4]);
   });
 
   it("reuses the same transferred GeoArrow buffers for an identical viewport", async () => {
@@ -109,7 +112,7 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     const message = formatDuckDBDiagnostic(
       { type: "execute", sql: "SELECT activity_id FROM activities", lod: 2, budget: 750000, bounds: [-105, 39, -104, 40], clean: false },
       new Error("Invalid Error: stoi: no conversion"),
-      { dataset: "archive", schemaVersion: "1.4.0", files: ["activities/a.parquet", "render/lod-2.parquet"] },
+      { dataset: "archive", schemaVersion: "1.4.0", files: ["activities/a.parquet", "render/lod=2/part-00000.parquet"] },
     );
     expect(message).toContain("Squiggles DuckDB failure");
     expect(message).toContain("Request: execute");
