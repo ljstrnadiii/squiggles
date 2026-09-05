@@ -1,0 +1,27 @@
+name: Metadata web patch helper
+
+on:
+  push:
+    branches:
+      - perf/metadata-overview-split
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: "${{ github.event.head_commit.message != 'perf: route hot paths through metadata parquet' }}"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: perf/metadata-overview-split
+      - name: Apply web split
+        run: |
+          python scripts/apply_metadata_web_split.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps scripts
+          git diff --cached --quiet && exit 0
+          git commit -m "perf: route hot paths through metadata parquet"
+          git push origin HEAD:perf/metadata-overview-split
