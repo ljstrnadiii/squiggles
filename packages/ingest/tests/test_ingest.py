@@ -59,9 +59,45 @@ def _fixture(root: Path) -> Path:
         "Filename",
     ]
     rows = [
-        ["1", "Jan 02, 2025, 03:04:05 AM", "Morning", "Run", "120", "1.5", "120", "110", "1.5", "10", "activities/1.gpx"],
-        ["2", "Jan 02, 2025, 03:04:05 AM", "Evening", "Ride", "60", "1", "60", "55", "1", "5", "activities/2.tcx.gz"],
-        ["3", "Jan 02, 2025, 03:04:05 AM", "Missing", "Run", "60", "1", "60", "55", "1", "5", "activities/3.fit.gz"],
+        [
+            "1",
+            "Jan 02, 2025, 03:04:05 AM",
+            "Morning",
+            "Run",
+            "120",
+            "1.5",
+            "120",
+            "110",
+            "1.5",
+            "10",
+            "activities/1.gpx",
+        ],
+        [
+            "2",
+            "Jan 02, 2025, 03:04:05 AM",
+            "Evening",
+            "Ride",
+            "60",
+            "1",
+            "60",
+            "55",
+            "1",
+            "5",
+            "activities/2.tcx.gz",
+        ],
+        [
+            "3",
+            "Jan 02, 2025, 03:04:05 AM",
+            "Missing",
+            "Run",
+            "60",
+            "1",
+            "60",
+            "55",
+            "1",
+            "5",
+            "activities/3.fit.gz",
+        ],
     ]
     with (root / "activities.csv").open("w", newline="") as handle:
         writer = csv.writer(handle)
@@ -112,7 +148,8 @@ def test_lod_preserves_endpoints() -> None:
 
 def test_lod_meets_target_for_self_crossing_line() -> None:
     points = [
-        TrackPoint(-105 + (index % 17) * 0.001, 40 + (index % 19) * 0.001) for index in range(500)
+        TrackPoint(-105 + (index % 17) * 0.001, 40 + (index % 19) * 0.001)
+        for index in range(500)
     ]
     result = simplify(points, 40)
     assert len(result) <= 40
@@ -184,9 +221,15 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
 
     levels = manifest["render_levels"]
     assert [level["lod"] for level in levels] == list(range(8))
+    assert all(level["spatial_layout"] == "str" for level in levels)
     assert all(level["files"] for level in levels)
     assert all(
-        file["path"].startswith(f"render/lod={level['lod']}/")
+        file["path"].startswith(f"render/lod={level['lod']}/part-")
+        for level in levels
+        for file in level["files"]
+    )
+    assert all(
+        "activity_family=" not in file["path"] and "start_year=" not in file["path"]
         for level in levels
         for file in level["files"]
     )
@@ -196,11 +239,17 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
         for level in levels
     )
     assert all(
-        sum(group["vertex_count"]["sum"] for file in level["files"] for group in file["row_groups"]) > 0
+        sum(
+            group["vertex_count"]["sum"]
+            for file in level["files"]
+            for group in file["row_groups"]
+        )
+        > 0
         for level in levels
     )
     assert all(
-        group["estimated_uncompressed_bytes"] <= 4 * 1024 * 1024 or group["row_count"] == 1
+        group["estimated_uncompressed_bytes"] <= 4 * 1024 * 1024
+        or group["row_count"] == 1
         for level in levels
         for file in level["files"]
         for group in file["row_groups"]
@@ -212,7 +261,12 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
     assert "geometry_clean_lod0" in activity_table.column_names
     assert validate_dataset(output)["activity_count"] == 2
     assert pq.read_table(output / "rejections.parquet").num_rows == 1
-    assert json.loads((output / "dataset.json").read_text())["bbox"] == [-105.02, 40.0, -105.0, 40.02]
+    assert json.loads((output / "dataset.json").read_text())["bbox"] == [
+        -105.02,
+        40.0,
+        -105.0,
+        40.02,
+    ]
     with pytest.raises(FileExistsError):
         compile_strava(CompileOptions(source, output))
 
