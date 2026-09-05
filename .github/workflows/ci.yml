@@ -30,14 +30,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.13"
           enable-cache: true
       - run: uv sync --locked
+      - name: Require render version bump for format changes
+        if: github.event_name == 'pull_request'
+        run: uv run --frozen python scripts/check_render_version.py origin/${{ github.base_ref }}
       - run: uv run --frozen ruff check .
       - run: uv run --frozen mypy
-      - run: uv run --frozen pytest
+      - name: Compile and validate current dataset format
+        run: >-
+          uv run --frozen pytest
+          packages/ingest/tests/test_ingest.py::test_compile_validate_and_refuse_overwrite
+      - name: Run remaining Python tests
+        run: uv run --frozen pytest -k 'not test_compile_validate_and_refuse_overwrite'
 
   web:
     runs-on: ubuntu-latest
