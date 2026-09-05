@@ -17,14 +17,14 @@ export type DatasetSource =
 export type Activity = { activityId: string; name: string; sportType: string };
 export type QueryTab = { id: string; title: string; sql: string; mapState: MapState; style: MapStyle; spatialFilter?: SpatialFilter; startingLod?: RenderLod; startingVertexEstimate?: number };
 export type SummaryStats = { activityCount: number; distanceM: number; elapsedSeconds: number; movingSeconds: number; elevationGainM: number; elevationLossM: number; minElevationM: number | null; maxElevationM: number | null; maxDistanceM: number | null; activeDays: number; droppedJumpPoints: number; droppedElevationPoints: number; sportCounts: { sport: string; count: number }[]; firstActivity: string | null; lastActivity: string | null };
-export type RenderPlan = { type: "arrow"; activityIds: string[] } | { type: "mvt"; urlTemplate: string };
+export type RenderPlan = { type: "arrow"; activityIds: string[] };
 export type QueryResult = { queryId: string; summary: SummaryStats; renderPlan: RenderPlan };
 export type Share = { id: string; tabId: string; datasetId: string };
 
 export type VertexStats = { sum: number; min: number; max: number };
-export type RowGroupManifest = { row_count: number; bbox: ViewportBounds; vertex_count?: VertexStats; clean_vertex_count?: VertexStats };
+export type RowGroupManifest = { row_count: number; bbox: ViewportBounds; estimated_uncompressed_bytes?: number; vertex_count?: VertexStats; clean_vertex_count?: VertexStats };
 export type DatasetFileManifest = { path: string; row_count: number; byte_size: number; sha256: string; bbox?: ViewportBounds; row_group_count?: number; row_groups?: RowGroupManifest[] };
-export type RenderLevelManifest = DatasetFileManifest & { lod: RenderLod; tolerance_m?: number | null };
+export type RenderLevelManifest = { lod: RenderLod; tolerance_m: number | null; row_count: number; byte_size: number; bbox: ViewportBounds; file_count: number; row_group_count: number; files: DatasetFileManifest[] };
 export type DatasetManifest = { schema_version: string; activity_count: number; rejection_count: number; bbox: ViewportBounds; shards: DatasetFileManifest[]; render_levels?: RenderLevelManifest[] };
 export type ElevationSample = { distanceM: number; elevationM: number; position: [number, number] };
 export type RouteMetadata = { activityId: string; name: string; sportType: string; startTime: string | null; distanceM: number | null; elevationGainM: number | null; maxElevationM: number | null; sourceUrl: string | null };
