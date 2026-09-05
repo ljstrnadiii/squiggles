@@ -1,8 +1,7 @@
-import type { RenderLod, ViewportBounds } from "./contracts";
+import type { ResolutionRenderPlans, ViewportBounds } from "./contracts";
 
 export type RenderPlanHint = {
-  lod: RenderLod;
-  vertexEstimate: number;
+  plans: ResolutionRenderPlans;
   bounds?: ViewportBounds;
 };
 
