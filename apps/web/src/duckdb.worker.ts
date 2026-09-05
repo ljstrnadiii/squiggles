@@ -175,6 +175,7 @@ async function initialize() {
   database = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), new Worker(bundle.mainWorker!));
   await database.instantiate(bundle.mainModule, bundle.pthreadWorker);
   connection = await database.connect();
+  await connection.query("INSTALL spatial; LOAD spatial;");
   return database;
 }
 
