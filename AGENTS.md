@@ -17,6 +17,10 @@
 - No NAT Gateway, RDS/Aurora, EKS, OpenSearch, ElastiCache, or always-on compute without an explicit decision.
 - Keep development infrastructure under $50/month.
 - Measure performance changes before and after when practical.
-- Do not assume MVT beats direct Arrow rendering; benchmark through `RenderPlan`.
+- Do not assume an alternate render format beats direct Arrow rendering; benchmark before introducing another render stack.
+- Prefer clear refactors and deletion of stale abstractions when touching an area; do not preserve technical debt merely to minimize the diff.
+- Optimize TypeScript, DuckDB, GeoParquet, and compiler code for straightforward human readability so domain contributors can follow the data flow without reverse engineering legacy layers.
+- Prefer one obvious implementation path over compatibility shims or parallel old/new paths unless backward compatibility is an explicit requirement.
+- Keep names and physical data-layout concepts aligned across compiler manifests, browser contracts, and DuckDB execution.
 - MCP/AI are normal API clients with no privileged data access.
-- Work in small stages; update tests and docs with behavior changes.
+- Work in coherent stages; update tests and docs with behavior changes, and avoid unnecessary intermediate data-format migrations when one complete migration is practical.
