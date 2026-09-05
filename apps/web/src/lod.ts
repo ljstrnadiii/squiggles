@@ -6,16 +6,15 @@ export const RESOLUTION_VERTEX_BUDGETS = { low: 750_000, medium: 1_250_000, high
 
 const BASE_ZOOM_BREAKS = [7, 9, 11, 13, 15, 17, 19] as const;
 
-export function lodForZoom(zoom: number, resolution: "low" | "medium" | "high" = "medium"): Lod {
-  let base = 0;
-  while (base < BASE_ZOOM_BREAKS.length && zoom >= BASE_ZOOM_BREAKS[base]) base += 1;
-  const shift = resolution === "low" ? 0 : resolution === "medium" ? 1 : 2;
-  return Math.max(0, Math.min(MAX_LOD, base + shift)) as Lod;
+export function lodForZoom(zoom: number): Lod {
+  let lod = 0;
+  while (lod < BASE_ZOOM_BREAKS.length && zoom >= BASE_ZOOM_BREAKS[lod]) lod += 1;
+  return Math.max(0, Math.min(MAX_LOD, lod)) as Lod;
 }
 
 export function chooseLod(estimates: readonly number[], zoomLod: Lod, budget: number): Lod {
-  // Zoom/resolution define the fidelity ceiling. The vertex budget may only
-  // move toward coarser render levels when the requested level is too large.
+  // Zoom defines the approximately subpixel fidelity ceiling. Device resolution
+  // controls only the vertex budget and may move the plan toward coarser LODs.
   let planned: Lod = zoomLod;
   while (planned > 0 && (estimates[planned] ?? Number.POSITIVE_INFINITY) > budget) {
     planned = (planned - 1) as Lod;
