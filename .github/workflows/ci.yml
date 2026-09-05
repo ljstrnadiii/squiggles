@@ -157,6 +157,61 @@ jobs:
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           INGEST_IMAGE: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/squiggles-ingest:${{ github.sha }}
 
+      - name: Invalidate production delivery cache
+        env:
+          DISTRIBUTION_ID: ${{ steps.pulumi.outputs.distributionId }}
+        run: |
+          invalidation_id=$(aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths '/*' \
+            --query 'Invalidation.Id' \
+            --output text)
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --id "$invalidation_id"
+
+      - name: Smoke test production dataset startup
+        env:
+          APPLICATION_URL: ${{ steps.pulumi.outputs.applicationUrl }}
+        run: |
+          set -euo pipefail
+          nonce="${GITHUB_SHA}-$(date +%s)"
+          curl --fail --silent --show-error --retry 5 --retry-all-errors \
+            "$APPLICATION_URL/runtime-config.json?smoke=$nonce" \
+            -o /tmp/runtime-config.json
+          dataset_id=$(python - <<'PY'
+          import json
+          config = json.load(open('/tmp/runtime-config.json'))
+          dataset_id = config.get('defaultDatasetId')
+          if not dataset_id:
+              raise SystemExit('runtime-config.json has no defaultDatasetId')
+          print(dataset_id)
+          PY
+          )
+          curl --fail --silent --show-error --retry 5 --retry-all-errors \
+            "$APPLICATION_URL/datasets/$dataset_id/dataset.json?smoke=$nonce" \
+            -o /tmp/dataset.json
+          render_path=$(python - <<'PY'
+          import json
+          manifest = json.load(open('/tmp/dataset.json'))
+          if str(manifest.get('render_pyramid_version')) != '3':
+              raise SystemExit(f"expected render pyramid v3, got {manifest.get('render_pyramid_version')!r}")
+          levels = manifest.get('render_levels') or []
+          if len(levels) != 8:
+              raise SystemExit(f'expected 8 render levels, got {len(levels)}')
+          files = levels[0].get('files') or []
+          if not files:
+              raise SystemExit('LOD 0 has no render files')
+          print(files[0]['path'])
+          PY
+          )
+          curl --fail --silent --show-error --retry 5 --retry-all-errors \
+            --range 0-1023 \
+            "$APPLICATION_URL/datasets/$dataset_id/$render_path" \
+            -o /tmp/render-range.bin
+          test -s /tmp/render-range.bin
+          echo "Production startup smoke test passed for dataset $dataset_id ($render_path)."
+
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: deploy
