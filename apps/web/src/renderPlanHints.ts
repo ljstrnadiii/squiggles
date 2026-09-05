@@ -1,6 +1,10 @@
-import type { RenderLod } from "./contracts";
+import type { RenderLod, ViewportBounds } from "./contracts";
 
-export type RenderPlanHint = { lod: RenderLod; vertexEstimate: number };
+export type RenderPlanHint = {
+  lod: RenderLod;
+  vertexEstimate: number;
+  bounds?: ViewportBounds;
+};
 
 const hints = new Map<string, RenderPlanHint>();
 let activeTabId: string | null = null;
