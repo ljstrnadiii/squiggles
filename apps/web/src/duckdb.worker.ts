@@ -305,6 +305,7 @@ async function initialize() {
   const instantiateMs = performance.now() - instantiateStarted;
   const connectStarted = performance.now();
   connection = await database.connect();
+  await connection.query("INSTALL spatial; LOAD spatial");
   const connectMs = performance.now() - connectStarted;
   initializationTimings = { selectBundleMs, instantiateMs, connectMs };
   return database;
