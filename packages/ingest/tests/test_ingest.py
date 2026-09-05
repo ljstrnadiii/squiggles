@@ -148,8 +148,7 @@ def test_lod_preserves_endpoints() -> None:
 
 def test_lod_meets_target_for_self_crossing_line() -> None:
     points = [
-        TrackPoint(-105 + (index % 17) * 0.001, 40 + (index % 19) * 0.001)
-        for index in range(500)
+        TrackPoint(-105 + (index % 17) * 0.001, 40 + (index % 19) * 0.001) for index in range(500)
     ]
     result = simplify(points, 40)
     assert len(result) <= 40
@@ -239,17 +238,12 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
         for level in levels
     )
     assert all(
-        sum(
-            group["vertex_count"]["sum"]
-            for file in level["files"]
-            for group in file["row_groups"]
-        )
+        sum(group["vertex_count"]["sum"] for file in level["files"] for group in file["row_groups"])
         > 0
         for level in levels
     )
     assert all(
-        group["estimated_uncompressed_bytes"] <= 4 * 1024 * 1024
-        or group["row_count"] == 1
+        group["estimated_uncompressed_bytes"] <= 4 * 1024 * 1024 or group["row_count"] == 1
         for level in levels
         for file in level["files"]
         for group in file["row_groups"]
