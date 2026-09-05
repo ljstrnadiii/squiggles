@@ -299,7 +299,6 @@ async function initialize() {
   );
   await database.instantiate(bundle.mainModule, bundle.pthreadWorker);
   connection = await database.connect();
-  await connection.query("INSTALL spatial; LOAD spatial;");
   return database;
 }
 
