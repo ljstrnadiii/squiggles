@@ -1,12 +1,11 @@
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 describe("DuckDB worker startup", () => {
   it("does not install or load the spatial extension on startup", () => {
-    const workerPath = fileURLToPath(new URL("./duckdb.worker.ts", import.meta.url));
-    const source = readFileSync(workerPath, "utf8");
+    const source = readFileSync(join(process.cwd(), "src/duckdb.worker.ts"), "utf8");
 
     // Keep startup free of unused extension installation/loading work.
     expect(source).not.toContain("INSTALL spatial");
