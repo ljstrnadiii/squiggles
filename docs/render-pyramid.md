@@ -40,12 +40,32 @@ Physical sizing is intentionally decoupled:
 
 The 4 MiB and 1 GiB values are tuning targets rather than wire-size guarantees. Parquet compression and column pruning generally reduce actual stored and transferred bytes below the uncompressed Arrow estimates.
 
-The camera selects the coarsest approximately subpixel LOD for the current zoom. Low, Medium, and High only define vertex budgets: 750k, 1.25M, and 1.75M vertices. If the preferred level exceeds budget, the renderer walks to coarser levels until it fits or reaches LOD 0.
+## Screen-space fidelity
+
+“Subpixel” refers to route geometry error on the rendered map, not the intrinsic ground-sample distance of the basemap imagery. The browser computes Web Mercator ground resolution at the camera center:
+
+```text
+meters_per_css_pixel = earth_circumference * cos(latitude) / (512 * 2^zoom)
+```
+
+It then chooses the coarsest fixed tolerance whose simplification error is no larger than one rendered CSS pixel. Latitude therefore matters in addition to zoom.
+
+Basemap provider resolution and overview metadata are intentionally not part of this decision. Squiggles currently uses ordinary 256px XYZ raster sources for streets, topo, and imagery; those tile URLs do not expose a reliable native imagery GSD. More importantly, imagery GSD answers how sharp the underlying raster is, while route simplification visibility is determined by the screen-space map projection. Basemap `maxzoom` controls tile availability/overscaling, not route fidelity.
+
+Low, Medium, and High only define vertex budgets: 750k, 1.25M, and 1.75M vertices. If the screen-space preferred level exceeds budget, the renderer walks to coarser levels until it fits or reaches LOD 0. Dense repeated-route hotspots may therefore intentionally use more than one pixel of simplification error to preserve interaction performance.
 
 Each render row stores `vertex_count` and `clean_vertex_count`. Compiler metadata records covering bboxes plus total/min/max vertex counts for every render file/row group. Universal selections therefore estimate candidate LODs without exploratory Parquet requests. Arbitrary SQL still selects exact activity IDs in canonical `activities`; render geometry is read only from the chosen LOD and spatially relevant STR groups.
 
 Spatial bboxes are pruning metadata, not clipping boundaries: activities remain whole features and may extend outside the current viewport or any storage group.
 
-Published tabs persist their resolved starting LOD and vertex estimate as a one-time startup hint. Reopening a saved camera begins from that known plan; normal adaptive selection resumes afterward.
+## Published startup plans
 
-`render_pyramid_version` is written to dataset manifests and registry metadata. After a production deploy, CI scans dataset registry rows and submits derived AWS Batch rebuilds for stale render versions. Derived rebuilds use canonical full geometry and do not require source re-upload or re-import.
+Each successful render computes the appropriate starting plan for all three resolution budgets in a single walk down the LOD ladder. Publishing stores the Low, Medium, and High `{lod, vertexEstimate}` plans together with the viewport bounds from which those estimates were computed.
+
+When a published link opens, the browser immediately selects the saved plan matching the visitor's Low/Medium/High setting. The saved vertex estimate is trusted only when the opening viewport is contained by the saved viewport; a wider viewport keeps the saved LOD as a hint but recomputes the budget check because it may contain more activities. Normal adaptive planning resumes after startup.
+
+## Versioning and rebuilds
+
+`render_pyramid_version` is written to dataset manifests and registry metadata. Any physical render-layout, render-manifest, fixed-tolerance, or compiler change that requires rebuilding derived render data must bump `RENDER_PYRAMID_VERSION` in the same PR.
+
+PR CI compiles and validates the current dataset format from synthetic source data and checks the version bump for format-sensitive changes. Production user archives are not exposed to untrusted PR code. After a production deploy, trusted CI scans dataset registry rows and submits derived AWS Batch rebuilds for stale render versions. Derived rebuilds use canonical full geometry and do not require source re-upload or re-import.
