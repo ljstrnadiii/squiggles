@@ -28,7 +28,7 @@ from .schema import (
 )
 
 ShardMetadata = dict[str, Any]
-RENDER_ROW_GROUP_TARGET_VERTICES = 1_000_000
+RENDER_ROW_GROUP_TARGET_BYTES = 16 * 1024 * 1024
 RENDER_SCALARS = [
     "activity_id",
     "name",
@@ -57,18 +57,23 @@ RENDER_SCALARS = [
 def _render_row_groups(
     table: Table[RenderActivitySchema],
 ) -> list[Table[RenderActivitySchema]]:
-    raw = table["vertex_count"].to_pylist()
-    clean = table["clean_vertex_count"].to_pylist()
+    """Group whole activity rows into approximately byte-bounded Parquet row groups.
+
+    LOD is already a physical file boundary. This second boundary keeps each
+    requestable row group reasonably small without ever splitting an activity.
+    Coarse levels naturally collapse to one row group when the full level is
+    below the target.
+    """
     groups: list[Table[RenderActivitySchema]] = []
     start = 0
-    vertices = 0
-    for index, (raw_count, clean_count) in enumerate(zip(raw, clean, strict=True)):
-        next_vertices = int(raw_count) + int(clean_count)
-        if index > start and vertices + next_vertices > RENDER_ROW_GROUP_TARGET_VERTICES:
+    estimated_bytes = 0
+    for index in range(table.num_rows):
+        row_bytes = max(1, table.slice(index, 1).nbytes)
+        if index > start and estimated_bytes + row_bytes > RENDER_ROW_GROUP_TARGET_BYTES:
             groups.append(cast(Table[RenderActivitySchema], table.slice(start, index - start)))
             start = index
-            vertices = 0
-        vertices += next_vertices
+            estimated_bytes = 0
+        estimated_bytes += row_bytes
     if start < table.num_rows:
         groups.append(cast(Table[RenderActivitySchema], table.slice(start)))
     return groups
@@ -130,6 +135,7 @@ def write_render_pyramid(
                 {
                     "row_count": group.num_rows,
                     "bbox": _table_bounds(group),
+                    "estimated_uncompressed_bytes": group.nbytes,
                     "vertex_count": {
                         "sum": pc.sum(group["vertex_count"]).as_py(),
                         "min": pc.min(group["vertex_count"]).as_py(),
