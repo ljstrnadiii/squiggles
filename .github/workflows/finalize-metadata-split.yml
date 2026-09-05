@@ -1,0 +1,36 @@
+name: Finalize metadata split
+on:
+  push:
+    branches: [perf/metadata-overview-split]
+    paths:
+      - scripts/finalize_metadata_split.py
+      - .github/workflows/finalize-metadata-split.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: perf/metadata-overview-split
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.13"
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.22.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: uv sync --locked
+      - run: pnpm install --frozen-lockfile
+      - run: python scripts/finalize_metadata_split.py
+      - run: rm scripts/finalize_metadata_split.py .github/workflows/finalize-metadata-split.yml
+      - run: uv run ruff format packages/ingest/src/activity_map_ingest packages/ingest/tests/test_ingest.py
+      - run: uv run ruff check --fix packages/ingest/src/activity_map_ingest packages/ingest/tests/test_ingest.py
+      - run: pnpm --filter @squiggles/web exec eslint src --fix
+      - run: git config user.name 'github-actions[bot]' && git config user.email '41898282+github-actions[bot]@users.noreply.github.com' && git add -A && git commit -m 'perf: finalize metadata and overview split' && git push
