@@ -38,6 +38,14 @@ COMPILER_VERSION = "0.6.0"
 SUPPORTED = (".fit", ".fit.gz", ".gpx", ".gpx.gz", ".tcx", ".tcx.gz")
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class CompileOptions:
     input_path: Path
@@ -623,7 +631,7 @@ def validate_dataset(path: Path) -> dict[str, Any]:
         raise ValueError(f"manifest must contain render levels 0 through {RENDER_LEVEL_COUNT - 1}")
     for shard in shards:
         file = path / shard["path"]
-        if not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest() != shard["sha256"]:
+        if not file.is_file() or _sha256_file(file) != shard["sha256"]:
             raise ValueError(f"missing or invalid shard: {shard['path']}")
         table = pq.ParquetFile(file).read()
         validate_arrow_table(table)
@@ -650,7 +658,7 @@ def validate_dataset(path: Path) -> dict[str, Any]:
         level_rows = 0
         for entry in files:
             file = path / entry["path"]
-            if not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest() != entry["sha256"]:
+            if not file.is_file() or _sha256_file(file) != entry["sha256"]:
                 raise ValueError(f"missing or invalid render file: {entry['path']}")
             table = pq.ParquetFile(file).read()
             level_rows += table.num_rows
