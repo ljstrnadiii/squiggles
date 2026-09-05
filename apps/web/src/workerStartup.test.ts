@@ -4,19 +4,20 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("DuckDB worker startup", () => {
-  it("does not install or load the spatial extension on startup", () => {
+  it("loads the spatial extension during startup", () => {
     const source = readFileSync(join(process.cwd(), "src/duckdb.worker.ts"), "utf8");
+    const initializeBody = source.slice(
+      source.indexOf("async function initialize()"),
+      source.indexOf("function viewportPredicate"),
+    );
 
-    // Keep startup free of unused extension installation/loading work.
-    expect(source).not.toContain("INSTALL spatial");
-    expect(source).not.toContain("LOAD spatial");
+    expect(initializeBody).toContain('await connection.query("INSTALL spatial; LOAD spatial")');
   });
 
   it("reports the expensive worker-open phases", () => {
     const worker = readFileSync(join(process.cwd(), "src/duckdb.worker.ts"), "utf8");
     const engine = readFileSync(join(process.cwd(), "src/engine.ts"), "utf8");
 
-    // Keep phase detail available in the hosted smoke for the next optimization.
     for (const phase of [
       "selectBundleMs",
       "instantiateMs",
