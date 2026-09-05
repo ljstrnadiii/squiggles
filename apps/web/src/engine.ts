@@ -13,7 +13,7 @@ import type {
   ViewportBounds,
   ViewportResult,
 } from "./contracts";
-import { lodForView, RESOLUTION_VERTEX_BUDGETS, type Lod } from "./lod";
+import { lodForView, type Lod } from "./lod";
 import { normalizeSelectionSql } from "./querySql";
 import {
   activateRenderTab,
@@ -90,7 +90,9 @@ export function formatDuckDBDiagnostic(
   if (extra.schemaVersion) lines.push(`Schema: ${String(extra.schemaVersion)}`);
   if (typeof request.clean === "boolean") lines.push(`Clean geometry: ${request.clean}`);
   if (typeof request.lod === "number") lines.push(`LOD: ${request.lod}`);
-  if (typeof request.budget === "number") lines.push(`Vertex budget: ${request.budget}`);
+  if (typeof request.resolution === "string") {
+    lines.push(`Resolution: ${request.resolution}`);
+  }
   if (Array.isArray(request.bounds)) lines.push(`Bounds: ${request.bounds.join(", ")}`);
 
   const files = Array.isArray(extra.files) ? extra.files.map(String) : [];
@@ -117,7 +119,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   private cacheBytes = 0;
   private cacheEvictions = 0;
   private resolution: SystemResolution = "medium";
-  private consumedPublishedLods = new Set<string>();
+  private consumedPublishedPlans = new Set<string>();
 
   private get cacheBudget() {
     return cacheBudget(this.resolution);
@@ -168,13 +170,14 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   }
 
   private initialPlan(tab: QueryTab, zoom: number, bounds?: ViewportBounds) {
-    if (tab.startingLod != null && !this.consumedPublishedLods.has(tab.id)) {
-      this.consumedPublishedLods.add(tab.id);
+    const published = tab.startingPlans?.[this.resolution];
+    if (published && !this.consumedPublishedPlans.has(tab.id)) {
+      this.consumedPublishedPlans.add(tab.id);
       const estimateIsSafe =
         tab.startingBounds != null && bounds != null && boundsContains(tab.startingBounds, bounds);
       return {
-        lod: tab.startingLod,
-        startingVertexEstimate: estimateIsSafe ? tab.startingVertexEstimate : undefined,
+        lod: published.lod,
+        startingVertexEstimate: estimateIsSafe ? published.vertexEstimate : undefined,
       };
     }
     return {
@@ -271,7 +274,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     this.cache.clear();
     this.cacheBytes = 0;
     this.cacheEvictions = 0;
-    this.consumedPublishedLods.clear();
+    this.consumedPublishedPlans.clear();
     clearRenderPlanHints();
 
     const manifestStarted = performance.now();
@@ -400,7 +403,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       type: "execute",
       sql,
       lod: plan.lod,
-      budget: RESOLUTION_VERTEX_BUDGETS[this.resolution],
+      resolution: this.resolution,
       bounds,
       clean: nextClean,
       startingVertexEstimate: plan.startingVertexEstimate,
@@ -409,11 +412,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     this.clean = nextClean;
     this.selectionKey = `${this.datasetRevision}|${this.clean ? 1 : 0}|${sql}`;
     activateRenderTab(tab.id);
-    recordRenderPlan(tab.id, {
-      lod: result.lod,
-      vertexEstimate: result.plannedVertexEstimate,
-      bounds,
-    });
+    recordRenderPlan(tab.id, { plans: result.resolutionPlans, bounds });
     perf("selection-execute", {
       totalMs: Math.round(performance.now() - started),
       zoom: Number(zoom.toFixed(2)),
@@ -436,11 +435,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     const requestedKey = this.cacheKey(zoom, bounds);
     const cached = this.cached(requestedKey, bounds, zoom);
     if (cached) {
-      recordActiveRenderPlan({
-        lod: cached.lod,
-        vertexEstimate: cached.plannedVertexEstimate,
-        bounds,
-      });
+      recordActiveRenderPlan({ plans: cached.resolutionPlans, bounds });
       perf("viewport-cache-hit", {
         zoom: Number(zoom.toFixed(2)),
         lod: cached.lod,
@@ -455,15 +450,11 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     const result = await this.networkRequest<WorkerViewportResult>({
       type: "render",
       lod: requestedLod,
-      budget: RESOLUTION_VERTEX_BUDGETS[this.resolution],
+      resolution: this.resolution,
       bounds: fetchBounds,
       clean: this.clean,
     });
-    recordActiveRenderPlan({
-      lod: result.lod,
-      vertexEstimate: result.plannedVertexEstimate,
-      bounds: fetchBounds,
-    });
+    recordActiveRenderPlan({ plans: result.resolutionPlans, bounds: fetchBounds });
     perf("viewport-fetch", {
       totalMs: Math.round(performance.now() - started),
       zoom: Number(zoom.toFixed(2)),
