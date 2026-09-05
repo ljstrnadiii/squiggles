@@ -35,8 +35,11 @@ def versioned_manifest(manifest: dict[str, Any], build_id: str) -> dict[str, Any
         raise ValueError("invalid build identifier")
     result = copy.deepcopy(manifest)
     prefix = f"builds/{build_id}/"
-    for entry in [*result.get("shards", []), *result.get("render_levels", [])]:
+    for entry in result.get("shards", []):
         entry["path"] = prefix + entry["path"]
+    for level in result.get("render_levels", []):
+        for file in level.get("files", []):
+            file["path"] = prefix + file["path"]
     result["build"] = {
         "id": build_id,
         "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -65,17 +68,34 @@ def rebuild_derived_dataset(
         shutil.copy2(source_path, target)
         if hashlib.sha256(target.read_bytes()).hexdigest() != shard["sha256"]:
             raise ValueError(f"canonical shard checksum differs: {shard['path']}")
-        tables.append(pq.ParquetFile(target).read())
+        table = pq.ParquetFile(target).read()
+        # Canonical shards encode activity_family as a Hive partition rather than
+        # a physical column. Restore it while deriving the render dataset.
+        family = next(
+            (
+                part.split("=", 1)[1]
+                for part in Path(relative).parts
+                if part.startswith("activity_family=")
+            ),
+            "other",
+        )
+        if "activity_family" not in table.column_names:
+            table = table.append_column(
+                "activity_family", pa.array([family] * table.num_rows, type=pa.string())
+            )
+        tables.append(table)
         normalized_shards.append({**shard, "path": relative})
     rejection_source = source / "rejections.parquet"
     if rejection_source.is_file():
         shutil.copy2(rejection_source, output / "rejections.parquet")
     render_levels = write_render_pyramid(
-        pa.concat_tables(tables), output / "render", progress_callback=progress_callback
+        pa.concat_tables(tables, promote_options="default"),
+        output / "render",
+        progress_callback=progress_callback,
     )
     rebuilt = {
         **{key: value for key, value in manifest.items() if key not in {"build", "render_levels"}},
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": manifest.get("schema_version", SCHEMA_VERSION),
         "compiler_version": COMPILER_VERSION,
         "render_pyramid_version": RENDER_PYRAMID_VERSION,
         "shards": normalized_shards,
