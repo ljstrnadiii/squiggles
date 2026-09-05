@@ -69,8 +69,6 @@ def rebuild_derived_dataset(
         if hashlib.sha256(target.read_bytes()).hexdigest() != shard["sha256"]:
             raise ValueError(f"canonical shard checksum differs: {shard['path']}")
         table = pq.ParquetFile(target).read()
-        # Canonical shards encode activity_family as a Hive partition rather than
-        # a physical column. Restore it while deriving the render dataset.
         family = next(
             (
                 part.split("=", 1)[1]
@@ -95,7 +93,7 @@ def rebuild_derived_dataset(
     )
     rebuilt = {
         **{key: value for key, value in manifest.items() if key not in {"build", "render_levels"}},
-        "schema_version": manifest.get("schema_version", SCHEMA_VERSION),
+        "schema_version": SCHEMA_VERSION,
         "compiler_version": COMPILER_VERSION,
         "render_pyramid_version": RENDER_PYRAMID_VERSION,
         "shards": normalized_shards,
