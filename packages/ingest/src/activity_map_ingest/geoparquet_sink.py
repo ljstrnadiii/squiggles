@@ -28,12 +28,14 @@ from .schema import (
 )
 
 ShardMetadata = dict[str, Any]
-RENDER_ROW_GROUP_TARGET_BYTES = 4 * 1024 * 1024
+RENDER_CHUNK_TARGET_BYTES = 4 * 1024 * 1024
 RENDER_SCALARS = [
     "activity_id",
     "name",
     "sport_type",
     "start_time",
+    "start_year",
+    "activity_family",
     "distance_m",
     "elevation_gain_m",
     "max_elevation_m",
@@ -54,22 +56,14 @@ RENDER_SCALARS = [
 ]
 
 
-def _render_row_groups(
-    table: Table[RenderActivitySchema],
-) -> list[Table[RenderActivitySchema]]:
-    """Group whole activity rows into approximately byte-bounded Parquet row groups.
-
-    LOD is already a physical file boundary. This second boundary keeps each
-    requestable row group reasonably small without ever splitting an activity.
-    Coarse levels naturally collapse to one row group when the full level is
-    below the target.
-    """
+def _byte_groups(table: Table[RenderActivitySchema]) -> list[Table[RenderActivitySchema]]:
+    """Split a render partition into whole-activity chunks near the mobile I/O target."""
     groups: list[Table[RenderActivitySchema]] = []
     start = 0
     estimated_bytes = 0
     for index in range(table.num_rows):
         row_bytes = max(1, table.slice(index, 1).nbytes)
-        if index > start and estimated_bytes + row_bytes > RENDER_ROW_GROUP_TARGET_BYTES:
+        if index > start and estimated_bytes + row_bytes > RENDER_CHUNK_TARGET_BYTES:
             groups.append(cast(Table[RenderActivitySchema], table.slice(start, index - start)))
             start = index
             estimated_bytes = 0
@@ -99,19 +93,88 @@ def _render_geometry(
     )
 
 
+def _render_file_metadata(table: Table[RenderActivitySchema], path: str, payload: pa.Buffer) -> ShardMetadata:
+    vertex = table["vertex_count"]
+    clean_vertex = table["clean_vertex_count"]
+    row_group = {
+        "row_count": table.num_rows,
+        "bbox": _table_bounds(table),
+        "estimated_uncompressed_bytes": table.nbytes,
+        "vertex_count": {
+            "sum": pc.sum(vertex).as_py(),
+            "min": pc.min(vertex).as_py(),
+            "max": pc.max(vertex).as_py(),
+        },
+        "clean_vertex_count": {
+            "sum": pc.sum(clean_vertex).as_py(),
+            "min": pc.min(clean_vertex).as_py(),
+            "max": pc.max(clean_vertex).as_py(),
+        },
+    }
+    return {
+        "path": path,
+        "row_count": table.num_rows,
+        "byte_size": payload.size,
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "bbox": row_group["bbox"],
+        "row_group_count": 1,
+        "row_groups": [row_group],
+    }
+
+
+def _write_render_file(
+    table: Table[RenderActivitySchema], root: Path, relative: Path
+) -> ShardMetadata:
+    target = root / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    output = pa.BufferOutputStream()
+    pq.write_table(table, output, compression="zstd", row_group_size=table.num_rows)
+    payload = output.getvalue()
+    with target.open("wb") as handle:
+        handle.write(memoryview(payload))
+    return _render_file_metadata(table, f"render/{relative.as_posix()}", payload)
+
+
+def _render_partitions(
+    table: Table[RenderActivitySchema], lod: int
+) -> list[tuple[Path, Table[RenderActivitySchema]]]:
+    """Keep small LODs contiguous; use familiar Hive dimensions only when a level grows."""
+    base = Path(f"lod={lod}")
+    if table.nbytes <= RENDER_CHUNK_TARGET_BYTES:
+        return [(base, table)]
+
+    partitions: list[tuple[Path, Table[RenderActivitySchema]]] = []
+    families = sorted(set(table["activity_family"].to_pylist()))
+    for family in families:
+        family_table = table.filter(pc.equal(table["activity_family"], family))
+        years = sorted(set(int(value) for value in family_table["start_year"].to_pylist()))
+        for year in years:
+            year_table = cast(
+                Table[RenderActivitySchema],
+                family_table.filter(pc.equal(family_table["start_year"], year)).sort_by(
+                    [("spatial_order", "ascending"), ("activity_id", "ascending")]
+                ),
+            )
+            partitions.append(
+                (base / f"activity_family={family}" / f"start_year={year}", year_table)
+            )
+    return partitions
+
+
 def write_render_pyramid(
     table: pa.Table, path: Path, progress_callback: Callable[[int, int], None] | None = None
 ) -> list[ShardMetadata]:
-    """Write immutable render artifacts from full canonical geometry."""
+    """Write immutable Hive-partitioned render artifacts from canonical geometry."""
     path.mkdir(parents=True, exist_ok=True)
     combined = table.sort_by([("spatial_order", "ascending"), ("activity_id", "ascending")])
-    levels = []
+    levels: list[ShardMetadata] = []
     for lod, tolerance_m in enumerate(RENDER_TOLERANCES_M):
         geometry = _render_geometry(combined["geometry"], tolerance_m)
         clean_geometry = _render_geometry(combined["geometry_clean"], tolerance_m)
         arrays = [combined[name] for name in RENDER_SCALARS]
         arrays.extend(
             [
+                combined["spatial_order"],
                 pc.cast(pc.list_value_length(geometry), pa.int64()),
                 pc.cast(pc.list_value_length(clean_geometry), pa.int64()),
                 geometry,
@@ -128,45 +191,24 @@ def write_render_pyramid(
                 {**(render.schema.metadata or {}), **render_geo_metadata(_table_bounds(render))}
             ),
         )
-        payload_groups = _render_row_groups(render)
-        row_groups = []
-        for group in payload_groups:
-            row_groups.append(
-                {
-                    "row_count": group.num_rows,
-                    "bbox": _table_bounds(group),
-                    "estimated_uncompressed_bytes": group.nbytes,
-                    "vertex_count": {
-                        "sum": pc.sum(group["vertex_count"]).as_py(),
-                        "min": pc.min(group["vertex_count"]).as_py(),
-                        "max": pc.max(group["vertex_count"]).as_py(),
-                    },
-                    "clean_vertex_count": {
-                        "sum": pc.sum(group["clean_vertex_count"]).as_py(),
-                        "min": pc.min(group["clean_vertex_count"]).as_py(),
-                        "max": pc.max(group["clean_vertex_count"]).as_py(),
-                    },
-                }
-            )
-        target = path / f"lod-{lod}.parquet"
-        output = pa.BufferOutputStream()
-        with pq.ParquetWriter(output, render.schema, compression="zstd") as writer:
-            for group in payload_groups:
-                writer.write_table(group, row_group_size=group.num_rows)
-        payload = output.getvalue()
-        with target.open("wb") as handle:
-            handle.write(memoryview(payload))
+
+        files: list[ShardMetadata] = []
+        for partition_path, partition in _render_partitions(render, lod):
+            for sequence, group in enumerate(_byte_groups(partition)):
+                files.append(
+                    _write_render_file(group, path, partition_path / f"part-{sequence:05d}.parquet")
+                )
+
         levels.append(
             {
                 "lod": lod,
                 "tolerance_m": tolerance_m,
-                "path": f"render/{target.name}",
                 "row_count": render.num_rows,
-                "byte_size": payload.size,
-                "sha256": hashlib.sha256(payload).hexdigest(),
+                "byte_size": sum(int(file["byte_size"]) for file in files),
                 "bbox": _table_bounds(render),
-                "row_group_count": len(row_groups),
-                "row_groups": row_groups,
+                "file_count": len(files),
+                "row_group_count": sum(int(file["row_group_count"]) for file in files),
+                "files": files,
             }
         )
         if progress_callback:
@@ -265,7 +307,7 @@ class GeoParquetDataSink(Datasink[list[ShardMetadata]]):
 
 
 class RenderPyramidDataSink(Datasink[list[ShardMetadata]]):
-    """Write one spatially ordered, render-only GeoParquet for every LOD."""
+    """Write one Hive-partitioned render dataset containing every fixed-tolerance LOD."""
 
     def __init__(self, path: str) -> None:
         self.path = path
