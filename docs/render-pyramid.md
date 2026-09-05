@@ -15,6 +15,6 @@ Render pyramid version 2 uses Web Mercator metric simplification tolerances inst
 | 6 | 0.5 m |
 | 7 | full geometry |
 
-Medium resolution advances one level roughly every two zooms. Low requests one level coarser and High requests one level finer. The runtime vertex budget remains a safety ceiling and may downshift further when a dense viewport would exceed it.
+Resolution maps directly to the requested simplification level. Low uses the base zoom-derived LOD, Medium requests one level finer, and High requests two levels finer. The runtime vertex budget remains a safety ceiling and may only downshift toward coarser render levels when a dense viewport would exceed it. The preset budgets are 750k vertices for Low, 1.25M for Medium, and 1.75M for High.
 
 `render_pyramid_version` is written to dataset manifests and registry metadata. After a production deploy, CI scans dataset registry rows and submits derived AWS Batch rebuilds only for datasets whose render version is stale. Derived rebuilds use canonical full geometry and do not require users to upload or re-import their source archive.
