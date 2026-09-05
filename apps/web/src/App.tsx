@@ -316,10 +316,11 @@ export function App() {
       const current = { ...queryTab, sql, mapState };
       const renderStarted = performance.now();
       const result = await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current));
-      setRouteBatches(result.batches); setRenderedView(mapState); setSummary(result.summary); setScopedSummary(result.summary);
+      setRouteBatches(result.batches); setRenderedView(mapState);
       selectionReady.current = true;
+      void engine.getSummary().then(value => { setSummary(value); if (!viewportScope) setScopedSummary(value); }).catch(error => setError(error instanceof Error ? error.message : String(error)));
       setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
-      setStatus(`${result.summary.activityCount.toLocaleString()} routes selected`);
+      setStatus(`${result.selectedCount.toLocaleString()} routes selected`);
       setTabs(previous => {
         const updated = previous.map(item => item.id === queryTab.id ? current : item);
         saveTabs(updated); return updated;
@@ -609,7 +610,7 @@ export function App() {
     ...spatialLayers(tab.spatialFilter, spatialDrawing, spatialDraft),
     ...overviewBatches.flatMap((batch, index) => [
       new PathLayer({ id: `routes-${index}`, data: overviewPathData[index], _pathType: "open", positionFormat: "XY", getWidth: tab.style.heatEnabled ? lineWidths.heat : lineWidths.route, widthUnits: "pixels", widthMinPixels: 0.35, pickable: false }),
-      new PathLayer({ id: `route-hit-targets-${index}`, data: pickingPathData[index], _pathType: "open", positionFormat: "XY", getColor: [0, 0, 0, 0], getWidth: lineWidths.route + 10, widthUnits: "pixels", widthMinPixels: 10, pickable: !spatialDrawing, onHover: (info: PickingInfo) => { if (spatialDrawing) return; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; setHover(item ? { x: info.x, y: info.y, item, origin: "map" } : null); }, onClick: (info: PickingInfo) => { if (spatialDrawing) return false; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item) return false; void openActivity(item); return true; } }),
+      new PathLayer({ id: `route-hit-targets-${index}`, data: pickingPathData[index], _pathType: "open", positionFormat: "XY", getColor: [0, 0, 0, 0], getWidth: lineWidths.route + 10, widthUnits: "pixels", widthMinPixels: 10, pickable: !spatialDrawing, onHover: (info: PickingInfo) => { if (spatialDrawing) return; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item) { setHover(null); return; } const x = info.x, y = info.y, activityId = item.activityId; void engine.getRouteMetadata(activityId).then(metadata => { if (metadata) setHover({ x, y, item: metadata, origin: "map" }); }); }, onClick: (info: PickingInfo) => { if (spatialDrawing) return false; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item) return false; void openActivity(item); return true; } }),
     ]),
     ...(hover && !spatialDrawing ? routeBatches.map((batch, index) =>
       new PathLayer({ id: `hover-route-${index}`, data: hoverPathData[index], _pathType: "open", positionFormat: "XY", getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8 }),

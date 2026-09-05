@@ -14,7 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .compiler import COMPILER_VERSION, validate_dataset
-from .geoparquet_sink import write_render_pyramid
+from .geoparquet_sink import write_metadata_dataset, write_render_pyramid
 from .render_lod import RENDER_PYRAMID_VERSION
 from .schema import SCHEMA_VERSION
 
@@ -36,6 +36,8 @@ def versioned_manifest(manifest: dict[str, Any], build_id: str) -> dict[str, Any
     result = copy.deepcopy(manifest)
     prefix = f"builds/{build_id}/"
     for entry in result.get("shards", []):
+        entry["path"] = prefix + entry["path"]
+    for entry in result.get("metadata", []):
         entry["path"] = prefix + entry["path"]
     for level in result.get("render_levels", []):
         for file in level.get("files", []):
@@ -86,8 +88,10 @@ def rebuild_derived_dataset(
     rejection_source = source / "rejections.parquet"
     if rejection_source.is_file():
         shutil.copy2(rejection_source, output / "rejections.parquet")
+    combined = pa.concat_tables(tables, promote_options="default")
+    metadata_files = write_metadata_dataset(combined, output / "metadata")
     render_levels = write_render_pyramid(
-        pa.concat_tables(tables, promote_options="default"),
+        combined,
         output / "render",
         progress_callback=progress_callback,
     )
@@ -97,6 +101,7 @@ def rebuild_derived_dataset(
         "compiler_version": COMPILER_VERSION,
         "render_pyramid_version": RENDER_PYRAMID_VERSION,
         "shards": normalized_shards,
+        "metadata": metadata_files,
         "render_levels": render_levels,
         "derived_from_schema_version": manifest.get("schema_version"),
     }

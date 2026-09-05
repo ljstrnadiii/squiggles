@@ -58,7 +58,7 @@ export type SummaryStats = {
   lastActivity: string | null;
 };
 export type RenderPlan = { type: "arrow"; activityIds: string[] };
-export type QueryResult = { queryId: string; summary: SummaryStats; renderPlan: RenderPlan };
+export type QueryResult = { queryId: string; selectedCount: number; renderPlan: RenderPlan };
 export type Share = { id: string; tabId: string; datasetId: string };
 
 export type VertexStats = { sum: number; min: number; max: number };
@@ -94,6 +94,7 @@ export type DatasetManifest = {
   activity_count: number;
   rejection_count: number;
   bbox: ViewportBounds;
+  metadata?: DatasetFileManifest[];
   shards: DatasetFileManifest[];
   render_levels?: RenderLevelManifest[];
 };
@@ -180,5 +181,6 @@ export interface ExecutionEngine {
   ): Promise<ViewportResult>;
   getSummary(bounds?: ViewportBounds): Promise<SummaryStats>;
   getActivities(bounds?: ViewportBounds): Promise<ActivityListItem[]>;
+  getRouteMetadata(activityId: string): Promise<RouteMetadata | null>;
   getActivity(activityId: string): Promise<RouteActivity | null>;
 }

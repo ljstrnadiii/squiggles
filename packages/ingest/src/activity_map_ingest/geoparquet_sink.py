@@ -22,6 +22,7 @@ from .schema import (
     RenderActivitySchema,
     activity_arrow_schema,
     geo_metadata,
+    metadata_arrow_schema,
     render_arrow_schema,
     render_geo_metadata,
     validate_arrow_table,
@@ -35,18 +36,6 @@ _WEB_MERCATOR_RADIUS_M = 6_378_137.0
 _WEB_MERCATOR_MAX_LAT = 85.05112878
 RENDER_SCALARS = [
     "activity_id",
-    "name",
-    "sport_type",
-    "start_time",
-    "start_year",
-    "activity_family",
-    "distance_m",
-    "elevation_gain_m",
-    "max_elevation_m",
-    "clean_distance_m",
-    "clean_elevation_gain_m",
-    "clean_max_elevation_m",
-    "source_url",
     "xmin",
     "ymin",
     "xmax",
@@ -55,8 +44,6 @@ RENDER_SCALARS = [
     "clean_ymin",
     "clean_xmax",
     "clean_ymax",
-    "point_count",
-    "clean_point_count",
 ]
 
 
@@ -141,17 +128,7 @@ def _str_order(
 
 
 def _secondary_order(table: Table[RenderActivitySchema]) -> Table[RenderActivitySchema]:
-    """Keep STR membership intact while adding locality for common non-spatial filters."""
-    return cast(
-        Table[RenderActivitySchema],
-        table.sort_by(
-            [
-                ("activity_family", "ascending"),
-                ("start_year", "ascending"),
-                ("activity_id", "ascending"),
-            ]
-        ),
-    )
+    return cast(Table[RenderActivitySchema], table.sort_by([("activity_id", "ascending")]))
 
 
 def _table_bounds(table: pa.Table) -> list[float]:
@@ -388,6 +365,54 @@ class GeoParquetDataSink(Datasink[list[ShardMetadata]]):
 
     def on_write_complete(self, write_result: WriteResult[list[ShardMetadata]]) -> None:
         self.shards = [shard for result in write_result.write_returns for shard in result]
+
+
+def write_metadata_dataset(table: pa.Table, path: Path) -> list[ShardMetadata]:
+    path.mkdir(parents=True, exist_ok=True)
+    schema = metadata_arrow_schema()
+    ordered = table.sort_by([("spatial_order", "ascending"), ("activity_id", "ascending")])
+    metadata = ordered.select(schema.names).cast(schema)
+    target = path / "part-00000.parquet"
+    row_group_size = 4096
+    pq.write_table(metadata, target, compression="zstd", row_group_size=row_group_size)
+    groups = [
+        metadata.slice(offset, row_group_size)
+        for offset in range(0, metadata.num_rows, row_group_size)
+    ]
+    row_groups = [{"row_count": group.num_rows, "bbox": _table_bounds(group)} for group in groups]
+    return [
+        {
+            "path": "metadata/part-00000.parquet",
+            "row_count": metadata.num_rows,
+            "byte_size": target.stat().st_size,
+            "sha256": _file_sha256(target),
+            "bbox": _table_bounds(metadata),
+            "row_group_count": len(row_groups),
+            "row_groups": row_groups,
+        }
+    ]
+
+
+class MetadataDataSink(Datasink[list[ShardMetadata]]):
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.files: list[ShardMetadata] = []
+
+    def on_write_start(self, schema: pa.Schema | None = None) -> None:
+        Path(self.path).mkdir(parents=True, exist_ok=True)
+
+    def write(self, blocks: Iterable[Block], ctx: TaskContext) -> list[ShardMetadata]:
+        tables = [
+            BlockAccessor.for_block(block).to_arrow()
+            for block in blocks
+            if BlockAccessor.for_block(block).num_rows() > 0
+        ]
+        if not tables:
+            return []
+        return write_metadata_dataset(pa.concat_tables(tables), Path(self.path))
+
+    def on_write_complete(self, write_result: WriteResult[list[ShardMetadata]]) -> None:
+        self.files = [file for result in write_result.write_returns for file in result]
 
 
 class RenderPyramidDataSink(Datasink[list[ShardMetadata]]):

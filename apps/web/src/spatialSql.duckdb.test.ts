@@ -82,6 +82,8 @@ describe("drawn spatial filters in DuckDB", () => {
         ]
       )
     `);
+    connection.query("CREATE TABLE activity_geometry AS SELECT * FROM activities");
+    connection.query("CREATE TEMP VIEW activity_geometry AS SELECT * FROM activities");
 
     for (const predicate of ["intersects", "within"] as const) {
       const sql = applySpatialFilterSql(

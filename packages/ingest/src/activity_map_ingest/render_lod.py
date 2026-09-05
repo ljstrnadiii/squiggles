@@ -5,7 +5,7 @@ from collections.abc import Iterable, Sequence
 
 from shapely.geometry import LineString
 
-RENDER_PYRAMID_VERSION = "3"
+RENDER_PYRAMID_VERSION = "4"
 # One level per ~2 Web Mercator zooms. Around 40 degrees latitude these are
 # approximately one pixel of geometric error at zooms 6, 8, 10, ..., 18.
 # The final level is canonical full geometry.

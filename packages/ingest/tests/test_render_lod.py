@@ -8,7 +8,7 @@ from activity_map_ingest.render_lod import (
 
 
 def test_render_tolerances_are_dense_and_end_in_full_geometry() -> None:
-    assert RENDER_PYRAMID_VERSION == "3"
+    assert RENDER_PYRAMID_VERSION == "4"
     assert RENDER_LEVEL_COUNT == 8
     assert MAX_RENDER_LOD == 7
     assert RENDER_TOLERANCES_M == (2048.0, 512.0, 128.0, 32.0, 8.0, 2.0, 0.5, None)
