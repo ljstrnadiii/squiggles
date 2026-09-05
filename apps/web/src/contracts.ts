@@ -21,6 +21,8 @@ export type SpatialFilter = {
   visible: boolean;
 };
 export type RenderLod = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type RenderPlanChoice = { lod: RenderLod; vertexEstimate: number };
+export type ResolutionRenderPlans = Record<SystemResolution, RenderPlanChoice>;
 
 export type Dataset = { id: string; name: string; manifest: DatasetManifest };
 export type DatasetSource =
@@ -34,8 +36,7 @@ export type QueryTab = {
   mapState: MapState;
   style: MapStyle;
   spatialFilter?: SpatialFilter;
-  startingLod?: RenderLod;
-  startingVertexEstimate?: number;
+  startingPlans?: ResolutionRenderPlans;
   startingBounds?: ViewportBounds;
 };
 export type SummaryStats = {
@@ -153,6 +154,7 @@ export type ViewportResult = {
   lod: RenderLod;
   vertexCount: number;
   plannedVertexEstimate: number;
+  resolutionPlans: ResolutionRenderPlans;
   rawVertexEstimate: number;
   vertexBudget: number;
   scan: ScanMetrics;
