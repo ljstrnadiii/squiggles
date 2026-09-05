@@ -80,6 +80,7 @@ let selectionAll = false;
 let registeredFiles: RegisteredFile[] = [];
 let registeredRenderLevels = new Map<Lod, RegisteredFile[]>();
 let initializationTimings = { selectBundleMs: 0, instantiateMs: 0, connectMs: 0 };
+let spatialExtensionPromise: Promise<void> | null = null;
 
 const scalar = (value: unknown) => (typeof value === "bigint" ? Number(value) : value);
 const coordinates = (value: unknown): [number, number][] =>
@@ -308,6 +309,24 @@ async function initialize() {
   const connectMs = performance.now() - connectStarted;
   initializationTimings = { selectBundleMs, instantiateMs, connectMs };
   return database;
+}
+
+function sqlUsesSpatial(sql: string): boolean {
+  return /\bST_[A-Za-z0-9_]+\s*\(/i.test(sql);
+}
+
+async function ensureSpatialExtension() {
+  if (!spatialExtensionPromise) {
+    spatialExtensionPromise = (async () => {
+      await connection!.query("INSTALL spatial; LOAD spatial");
+    })();
+  }
+  try {
+    await spatialExtensionPromise;
+  } catch (error) {
+    spatialExtensionPromise = null;
+    throw error;
+  }
 }
 
 function viewportPredicate(bounds?: Bounds, clean = false): string {
@@ -797,6 +816,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       throw new Error("Clean view requires dataset schema 1.2.0 or newer; recompile first");
     }
     await configureActivitiesView(request.clean);
+    if (sqlUsesSpatial(request.sql)) await ensureSpatialExtension();
     selectionAll = isUniversalSelectionSql(request.sql);
     if (selectionAll) {
       await connection!.query("DROP TABLE IF EXISTS current_selection");
