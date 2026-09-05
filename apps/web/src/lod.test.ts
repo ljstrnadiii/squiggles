@@ -3,30 +3,20 @@ import { describe, expect, it } from "vitest";
 import { chooseLod, lodForZoom, RESOLUTION_VERTEX_BUDGETS } from "./lod";
 
 describe("lodForZoom", () => {
-  it("advances one tolerance level every two zooms for low resolution", () => {
-    expect(lodForZoom(6, "low")).toBe(0);
-    expect(lodForZoom(8, "low")).toBe(1);
-    expect(lodForZoom(10, "low")).toBe(2);
-    expect(lodForZoom(12, "low")).toBe(3);
-    expect(lodForZoom(14, "low")).toBe(4);
-    expect(lodForZoom(16, "low")).toBe(5);
-    expect(lodForZoom(18, "low")).toBe(6);
-    expect(lodForZoom(20, "low")).toBe(7);
-  });
-
-  it("maps low to the old medium level and shifts medium/high finer", () => {
-    expect(lodForZoom(12, "low")).toBe(3);
-    expect(lodForZoom(12, "medium")).toBe(4);
-    expect(lodForZoom(12, "high")).toBe(5);
-    expect(lodForZoom(2, "low")).toBe(0);
-    expect(lodForZoom(2, "medium")).toBe(1);
-    expect(lodForZoom(2, "high")).toBe(2);
-    expect(lodForZoom(22, "high")).toBe(7);
+  it("advances one tolerance level every two zooms", () => {
+    expect(lodForZoom(6)).toBe(0);
+    expect(lodForZoom(8)).toBe(1);
+    expect(lodForZoom(10)).toBe(2);
+    expect(lodForZoom(12)).toBe(3);
+    expect(lodForZoom(14)).toBe(4);
+    expect(lodForZoom(16)).toBe(5);
+    expect(lodForZoom(18)).toBe(6);
+    expect(lodForZoom(20)).toBe(7);
   });
 });
 
 describe("resolution budgets", () => {
-  it("shifts each preset to the next vertex budget", () => {
+  it("changes only the vertex budget", () => {
     expect(RESOLUTION_VERTEX_BUDGETS).toEqual({
       low: 750_000,
       medium: 1_250_000,
