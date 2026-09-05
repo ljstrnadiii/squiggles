@@ -16,7 +16,7 @@ describe("DuckDB worker startup", () => {
     const worker = readFileSync(join(process.cwd(), "src/duckdb.worker.ts"), "utf8");
     const engine = readFileSync(join(process.cwd(), "src/engine.ts"), "utf8");
 
-    // Keep enough phase detail to make production startup regressions actionable.
+    // Keep phase detail available in the hosted smoke for the next optimization.
     for (const phase of [
       "selectBundleMs",
       "instantiateMs",
