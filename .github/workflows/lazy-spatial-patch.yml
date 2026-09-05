@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   patch:
-    if: github.event.head_commit.message != 'fix: load DuckDB spatial lazily'
+    if: "${{ github.event.head_commit.message != 'fix: load DuckDB spatial lazily' }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -32,7 +32,7 @@ jobs:
               text = text.replace(anchor, replacement, 1)
 
           anchor = 'function viewportPredicate(bounds?: Bounds, clean = false): string {\n'
-          helper = '''function sqlUsesSpatial(sql: string): boolean {\n  return /\\bST_[A-Za-z0-9_]+\\s*\\(/i.test(sql);\n}\n\nasync function ensureSpatialExtension() {\n  if (!spatialExtensionPromise) {\n    spatialExtensionPromise = connection!.query("INSTALL spatial; LOAD spatial").then(() => undefined);\n  }\n  try {\n    await spatialExtensionPromise;\n  } catch (error) {\n    spatialExtensionPromise = null;\n    throw error;\n  }\n}\n\n'''
+          helper = '''function sqlUsesSpatial(sql: string): boolean {\n  return /\\bST_[A-Za-z0-9_]+\\s*\\(/i.test(sql);\n}\n\nasync function ensureSpatialExtension() {\n  if (!spatialExtensionPromise) {\n    spatialExtensionPromise = (async () => {\n      await connection!.query("INSTALL spatial; LOAD spatial");\n    })();\n  }\n  try {\n    await spatialExtensionPromise;\n  } catch (error) {\n    spatialExtensionPromise = null;\n    throw error;\n  }\n}\n\n'''
           if 'async function ensureSpatialExtension' not in text:
               if anchor not in text:
                   raise SystemExit('helper anchor not found')
