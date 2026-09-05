@@ -44,7 +44,7 @@ testpaths = ["packages"]
 pythonpath = ["packages/schemas/src", "packages/ingest/src"]
 
 [tool.ruff]
-line-length = 125
+line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
