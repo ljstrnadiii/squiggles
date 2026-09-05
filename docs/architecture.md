@@ -15,7 +15,7 @@
 
 1. Source adapter reads an activity archive.
 2. Compiler normalizes activities and telemetry.
-3. Compiler writes canonical GeoParquet, the derived Hive-partitioned render dataset, manifest metadata, and rejection records.
+3. Compiler writes canonical GeoParquet, the derived LOD-first render dataset, manifest metadata, and rejection records.
 4. Browser loads `dataset.json` before reading render geometry.
 5. DuckDB-Wasm registers canonical and render Parquet URLs/files.
 6. SQL selects `activity_id` values from the logical `activities` relation.
@@ -28,7 +28,7 @@
 ## Browser components
 
 - React UI.
-- DuckDB-Wasm Web Worker for SQL, summaries, table data, detail lookup, render partition pruning, and LOD planning.
+- DuckDB-Wasm Web Worker for SQL, summaries, table data, detail lookup, viewport pruning, and LOD planning.
 - deck.gl/WebGL for routes.
 - Browser-side heat computation.
 - Local storage for user preferences and saved local tabs.
@@ -64,21 +64,24 @@ render/
   lod=1/
     part-00000.parquet
   ...
-  lod=5/
-    activity_family=run/
-      start_year=2025/
-        part-00000.parquet
+  lod=7/
+    part-00000.parquet
+    part-00001.parquet  # only if this LOD exceeds the file target
 ```
 
-Three independent sizing decisions matter:
+There is intentionally no `activity_family` or `start_year` Hive fan-out in the render dataset. The dominant heatmap workload is spatial and usually asks for all activities, so physical locality is optimized for rectangular viewport reads first. Family/year remain normal columns and secondary sort keys inside spatial groups.
 
-- **Logical partitioning** controls pruning. Coarse LODs stay global; detail LODs may use `activity_family/start_year`.
-- **Row groups** target about **4 MiB uncompressed Arrow data** and preserve whole activities. This is the mobile-oriented range-read unit.
-- **Files** target at most about **1 GiB uncompressed Arrow data**. A logical partition therefore normally remains one Parquet file containing many ~4 MiB row groups; only unusually large partitions shard into multiple files.
+Three independent layout decisions matter:
+
+- **LOD partitioning** selects one fixed simplification tolerance without touching other levels.
+- **Row groups** target about **4 MiB uncompressed Arrow data** and preserve whole activities. They are packed with **Sort-Tile-Recursive (STR)** so their covering bboxes are compact and approximately square in Web Mercator space.
+- **Files** target at most about **1 GiB uncompressed Arrow data**. Each LOD therefore normally remains one Parquet file containing many ~4 MiB STR row groups; only unusually large LODs shard into multiple files.
+
+The STR implementation estimates how many activity rows fit in a row group, chooses x-stripes from the projected dataset aspect ratio, sorts by projected x and then y, and cuts the resulting order at the byte target. Once membership in an STR group is fixed, rows are secondarily ordered by `activity_family`, `start_year`, and `activity_id`. This preserves the spatial bbox while improving locality for less-common categorical and time filters.
 
 The 4 MiB and 1 GiB values are tuning targets, not wire-size guarantees. Parquet compression and column pruning generally make actual HTTP range transfers and stored file sizes smaller than their uncompressed Arrow estimates.
 
-This layout lets the browser choose `lod=N` from zoom without opening other levels. For arbitrary SQL, the selected activities' family/year values prune render files before exact vertex estimation or geometry reads. File and row-group bboxes then prune by viewport. Spatial bounds are indexes only: a route may extend outside the viewport or any storage partition and remains one complete activity.
+The browser chooses `lod=N` from zoom without opening other levels, intersects manifest file/row-group bboxes with the viewport, and reads only the relevant Parquet ranges. Spatial bounds are indexes only: a route may extend outside the viewport or any STR group and remains one complete activity.
 
 ## Published views
 
@@ -104,11 +107,12 @@ The browser records the last resolved LOD and planned vertex estimate for each r
 
 ## Scale strategy
 
-- LOD-first Hive render partitions.
-- `activity_family/start_year` pruning for detail render levels.
-- Spatially ordered whole activities.
+- LOD-first render partitions.
+- STR-packed, spatially compact row groups for rectangular viewport reads.
+- Spatially ordered whole activities; never tile-clipped geometry.
+- `activity_family`, `start_year`, then `activity_id` as secondary ordering within STR groups.
 - ~4 MiB render row groups for mobile-oriented range reads.
-- ~1 GiB maximum uncompressed file target, normally one file per logical partition.
+- ~1 GiB maximum uncompressed file target, normally one file per LOD.
 - Manifest file/row-group bboxes and vertex sums.
 - Column pruning and HTTP range reads.
 - Budget-driven coarser-LOD fallback for dense repeated-route hotspots.
