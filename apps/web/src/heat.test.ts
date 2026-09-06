@@ -6,7 +6,7 @@ import { buildBinaryHeatData, buildBinaryHeatDataCooperative, buildHeatData, col
 const route = (activityId: string, path: [number, number][]): RouteActivity => ({ activityId, path, fullPath: path, name: activityId, sportType: "Run", startTime: null, distanceM: null, elevationGainM: null, maxElevationM: null, sourceUrl: null, elevationProfile: [] });
 
 describe("buildHeatData", () => {
-  it("counts cross-activity vertex pairs without self-heating", () => {
+  it("normalizes cross-activity overlap by each route's visible vertices", () => {
     const result = buildHeatData(
       [route("a", [[-105, 40], [-105, 40]]), route("b", [[-105, 40]])],
       { longitude: -105, latitude: 40, zoom: 12 },
@@ -15,10 +15,18 @@ describe("buildHeatData", () => {
       20,
     );
     expect(result.cellCount).toBe(1);
-    expect(result.scores.get("a")).toBe(2);
+    expect(result.scores.get("a")).toBe(1);
     expect(result.scores.get("b")).toBe(2);
     expect(result.maxScore).toBe(2);
     expect(result.sourceVertices).toBe(3);
+  });
+
+  it("does not make a longer route hotter merely because it has more visible points", () => {
+    const long = route("long", Array.from({ length: 20 }, () => [-105, 40]));
+    const short = route("short", [[-105, 40]]);
+    const result = buildHeatData([long, short], { longitude: -105, latitude: 40, zoom: 12 }, 800, 600, 20);
+    expect(result.scores.get("long")).toBe(1);
+    expect(result.scores.get("short")).toBe(20);
   });
 
   it("scores all chosen visible vertices without rewriting the route", () => {
@@ -47,7 +55,7 @@ describe("buildHeatData", () => {
     };
     const result = buildBinaryHeatData([batch], { longitude: -105, latitude: 40, zoom: 12 }, 800, 600, undefined, 20);
     expect(result.sourceVertices).toBe(3);
-    expect(result.scores.get("a")).toBe(2);
+    expect(result.scores.get("a")).toBe(1);
     expect(result.scores.get("b")).toBe(2);
   });
 
