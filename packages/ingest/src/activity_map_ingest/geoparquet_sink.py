@@ -30,6 +30,7 @@ from .schema import (
 )
 
 ShardMetadata = dict[str, Any]
+CanonicalLocators = dict[str, tuple[str, int]]
 RENDER_ROW_GROUP_TARGET_BYTES = 4 * 1024 * 1024
 RENDER_FILE_TARGET_BYTES = 1024 * 1024 * 1024
 _WEB_MERCATOR_RADIUS_M = 6_378_137.0
@@ -58,7 +59,6 @@ def _file_sha256(path: Path) -> str:
 def _byte_groups(
     table: Table[RenderActivitySchema], target_bytes: int
 ) -> list[Table[RenderActivitySchema]]:
-    """Split an ordered table into whole-activity groups near an uncompressed target."""
     groups: list[Table[RenderActivitySchema]] = []
     start = 0
     estimated_bytes = 0
@@ -85,14 +85,11 @@ def _mercator_xy(longitude: float, latitude: float) -> tuple[float, float]:
 def _str_order(
     table: Table[RenderActivitySchema], target_bytes: int
 ) -> Table[RenderActivitySchema]:
-    """Sort-Tile-Recursive order tuned for compact, roughly square viewport row groups."""
     if table.num_rows <= 1:
         return table
-
     average_row_bytes = max(1.0, table.nbytes / table.num_rows)
     target_rows = max(1, int(target_bytes / average_row_bytes))
     leaf_count = max(1, math.ceil(table.num_rows / target_rows))
-
     xmin = table["xmin"].to_pylist()
     ymin = table["ymin"].to_pylist()
     xmax = table["xmax"].to_pylist()
@@ -104,7 +101,6 @@ def _str_order(
         right, top = _mercator_xy(float(xmax[index]), float(ymax[index]))
         projected_bounds.append((left, bottom, right, top))
         centers.append((index, (left + right) / 2, (bottom + top) / 2))
-
     extent_left = min(bounds[0] for bounds in projected_bounds)
     extent_bottom = min(bounds[1] for bounds in projected_bounds)
     extent_right = max(bounds[2] for bounds in projected_bounds)
@@ -112,12 +108,8 @@ def _str_order(
     width = max(1.0, extent_right - extent_left)
     height = max(1.0, extent_top - extent_bottom)
     aspect_ratio = width / height
-
-    # Standard STR uses sqrt(leaf_count) x-slices. Scaling by the projected
-    # extent's aspect ratio keeps leaf bboxes closer to square for map viewports.
     x_slices = max(1, min(leaf_count, math.ceil(math.sqrt(leaf_count * aspect_ratio))))
     slice_rows = math.ceil(table.num_rows / x_slices)
-
     centers.sort(key=lambda item: (item[1], item[2], item[0]))
     ordered_indices: list[int] = []
     for offset in range(0, table.num_rows, slice_rows):
@@ -179,7 +171,6 @@ def _write_render_file(
     with pq.ParquetWriter(target, row_groups[0].schema, compression="zstd") as writer:
         for row_group in row_groups:
             writer.write_table(row_group, row_group_size=row_group.num_rows)
-
     metadata = [_row_group_metadata(group) for group in row_groups]
     return {
         "path": f"render/{relative.as_posix()}",
@@ -234,7 +225,6 @@ def _render_files(table: Table[RenderActivitySchema], root: Path, lod: int) -> l
 def write_render_pyramid(
     table: pa.Table, path: Path, progress_callback: Callable[[int, int], None] | None = None
 ) -> list[ShardMetadata]:
-    """Write immutable LOD-first render artifacts with STR-packed row groups."""
     path.mkdir(parents=True, exist_ok=True)
     combined = table.sort_by([("activity_id", "ascending")])
     levels: list[ShardMetadata] = []
@@ -261,7 +251,6 @@ def write_render_pyramid(
                 {**(render.schema.metadata or {}), **render_geo_metadata(_table_bounds(render))}
             ),
         )
-
         files = _render_files(render, path, lod)
         levels.append(
             {
@@ -282,8 +271,6 @@ def write_render_pyramid(
 
 
 class GeoParquetDataSink(Datasink[list[ShardMetadata]]):
-    """Ray datasink that writes canonical, Hive-partitioned GeoParquet shards."""
-
     def __init__(
         self, path: str, *, row_group_size: int = 128, target_shard_rows: int = 512
     ) -> None:
@@ -322,10 +309,7 @@ class GeoParquetDataSink(Datasink[list[ShardMetadata]]):
                 canonical = validate_arrow_table(canonical)
                 bounds = _table_bounds(canonical)
                 row_groups = [
-                    {
-                        "row_count": group.num_rows,
-                        "bbox": _table_bounds(group),
-                    }
+                    {"row_count": group.num_rows, "bbox": _table_bounds(group)}
                     for group in (
                         canonical.slice(group_offset, self.row_group_size)
                         for group_offset in range(0, canonical.num_rows, self.row_group_size)
@@ -367,11 +351,27 @@ class GeoParquetDataSink(Datasink[list[ShardMetadata]]):
         self.shards = [shard for result in write_result.write_returns for shard in result]
 
 
-def write_metadata_dataset(table: pa.Table, path: Path) -> list[ShardMetadata]:
+def write_metadata_dataset(
+    table: pa.Table, path: Path, locators: CanonicalLocators
+) -> list[ShardMetadata]:
     path.mkdir(parents=True, exist_ok=True)
     schema = metadata_arrow_schema()
     ordered = table.sort_by([("spatial_order", "ascending"), ("activity_id", "ascending")])
-    metadata = ordered.select(schema.names).cast(schema)
+    activity_ids = [str(value) for value in ordered["activity_id"].to_pylist()]
+    missing = [activity_id for activity_id in activity_ids if activity_id not in locators]
+    if missing:
+        raise ValueError(f"canonical locator missing for {len(missing)} activities")
+    base_names = [
+        name for name in schema.names if name not in {"canonical_path", "canonical_row_group"}
+    ]
+    arrays = [ordered[name] for name in base_names]
+    arrays.extend(
+        [
+            pa.array([locators[activity_id][0] for activity_id in activity_ids], type=pa.string()),
+            pa.array([locators[activity_id][1] for activity_id in activity_ids], type=pa.int32()),
+        ]
+    )
+    metadata = pa.Table.from_arrays(arrays, schema=schema)
     target = path / "part-00000.parquet"
     row_group_size = 4096
     pq.write_table(metadata, target, compression="zstd", row_group_size=row_group_size)
@@ -394,8 +394,9 @@ def write_metadata_dataset(table: pa.Table, path: Path) -> list[ShardMetadata]:
 
 
 class MetadataDataSink(Datasink[list[ShardMetadata]]):
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, locators: CanonicalLocators) -> None:
         self.path = path
+        self.locators = locators
         self.files: list[ShardMetadata] = []
 
     def on_write_start(self, schema: pa.Schema | None = None) -> None:
@@ -409,15 +410,13 @@ class MetadataDataSink(Datasink[list[ShardMetadata]]):
         ]
         if not tables:
             return []
-        return write_metadata_dataset(pa.concat_tables(tables), Path(self.path))
+        return write_metadata_dataset(pa.concat_tables(tables), Path(self.path), self.locators)
 
     def on_write_complete(self, write_result: WriteResult[list[ShardMetadata]]) -> None:
         self.files = [file for result in write_result.write_returns for file in result]
 
 
 class RenderPyramidDataSink(Datasink[list[ShardMetadata]]):
-    """Write one LOD-first render dataset with STR-packed row groups."""
-
     def __init__(self, path: str) -> None:
         self.path = path
         self.levels: list[ShardMetadata] = []
