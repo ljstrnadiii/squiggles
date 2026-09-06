@@ -133,11 +133,7 @@ def timed(conn: duckdb.DuckDBPyConnection, sql: str) -> float:
     return elapsed
 
 
-def benchmark_case(
-    urls: list[str],
-    target_id: str,
-    server: RangeServer,
-) -> dict[str, object]:
+def benchmark_case(urls: list[str], target_id: str, server: RangeServer) -> dict[str, object]:
     conn = connection()
     relation = ",".join(f"'{url.replace(chr(39), chr(39) * 2)}'" for url in urls)
     sql = (
@@ -171,9 +167,7 @@ def main() -> None:
         server = RangeServer(root)
         server.start()
         try:
-            urls = [
-                f"{server.base_url}/{path.relative_to(root).as_posix()}" for path in paths
-            ]
+            urls = [f"{server.base_url}/{path.relative_to(root).as_posix()}" for path in paths]
             broad = benchmark_case(urls, target_id, server)
             targeted = benchmark_case([urls[TARGET_SHARD]], target_id, server)
         finally:
