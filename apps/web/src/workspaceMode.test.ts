@@ -14,11 +14,14 @@ describe("workspace modes", () => {
     expect(app).toContain(">Table</button>");
   });
 
-  it("does not close query, stats, or table when changing tabs", () => {
+  it("does not close query, stats, or table on an ordinary tab switch", () => {
     const choose = app.slice(app.indexOf("function choose("), app.indexOf("function add()"));
-    expect(choose).not.toContain("setStatsOpen(false)");
-    expect(choose).not.toContain("setTableOpen(false)");
-    expect(choose).not.toContain("setToolbarOpen(false)");
+    const ordinarySwitch = choose.slice(0, choose.indexOf("if (openQuery)"));
+    expect(ordinarySwitch).not.toContain("setStatsOpen(false)");
+    expect(ordinarySwitch).not.toContain("setTableOpen(false)");
+    expect(ordinarySwitch).not.toContain("setToolbarOpen(false)");
+    expect(choose).toContain("if (openQuery)");
+    expect(choose).toContain("setToolbarOpen(true)");
   });
 
   it("refreshes an open stats or table panel after a selection run", () => {
