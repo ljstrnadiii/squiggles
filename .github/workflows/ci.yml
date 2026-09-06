@@ -136,7 +136,7 @@ jobs:
           METADATA_TABLE_NAME: ${{ steps.pulumi-ingest.outputs.metadataTableName }}
           INGEST_JOB_QUEUE: ${{ steps.pulumi-ingest.outputs.ingestJobQueue }}
           INGEST_JOB_DEFINITION: ${{ steps.pulumi-ingest.outputs.ingestJobDefinition }}
-          RENDER_PYRAMID_VERSION: "4"
+          RENDER_PYRAMID_VERSION: "5"
         run: python scripts/rebuild_render_pyramids.py
 
       - name: Deploy application
