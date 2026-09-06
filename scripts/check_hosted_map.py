@@ -5,7 +5,7 @@ import sys
 import urllib.request
 
 BASE_URL = "https://squiggles.io"
-RENDER_PYRAMID_VERSION = "4"
+RENDER_PYRAMID_VERSION = "5"
 
 
 def get_json(url: str) -> dict:
