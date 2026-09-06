@@ -20,11 +20,7 @@ export const highRunsTab: QueryTab = {
   sql: `SELECT activity_id
 FROM activities
 WHERE lower(sport_type) LIKE '%run%'
-  AND EXISTS (
-    SELECT 1
-    FROM unnest(track_points) AS points(point)
-    WHERE point.elevation_m >= 3657.6
-  )`,
+  AND max_elevation_m >= 3657.6`,
   style: { ...defaultStyle },
 };
 

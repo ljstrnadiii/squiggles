@@ -310,6 +310,7 @@ export function App() {
     try {
       if (!ready.current) throw new Error("Open a dataset first");
       selectionReady.current = false;
+      setRouteBatches([]);
       setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false);
       setTableOpen(false); setTableActivities([]);
       setBusy(true); setStatus("Running DuckDB SQL…"); setError("");
@@ -318,7 +319,6 @@ export function App() {
       const result = await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current));
       setRouteBatches(result.batches); setRenderedView(mapState);
       selectionReady.current = true;
-      void engine.getSummary().then(value => { setSummary(value); if (!viewportScope) setScopedSummary(value); }).catch(error => setError(error instanceof Error ? error.message : String(error)));
       setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
       setStatus(`${result.selectedCount.toLocaleString()} routes selected`);
       setTabs(previous => {
@@ -327,7 +327,7 @@ export function App() {
       });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
-      setStatus("Query failed · previous result preserved");
+      setStatus("Query failed");
     } finally { setBusy(false); }
   }
 
@@ -542,9 +542,20 @@ export function App() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); refreshIdentity(); }
   }
 
-  function toggleStats() {
+  async function toggleStats() {
+    if (statsOpen) { setStatsOpen(false); return; }
     setSelected(null); setProfileHover(null); setIsolateSelected(false);
-    setTableOpen(false); setRenderingOpen(false); setAboutOpen(false); setToolbarOpen(false); setStatsOpen(open => !open);
+    setTableOpen(false); setRenderingOpen(false); setAboutOpen(false); setToolbarOpen(false); setStatsOpen(true);
+    if (!selectionReady.current || viewportScope) { setScopeLoading(viewportScope); return; }
+    try {
+      setScopeLoading(true); setError("");
+      const value = await engine.getSummary();
+      setSummary(value); setScopedSummary(value);
+    } catch (reason) {
+      setStatsOpen(false); setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setScopeLoading(false);
+    }
   }
   async function toggleTable() {
     if (tableOpen) { setTableOpen(false); return; }
@@ -635,7 +646,7 @@ export function App() {
 
     {menuOpen && <nav className="mobile-menu utility-panel" aria-label="Query navigation">
       <section><span className="eyebrow">SAVED QUERIES</span>{tabs.map(item => <button className={item.id === tab.id ? "active" : ""} key={item.id} onClick={() => { choose(item); setMenuOpen(false); }}>{item.title}</button>)}<button onClick={() => { add(); setMenuOpen(false); }}>New query</button></section>
-      <section><button onClick={() => { choose(tab, true); setMenuOpen(false); }}>Query settings</button><button disabled={!selectionReady.current} onClick={() => { toggleStats(); setMenuOpen(false); }}>Statistics</button><button disabled={!selectionReady.current || tableLoading} onClick={() => { void toggleTable(); setMenuOpen(false); }}>Table</button><button disabled={!selectionReady.current} onClick={() => { setRenderingOpen(true); setStatsOpen(false); setTableOpen(false); setAboutOpen(false); setToolbarOpen(false); setSchemaOpen(false); setMenuOpen(false); setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>Rendering</button></section>
+      <section><button onClick={() => { choose(tab, true); setMenuOpen(false); }}>Query settings</button><button disabled={!selectionReady.current} onClick={() => { void toggleStats(); setMenuOpen(false); }}>Statistics</button><button disabled={!selectionReady.current || tableLoading} onClick={() => { void toggleTable(); setMenuOpen(false); }}>Table</button><button disabled={!selectionReady.current} onClick={() => { setRenderingOpen(true); setStatsOpen(false); setTableOpen(false); setAboutOpen(false); setToolbarOpen(false); setSchemaOpen(false); setMenuOpen(false); setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>Rendering</button></section>
     </nav>}
 
     {accountMenuOpen && <nav className="account-menu utility-panel" aria-label="Account navigation"><button onClick={() => { setAccountView("account"); setAccountOpen(true); setAccountMenuOpen(false); }}>Account</button><button onClick={() => { setAccountView("upload"); setAccountOpen(true); setAccountMenuOpen(false); }}>Upload Archive</button><button onClick={() => { void publishTabs(); setAccountMenuOpen(false); }}>Publish link</button><button onClick={() => { clearSession(); refreshIdentity(); setAccountMenuOpen(false); }}>Log out</button></nav>}

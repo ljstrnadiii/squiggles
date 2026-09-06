@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const engineCalls = vi.hoisted(() => ({ execute: vi.fn() }));
+const engineCalls = vi.hoisted(() => ({ execute: vi.fn(), getSummary: vi.fn() }));
 
 vi.mock("maplibre-gl", () => ({ Map: class { jumpTo() {} setStyle() {} remove() {} } }));
 vi.mock("./engine", () => ({
@@ -15,14 +15,14 @@ vi.mock("./engine", () => ({
       return { queryId: "1", selectedCount: 1, lod: 1, vertexCount: 2, geometryBufferBytes: 32, activityCount: 1, plannedVertexEstimate: 2, rawVertexEstimate: 2, vertexBudget: 1000, cache: { hit: false, bytes: 48, budgetBytes: 1024, entries: 1, evictions: 0 }, scan: { candidateFragmentCount: 1, totalFragmentCount: 2, candidateBytes: 1024, totalBytes: 4096, expectedRowGroupCount: 1, candidateRowGroupCount: 2, totalRowGroupCount: 4, expectedRowCount: 3, keptRowCount: 1 }, summary: { activityCount: 1, distanceM: 5000, elapsedSeconds: 2100, movingSeconds: 1800, elevationGainM: 100, elevationLossM: 90, minElevationM: 1400, maxElevationM: 1600, maxDistanceM: 5000, activeDays: 1, droppedJumpPoints: 1, droppedElevationPoints: 2, sportCounts: [{ sport: "ride", count: 1 }], firstActivity: "2025-01-01", lastActivity: "2025-01-01" }, renderPlan: { type: "arrow", activityIds: ["synthetic-1"] }, batches: [{ activities: [{ activityId: "synthetic-1", name: "Synthetic route", sportType: "Ride", startTime: "2025-01-01", distanceM: 5000, elevationGainM: 100, maxElevationM: 1600, sourceUrl: null }], positions: new Float64Array([-105, 39, -104, 40]), startIndices: new Uint32Array([0, 2]), segmentActivityIndices: new Uint32Array([0]) }] };
     }
     async renderViewport() { return { lod: 1, vertexCount: 0, geometryBufferBytes: 0, activityCount: 0, plannedVertexEstimate: 0, rawVertexEstimate: 0, vertexBudget: 1000, cache: { hit: false, bytes: 48, budgetBytes: 1024, entries: 1, evictions: 0 }, scan: { candidateFragmentCount: 1, totalFragmentCount: 2, candidateBytes: 1024, totalBytes: 4096, expectedRowGroupCount: 1, candidateRowGroupCount: 2, totalRowGroupCount: 4, expectedRowCount: 3, keptRowCount: 0 }, batches: [] }; }
-    async getSummary() { return { activityCount: 1, distanceM: 5000, elapsedSeconds: 2100, movingSeconds: 1800, elevationGainM: 100, elevationLossM: 90, minElevationM: 1400, maxElevationM: 1600, maxDistanceM: 5000, activeDays: 1, droppedJumpPoints: 1, droppedElevationPoints: 2, sportCounts: [{ sport: "ride", count: 1 }], firstActivity: "2025-01-01", lastActivity: "2025-01-01" }; }
+    async getSummary() { engineCalls.getSummary(); return { activityCount: 1, distanceM: 5000, elapsedSeconds: 2100, movingSeconds: 1800, elevationGainM: 100, elevationLossM: 90, minElevationM: 1400, maxElevationM: 1600, maxDistanceM: 5000, activeDays: 1, droppedJumpPoints: 1, droppedElevationPoints: 2, sportCounts: [{ sport: "ride", count: 1 }], firstActivity: "2025-01-01", lastActivity: "2025-01-01" }; }
     async getActivities() { return [{ activityId: "synthetic-1", name: "Synthetic route", sportType: "Ride", startTime: "2025-01-01", distanceM: 5000, elevationGainM: 100, maxElevationM: 1600, sourceUrl: null, bounds: [-105, 39, -104, 40] }]; }
     async getRouteMetadata() { return { activityId: "synthetic-1", name: "Synthetic route", sportType: "Ride", startTime: "2025-01-01", distanceM: 5000, elevationGainM: 100, maxElevationM: 1600, sourceUrl: null }; }
     async getActivity() { return { activityId: "synthetic-1", name: "Synthetic route", sportType: "Ride", startTime: "2025-01-01", distanceM: 5000, elevationGainM: 100, maxElevationM: 1600, sourceUrl: null, path: [[-105, 39], [-104, 40]], fullPath: [[-105, 39], [-104, 40]], elevationProfile: [{ distanceM: 0, elevationM: 1400, position: [-105, 39] }, { distanceM: 5000, elevationM: 1600, position: [-104, 40] }] }; }
   },
 }));
 
-afterEach(() => { cleanup(); localStorage.clear(); engineCalls.execute.mockClear(); });
+afterEach(() => { cleanup(); localStorage.clear(); engineCalls.execute.mockClear(); engineCalls.getSummary.mockClear(); });
 import { App } from "./App";
 
 describe("App", () => {
@@ -114,6 +114,7 @@ describe("App", () => {
     window.history.replaceState({}, "", "/?dataset=synthetic");
     render(<App />);
     expect(await screen.findByRole("status", { name: "1 routes selected" })).toBeInTheDocument();
+    expect(engineCalls.getSummary).not.toHaveBeenCalled();
     openQueryMenu();
     fireEvent.click(screen.getByRole("button", { name: "Rendering" }));
     expect(screen.getByRole("region", { name: "Rendering diagnostics" })).toBeInTheDocument();
@@ -128,6 +129,7 @@ describe("App", () => {
     expect(screen.queryByText("3 mi")).not.toBeInTheDocument();
     openQueryMenu();
     fireEvent.click(screen.getByRole("button", { name: "Statistics" }));
+    await waitFor(() => expect(engineCalls.getSummary).toHaveBeenCalledTimes(1));
     expect(screen.getByRole("region", { name: "Detailed selection statistics" })).toBeInTheDocument();
     expect(screen.queryByRole("slider", { name: "Panel size" })).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Limit to activities contained in viewport" })).not.toBeChecked();

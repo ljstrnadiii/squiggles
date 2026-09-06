@@ -127,6 +127,9 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   private cacheEvictions = 0;
   private resolution: SystemResolution = "medium";
   private consumedPublishedPlans = new Set<string>();
+  private summaryCache = new Map<string, Promise<import("./contracts").SummaryStats>>();
+  private tableCache = new Map<string, Promise<ActivityListItem[]>>();
+  private metadataCache = new Map<string, Promise<import("./contracts").RouteMetadata | null>>();
 
   private get cacheBudget() {
     return cacheBudget(this.resolution);
@@ -286,6 +289,9 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     this.cacheBytes = 0;
     this.cacheEvictions = 0;
     this.consumedPublishedPlans.clear();
+    this.summaryCache.clear();
+    this.tableCache.clear();
+    this.metadataCache.clear();
     clearRenderPlanHints();
 
     const manifestStarted = performance.now();
@@ -439,6 +445,8 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
 
     this.clean = nextClean;
     this.selectionKey = `${this.datasetRevision}|${this.clean ? 1 : 0}|${sql}`;
+    this.summaryCache.clear();
+    this.tableCache.clear();
     activateRenderTab(tab.id);
     recordRenderPlan(tab.id, { plans: result.resolutionPlans, bounds });
     perf("selection-execute", {
@@ -509,15 +517,33 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   }
 
   getSummary(bounds?: ViewportBounds): Promise<import("./contracts").SummaryStats> {
-    return this.networkRequest({ type: "summary", bounds, clean: this.clean });
+    const key = `${this.selectionKey}|${bounds?.join(",") ?? "all"}`;
+    const cached = this.summaryCache.get(key);
+    if (cached) return cached;
+    const request = this.networkRequest<import("./contracts").SummaryStats>({ type: "summary", bounds, clean: this.clean });
+    this.summaryCache.set(key, request);
+    request.catch(() => this.summaryCache.delete(key));
+    return request;
   }
 
   getActivities(bounds?: ViewportBounds): Promise<ActivityListItem[]> {
-    return this.networkRequest({ type: "table", bounds, clean: this.clean });
+    const key = `${this.selectionKey}|${bounds?.join(",") ?? "all"}`;
+    const cached = this.tableCache.get(key);
+    if (cached) return cached;
+    const request = this.networkRequest<ActivityListItem[]>({ type: "table", bounds, clean: this.clean });
+    this.tableCache.set(key, request);
+    request.catch(() => this.tableCache.delete(key));
+    return request;
   }
 
   getRouteMetadata(activityId: string): Promise<import("./contracts").RouteMetadata | null> {
-    return this.networkRequest({ type: "metadata", activityId, clean: this.clean });
+    const key = `${this.datasetRevision}|${this.clean ? 1 : 0}|${activityId}`;
+    const cached = this.metadataCache.get(key);
+    if (cached) return cached;
+    const request = this.networkRequest<import("./contracts").RouteMetadata | null>({ type: "metadata", activityId, clean: this.clean });
+    this.metadataCache.set(key, request);
+    request.catch(() => this.metadataCache.delete(key));
+    return request;
   }
 
   getActivity(activityId: string): Promise<RouteActivity | null> {
