@@ -591,7 +591,7 @@ export function App() {
   const hoverColors = useMemo(() => hover ? routeBatches.map(batch => routeColors(batch, activity => activity.activityId === hover.item.activityId ? routeColor(tab.style.color, 255) : [0, 0, 0, 0])) : [], [hover, routeBatches, tab.style.color]);
   const overviewPathData = useMemo(() => routeBatches.map((batch, index) => binaryPathData(batch, overviewColors[index])), [overviewColors, routeBatches]);
   const pickingPathData = useMemo(() => routeBatches.map(batch => binaryPathData(batch)), [routeBatches]);
-  const hoverPathData = useMemo(() => hover ? routeBatches.map((batch, index) => binaryPathData(batch, hoverColors[index])), [hover, hoverColors, routeBatches]);
+  const hoverPathData = useMemo(() => hover ? routeBatches.map((batch, index) => binaryPathData(batch, hoverColors[index])) : [], [hover, hoverColors, routeBatches]);
   const selectedSegments = useMemo(() => selected ? routeSegments([selected], true) : [], [selected]);
   const lineWidths = useMemo(() => lineWidthsForViewport(tab.style.lineWidthScale, mapSize.width, mapSize.height), [mapSize, tab.style.lineWidthScale]);
   const layers = useMemo(() => [
