@@ -28,7 +28,7 @@ import { App } from "./App";
 describe("App", () => {
   function openQueryMenu() { fireEvent.click(screen.getByRole("button", { name: "Open query menu" })); }
   function openLogoMenu() { fireEvent.click(screen.getByRole("button", { name: "Open Squiggles menu" })); }
-  function openQuerySettings() { openQueryMenu(); fireEvent.click(screen.getByRole("button", { name: "Query settings" })); }
+  function openQuerySettings() { fireEvent.click(screen.getByRole("button", { name: "Query" })); }
 
   it("renders the product name", async () => {
     window.history.replaceState({}, "", "/");
@@ -127,8 +127,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close rendering diagnostics" }));
     expect(screen.queryByRole("region", { name: "Selection summary" })).not.toBeInTheDocument();
     expect(screen.queryByText("3 mi")).not.toBeInTheDocument();
-    openQueryMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Statistics" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stats" }));
     await waitFor(() => expect(engineCalls.getSummary).toHaveBeenCalledTimes(1));
     expect(screen.getByRole("region", { name: "Detailed selection statistics" })).toBeInTheDocument();
     expect(screen.queryByRole("slider", { name: "Panel size" })).not.toBeInTheDocument();
@@ -142,7 +141,6 @@ describe("App", () => {
     expect(engineCalls.execute).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("checkbox", { name: "Clean" }));
     await waitFor(() => expect(engineCalls.execute).toHaveBeenCalledTimes(2));
-    openQueryMenu();
     await waitFor(() => expect(screen.getByRole("button", { name: "Table" })).not.toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "Table" }));
     expect(await screen.findByRole("region", { name: "Activity table" })).toBeInTheDocument();
