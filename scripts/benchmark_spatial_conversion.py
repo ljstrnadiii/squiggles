@@ -20,7 +20,10 @@ NATIVE_CONVERSION = (
     "struct_pack(x := list_extract(p, 1), y := list_extract(p, 2))) "
     "AS LINESTRING_2D) AS GEOMETRY)"
 )
-POLYGON = "ST_GeomFromText('POLYGON((-105.3 39.8,-104.7 39.8,-104.7 40.2,-105.3 40.2,-105.3 39.8))')"
+POLYGON = (
+    "ST_GeomFromText('POLYGON((-105.3 39.8,-104.7 39.8,-104.7 40.2,"
+    "-105.3 40.2,-105.3 39.8))')"
+)
 
 
 def routes_table() -> pa.Table:
