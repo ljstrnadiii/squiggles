@@ -171,9 +171,7 @@ def run_scenario(
         body = page.locator("body").inner_text()
         duckdb_errors = [line for line in console if "DuckDB failure" in line]
         significant_failures = [
-            failure
-            for failure in failed_requests
-            if "assets/maplibre-gl-worker.mjs" not in failure
+            failure for failure in failed_requests if "assets/maplibre-gl-worker.mjs" not in failure
         ]
         if "Squiggles DuckDB failure" in body:
             raise RuntimeError("page rendered Squiggles DuckDB failure")
