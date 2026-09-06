@@ -22,8 +22,9 @@ SUMMARY_SQL = (
     "FROM {relation} WHERE activity_family='run'"
 )
 TABLE_SQL = (
-    "SELECT activity_id,sport_type,start_time,distance_m,elevation_gain_m,max_elevation_m "
-    "FROM {relation} WHERE activity_family='run' ORDER BY start_time DESC LIMIT 100"
+    "SELECT activity_id,sport_type,CAST(start_time AS VARCHAR) start_time,distance_m,"
+    "elevation_gain_m,max_elevation_m FROM {relation} WHERE activity_family='run' "
+    "ORDER BY start_time DESC LIMIT 100"
 )
 
 
