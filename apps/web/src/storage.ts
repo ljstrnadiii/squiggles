@@ -28,6 +28,13 @@ export function normalizeRouteColor(color: string) {
   return legacyDefaultColors.has(color.toLowerCase()) ? ELECTRIC_BLUE : color;
 }
 
+function migrateBuiltInTab(tab: QueryTab): QueryTab {
+  if (tab.id === highRunsTab.id && tab.sql.includes("track_points")) {
+    return { ...tab, title: highRunsTab.title, sql: highRunsTab.sql };
+  }
+  return tab;
+}
+
 export function loadTabs(): QueryTab[] {
   try {
     const stored = JSON.parse(localStorage.getItem(KEY) ?? "[]") as Array<QueryTab & { style: QueryTab["style"] & { lineWidth?: number } }>;
@@ -37,7 +44,7 @@ export function loadTabs(): QueryTab[] {
       delete currentStyle.lineWidth;
       const merged = { ...defaultStyle, ...currentStyle, ...(legacyScale === undefined ? {} : { lineWidthScale: legacyScale }) };
       const style = { ...merged, lineWidthScale: Math.max(0.25, Math.min(4, merged.lineWidthScale)) };
-      return { ...tab, style: { ...style, color: normalizeRouteColor(style.color) } };
+      return migrateBuiltInTab({ ...tab, style: { ...style, color: normalizeRouteColor(style.color) } });
     }) : [defaultTab];
     return tabs.some(tab => tab.id === highRunsTab.id) ? tabs : [...tabs, highRunsTab];
   } catch {
