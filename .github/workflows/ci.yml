@@ -50,6 +50,8 @@ jobs:
         run: uv run --frozen pytest -k 'not test_compile_validate_and_refuse_overwrite'
       - name: Benchmark resident metadata cache
         run: uv run --frozen python scripts/benchmark_metadata_cache.py
+      - name: Benchmark targeted canonical detail reads
+        run: uv run --frozen python scripts/benchmark_canonical_detail.py
 
   web:
     runs-on: ubuntu-latest
