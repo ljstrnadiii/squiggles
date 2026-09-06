@@ -4,6 +4,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from playwright.sync_api import Browser, Page, sync_playwright
 
@@ -49,7 +50,7 @@ SCENARIOS = [
 ]
 
 
-PROFILES = [
+PROFILES: list[dict[str, Any]] = [
     {
         "name": "desktop",
         "context": {
@@ -70,7 +71,7 @@ PROFILES = [
 
 
 def tab_payload(scenario: Scenario) -> str:
-    tab = {
+    tab: dict[str, Any] = {
         "id": "benchmark",
         "title": scenario.name,
         "sql": scenario.sql,
@@ -90,7 +91,7 @@ def tab_payload(scenario: Scenario) -> str:
     return json.dumps([tab])
 
 
-def wait_for_draw(page: Page) -> dict[str, object]:
+def wait_for_draw(page: Page) -> dict[str, Any]:
     page.wait_for_function(
         """() => {
           const status = document.querySelector('.status');
@@ -138,9 +139,9 @@ def wait_for_draw(page: Page) -> dict[str, object]:
 
 def run_scenario(
     browser: Browser,
-    profile: dict[str, object],
+    profile: dict[str, Any],
     scenario: Scenario,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     console: list[str] = []
     page_errors: list[str] = []
     failed_requests: list[str] = []
@@ -205,7 +206,7 @@ def run_scenario(
 
 def main() -> None:
     OUTPUT.mkdir(exist_ok=True)
-    results: list[dict[str, object]] = []
+    results: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(channel="chrome", headless=True)
