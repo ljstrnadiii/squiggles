@@ -52,7 +52,10 @@ SCENARIOS = [
 PROFILES = [
     {
         "name": "desktop",
-        "context": {"viewport": {"width": 1440, "height": 900}, "device_scale_factor": 1},
+        "context": {
+            "viewport": {"width": 1440, "height": 900},
+            "device_scale_factor": 1,
+        },
     },
     {
         "name": "mobile",
@@ -93,7 +96,10 @@ def wait_for_draw(page: Page) -> dict[str, object]:
           const status = document.querySelector('.status');
           const label = status?.getAttribute('aria-label') || '';
           const failed = document.querySelector('.global-error');
-          return failed || (label.includes('routes selected') && !status?.classList.contains('working'));
+          return failed || (
+            label.includes('routes selected') &&
+            !status?.classList.contains('working')
+          );
         }""",
         timeout=120_000,
     )
@@ -106,21 +112,35 @@ def wait_for_draw(page: Page) -> dict[str, object]:
           const status = document.querySelector('.status');
           const canvases = [...document.querySelectorAll('canvas')];
           const resources = performance.getEntriesByType('resource');
+          const parquet = resources.filter(resource => resource.name.includes('.parquet'));
           return {
             paintMs: performance.now(),
             status: status?.getAttribute('aria-label') ?? null,
             canvasCount: canvases.length,
-            canvasPixels: canvases.reduce((sum, canvas) => sum + canvas.width * canvas.height, 0),
+            canvasPixels: canvases.reduce(
+              (sum, canvas) => sum + canvas.width * canvas.height,
+              0,
+            ),
             resourceCount: resources.length,
-            transferBytes: resources.reduce((sum, resource) => sum + (resource.transferSize || 0), 0),
-            parquetRequests: resources.filter(resource => resource.name.includes('.parquet')).length,
-            parquetTransferBytes: resources.filter(resource => resource.name.includes('.parquet')).reduce((sum, resource) => sum + (resource.transferSize || 0), 0),
+            transferBytes: resources.reduce(
+              (sum, resource) => sum + (resource.transferSize || 0),
+              0,
+            ),
+            parquetRequests: parquet.length,
+            parquetTransferBytes: parquet.reduce(
+              (sum, resource) => sum + (resource.transferSize || 0),
+              0,
+            ),
           };
         }"""
     )
 
 
-def run_scenario(browser: Browser, profile: dict[str, object], scenario: Scenario) -> dict[str, object]:
+def run_scenario(
+    browser: Browser,
+    profile: dict[str, object],
+    scenario: Scenario,
+) -> dict[str, object]:
     console: list[str] = []
     page_errors: list[str] = []
     failed_requests: list[str] = []
