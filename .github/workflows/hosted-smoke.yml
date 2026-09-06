@@ -22,6 +22,16 @@ jobs:
         run: python -m pip install playwright==1.55.0
       - name: Exercise production map in Chrome
         run: python scripts/check_hosted_browser.py
+      - name: Profile production browser scenarios
+        run: python scripts/profile_hosted_browser.py
+      - name: Upload browser profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hosted-browser-profile
+          path: browser-profile-artifacts
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Upload browser failure artifacts
         if: failure()
         uses: actions/upload-artifact@v4
