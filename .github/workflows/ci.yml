@@ -52,6 +52,8 @@ jobs:
         run: uv run --frozen python scripts/benchmark_metadata_cache.py
       - name: Benchmark targeted canonical detail reads
         run: uv run --frozen python scripts/benchmark_canonical_detail.py
+      - name: Benchmark spatial conversion
+        run: uv run --frozen python scripts/benchmark_spatial_conversion.py
 
   web:
     runs-on: ubuntu-latest
