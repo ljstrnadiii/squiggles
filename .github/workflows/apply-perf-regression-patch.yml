@@ -21,6 +21,6 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add apps/web/src/App.tsx apps/web/src/engine.ts apps/web/src/storage.ts apps/web/src/SqlEditor.tsx scripts/profile_hosted_browser.py
-          git commit -m "fix: restore responsive query rendering [perf-patch]"
+          git add apps/web/src/App.test.tsx apps/web/src/storage.performance.test.ts
+          git commit -m "test: cover demand-driven summary [perf-patch]"
           git push origin HEAD:fix/perf-regressions
