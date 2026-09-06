@@ -5,6 +5,7 @@ type PanelTargets = {
   table: HTMLElement | null;
   toolbar: HTMLElement | null;
   logoMenu: HTMLElement | null;
+  queryMenu: HTMLElement | null;
 };
 
 type NetworkInformation = {
@@ -22,6 +23,9 @@ function targets(): PanelTargets {
     ),
     logoMenu: document.querySelector<HTMLElement>(
       'nav.logo-menu[aria-label="Squiggles navigation"]',
+    ),
+    queryMenu: document.querySelector<HTMLElement>(
+      'nav.mobile-menu[aria-label="Query navigation"]',
     ),
   };
 }
@@ -159,15 +163,22 @@ function Diagnostics({ onClose }: { onClose: () => void }) {
         </tbody>
       </table>
       <p>
-        Rendering-specific LOD, row-group, vertex-budget, GeoArrow, and cache metrics remain
-        available in the query Rendering panel while they are migrated into this combined
-        Diagnostics surface.
+        Rendering-specific LOD, row-group, vertex-budget, GeoArrow, and cache metrics are available
+        from Rendering in the Squiggles menu.
       </p>
       <button className="diagnostics-copy" onClick={() => void copy()}>
         Copy diagnostics
       </button>
     </section>
   );
+}
+
+function queryMenuButton(label: string) {
+  return Array.from(
+    document.querySelectorAll<HTMLButtonElement>(
+      'nav.mobile-menu[aria-label="Query navigation"] button',
+    ),
+  ).find((button) => button.textContent?.trim() === label);
 }
 
 export function PanelEnhancements() {
@@ -184,7 +195,8 @@ export function PanelEnhancements() {
         const unchanged =
           previous.table === next.table &&
           previous.toolbar === next.toolbar &&
-          previous.logoMenu === next.logoMenu;
+          previous.logoMenu === next.logoMenu &&
+          previous.queryMenu === next.queryMenu;
         return unchanged ? previous : next;
       });
 
@@ -193,6 +205,36 @@ export function PanelEnhancements() {
     update();
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    const keepPickerOpenAfterMapSwitch = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const button = target.closest<HTMLButtonElement>(
+        'nav.mobile-menu[aria-label="Query navigation"] section:first-child button',
+      );
+      if (!button || button.classList.contains("active") || button.textContent?.trim() === "New query") {
+        return;
+      }
+      window.setTimeout(() => {
+        const title = document.querySelector<HTMLButtonElement>("button.mobile-query-title");
+        if (title?.getAttribute("aria-expanded") === "false") title.click();
+      }, 0);
+    };
+
+    document.addEventListener("click", keepPickerOpenAfterMapSwitch);
+    return () => document.removeEventListener("click", keepPickerOpenAfterMapSwitch);
+  }, []);
+
+  useEffect(() => {
+    if (!panels.queryMenu) return;
+    const rendering = queryMenuButton("Rendering");
+    if (!rendering) return;
+    rendering.hidden = true;
+    return () => {
+      rendering.hidden = false;
+    };
+  }, [panels.queryMenu]);
 
   useEffect(() => {
     if (!panels.logoMenu) return;
@@ -232,6 +274,13 @@ export function PanelEnhancements() {
   const tableHeader = panels.table?.querySelector("header");
   const toolbarHeader = panels.toolbar?.querySelector("header");
 
+  const openRenderingDiagnostics = () => {
+    const title = document.querySelector<HTMLButtonElement>("button.mobile-query-title");
+    if (!title) return;
+    if (title.getAttribute("aria-expanded") !== "true") title.click();
+    window.requestAnimationFrame(() => queryMenuButton("Rendering")?.click());
+  };
+
   return (
     <>
       {tableHeader &&
@@ -264,7 +313,10 @@ export function PanelEnhancements() {
         )}
       {panels.logoMenu &&
         createPortal(
-          <button onClick={() => setDiagnosticsOpen(true)}>Diagnostics</button>,
+          <>
+            <button onClick={() => setDiagnosticsOpen(true)}>Diagnostics</button>
+            <button onClick={openRenderingDiagnostics}>Rendering</button>
+          </>,
           panels.logoMenu,
         )}
       {diagnosticsOpen &&
