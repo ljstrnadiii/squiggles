@@ -16,6 +16,15 @@ import pyarrow.parquet as pq
 ROWS = 10_000
 ROW_GROUP_SIZE = 4096
 RTT_SECONDS = 0.08
+SELECTION_SQL = "SELECT count(*) FROM {relation} WHERE lower(sport_type) LIKE '%run%'"
+SUMMARY_SQL = (
+    "SELECT count(*),sum(distance_m),sum(elevation_gain_m),max(max_elevation_m) "
+    "FROM {relation} WHERE activity_family='run'"
+)
+TABLE_SQL = (
+    "SELECT activity_id,sport_type,start_time,distance_m,elevation_gain_m,max_elevation_m "
+    "FROM {relation} WHERE activity_family='run' ORDER BY start_time DESC LIMIT 100"
+)
 
 
 class RangeServer:
@@ -125,22 +134,10 @@ def remote_view_case(url: str, server: RangeServer) -> dict[str, object]:
     conn.execute(f"CREATE VIEW activity_source AS SELECT * FROM read_parquet('{escaped}')")
     conn.execute("CREATE TEMP VIEW activities AS SELECT * FROM activity_source")
     server.reset()
-    selection_cold = timed(
-        conn,
-        "SELECT count(*) FROM activities WHERE lower(sport_type) LIKE '%run%'",
-    )
-    selection_warm = timed(
-        conn,
-        "SELECT count(*) FROM activities WHERE lower(sport_type) LIKE '%run%'",
-    )
-    summary = timed(
-        conn,
-        "SELECT count(*),sum(distance_m),sum(elevation_gain_m),max(max_elevation_m) FROM activities WHERE activity_family='run'",
-    )
-    table = timed(
-        conn,
-        "SELECT activity_id,sport_type,start_time,distance_m,elevation_gain_m,max_elevation_m FROM activities WHERE activity_family='run' ORDER BY start_time DESC LIMIT 100",
-    )
+    selection_cold = timed(conn, SELECTION_SQL.format(relation="activities"))
+    selection_warm = timed(conn, SELECTION_SQL.format(relation="activities"))
+    summary = timed(conn, SUMMARY_SQL.format(relation="activities"))
+    table = timed(conn, TABLE_SQL.format(relation="activities"))
     result = {
         "selectionColdMs": round(selection_cold, 1),
         "selectionWarmMs": round(selection_warm, 1),
@@ -162,18 +159,9 @@ def materialized_case(url: str, server: RangeServer) -> dict[str, object]:
     materialize = (time.perf_counter() - started) * 1000
     requests_after_materialize = server.requests
     bytes_after_materialize = server.bytes
-    selection = timed(
-        conn,
-        "SELECT count(*) FROM activity_cache WHERE lower(sport_type) LIKE '%run%'",
-    )
-    summary = timed(
-        conn,
-        "SELECT count(*),sum(distance_m),sum(elevation_gain_m),max(max_elevation_m) FROM activity_cache WHERE activity_family='run'",
-    )
-    table = timed(
-        conn,
-        "SELECT activity_id,sport_type,start_time,distance_m,elevation_gain_m,max_elevation_m FROM activity_cache WHERE activity_family='run' ORDER BY start_time DESC LIMIT 100",
-    )
+    selection = timed(conn, SELECTION_SQL.format(relation="activity_cache"))
+    summary = timed(conn, SUMMARY_SQL.format(relation="activity_cache"))
+    table = timed(conn, TABLE_SQL.format(relation="activity_cache"))
     result = {
         "materializeMs": round(materialize, 1),
         "selectionWarmMs": round(selection, 1),
