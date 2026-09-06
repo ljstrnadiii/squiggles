@@ -16,6 +16,7 @@ from ray.data.block import Block, BlockAccessor
 from ray.data.datasource import Datasink
 from ray.data.datasource.datasink import WriteResult
 
+from .canonical_locator import canonical_locators
 from .render_lod import RENDER_TOLERANCES_M, simplify_coordinates_meters
 from .schema import (
     ActivitySchema,
@@ -352,13 +353,14 @@ class GeoParquetDataSink(Datasink[list[ShardMetadata]]):
 
 
 def write_metadata_dataset(
-    table: pa.Table, path: Path, locators: CanonicalLocators
+    table: pa.Table, path: Path, locators: CanonicalLocators | None = None
 ) -> list[ShardMetadata]:
     path.mkdir(parents=True, exist_ok=True)
+    resolved = locators or canonical_locators(path.parent / "activities")
     schema = metadata_arrow_schema()
     ordered = table.sort_by([("spatial_order", "ascending"), ("activity_id", "ascending")])
     activity_ids = [str(value) for value in ordered["activity_id"].to_pylist()]
-    missing = [activity_id for activity_id in activity_ids if activity_id not in locators]
+    missing = [activity_id for activity_id in activity_ids if activity_id not in resolved]
     if missing:
         raise ValueError(f"canonical locator missing for {len(missing)} activities")
     base_names = [
@@ -367,8 +369,8 @@ def write_metadata_dataset(
     arrays = [ordered[name] for name in base_names]
     arrays.extend(
         [
-            pa.array([locators[activity_id][0] for activity_id in activity_ids], type=pa.string()),
-            pa.array([locators[activity_id][1] for activity_id in activity_ids], type=pa.int32()),
+            pa.array([resolved[activity_id][0] for activity_id in activity_ids], type=pa.string()),
+            pa.array([resolved[activity_id][1] for activity_id in activity_ids], type=pa.int32()),
         ]
     )
     metadata = pa.Table.from_arrays(arrays, schema=schema)
@@ -394,7 +396,7 @@ def write_metadata_dataset(
 
 
 class MetadataDataSink(Datasink[list[ShardMetadata]]):
-    def __init__(self, path: str, locators: CanonicalLocators) -> None:
+    def __init__(self, path: str, locators: CanonicalLocators | None = None) -> None:
         self.path = path
         self.locators = locators
         self.files: list[ShardMetadata] = []
