@@ -138,6 +138,7 @@ function fitBounds([xmin, ymin, xmax, ymax]: [number, number, number, number], m
 }
 
 type TableSort = "name" | "sport" | "date" | "distance" | "gain" | "maximum";
+type WorkspaceMode = "map" | "query" | "stats" | "table";
 
 function mapStyle(basemap: Basemap, theme: "light" | "dark"): maplibregl.StyleSpecification {
   if (basemap === "blank") return { ...blankStyle, layers: [{ id: "background", type: "background", paint: { "background-color": theme === "dark" ? "#07100e" : "#edf2ef" } }] };
@@ -162,9 +163,6 @@ function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; t
     return () => { map.current?.remove(); map.current = null; };
   }, []);
   useLayoutEffect(() => {
-    // Deck and MapLibre are separate canvases. Apply the exact same camera
-    // before paint so the basemap never displays one interaction frame behind
-    // the route overlay (and wheel zoom retains deck.gl's cursor anchor).
     map.current?.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom });
   }, [view]);
   useEffect(() => {
@@ -259,6 +257,7 @@ export function App() {
   const refreshIdentity = useCallback(() => setSessionIdentity(identityFromSession(loadSession())), []);
   const distance = (meters: number) => `${integer.format(distanceValue(meters, units))} ${distanceUnit(units)}`;
   const elevation = (meters: number) => `${integer.format(elevationValue(meters, units))} ${elevationUnit(units)}`;
+  const workspaceMode: WorkspaceMode = toolbarOpen ? "query" : statsOpen ? "stats" : tableOpen ? "table" : "map";
 
   useEffect(() => {
     const element = mapElement.current;
@@ -275,16 +274,7 @@ export function App() {
     if (!tab.style.heatEnabled || isolateSelected) { setHeat(emptyHeat); return; }
     let cancelled = false;
     const element = mapElement.current;
-    void buildBinaryHeatDataCooperative(
-      routeBatches,
-      renderedView,
-      element?.clientWidth ?? 0,
-      element?.clientHeight ?? 0,
-      selected?.activityId,
-      8,
-      () => cancelled,
-      systemResolution === "low" ? 4 : 8,
-    ).then(result => { if (!cancelled && result) setHeat(result); });
+    void buildBinaryHeatDataCooperative(routeBatches, renderedView, element?.clientWidth ?? 0, element?.clientHeight ?? 0, selected?.activityId, 8, () => cancelled, systemResolution === "low" ? 4 : 8).then(result => { if (!cancelled && result) setHeat(result); });
     return () => { cancelled = true; };
   }, [isolateSelected, renderedView, routeBatches, selected?.activityId, systemResolution, tab.style.heatEnabled]);
 
@@ -312,7 +302,7 @@ export function App() {
       selectionReady.current = false;
       setRouteBatches([]);
       setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false);
-      setTableOpen(false); setTableActivities([]);
+      if (tableOpen) { setTableLoading(true); setTableActivities([]); }
       setBusy(true); setStatus("Running DuckDB SQL…"); setError("");
       const current = { ...queryTab, sql, mapState };
       const renderStarted = performance.now();
@@ -325,6 +315,19 @@ export function App() {
         const updated = previous.map(item => item.id === queryTab.id ? current : item);
         saveTabs(updated); return updated;
       });
+      if (!viewportScope && statsOpen) {
+        setScopeLoading(true);
+        try {
+          const value = await engine.getSummary();
+          setSummary(value); setScopedSummary(value);
+        } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+        finally { setScopeLoading(false); }
+      } else if (!viewportScope && tableOpen) {
+        setTableLoading(true);
+        try { setTableActivities(await engine.getActivities()); }
+        catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+        finally { setTableLoading(false); }
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
       setStatus("Query failed");
@@ -386,11 +389,8 @@ export function App() {
       return;
     }
     const hostedDatasetRoot = (import.meta.env.VITE_DATASET_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/datasets";
-    const source = shared
-      ? { kind: "url" as const, baseUrl: `${hostedDatasetRoot}/${shared}`, name: shared }
-      : { kind: "url" as const, baseUrl: `/local-data/${local!}`, name: local! };
+    const source = shared ? { kind: "url" as const, baseUrl: `${hostedDatasetRoot}/${shared}`, name: shared } : { kind: "url" as const, baseUrl: `/local-data/${local!}`, name: local! };
     void openSource(source, initialUrlCamera.current ? view : undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -405,9 +405,7 @@ export function App() {
         if (request !== viewportRequest.current) return;
         setRouteBatches(result.batches); setRenderedView(view);
         setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
-      } catch (reason) {
-        if (request === viewportRequest.current) setError(reason instanceof Error ? reason.message : String(reason));
-      }
+      } catch (reason) { if (request === viewportRequest.current) setError(reason instanceof Error ? reason.message : String(reason)); }
     }, 180);
     return () => window.clearTimeout(timer);
   }, [engine, mapInteracting, summary.activityCount, systemResolution, view]);
@@ -427,11 +425,8 @@ export function App() {
           const result = await engine.getActivities(bounds);
           if (request === panelRequest.current) setTableActivities(result);
         }
-      } catch (reason) {
-        if (request === panelRequest.current) setError(reason instanceof Error ? reason.message : String(reason));
-      } finally {
-        if (request === panelRequest.current) { setScopeLoading(false); setTableLoading(false); }
-      }
+      } catch (reason) { if (request === panelRequest.current) setError(reason instanceof Error ? reason.message : String(reason)); }
+      finally { if (request === panelRequest.current) { setScopeLoading(false); setTableLoading(false); } }
     }, 120);
     return () => window.clearTimeout(timer);
   }, [engine, renderedView, statsOpen, tableOpen, viewportScope]);
@@ -439,21 +434,21 @@ export function App() {
   function choose(next: QueryTab, openQuery = false) {
     const isCurrent = next.id === active;
     setSpatialDrawing(false); setSpatialDraft([]);
-    if (isCurrent) setToolbarOpen(open => !open);
-    else {
+    if (!isCurrent) {
       setTabs(previous => {
         const updated = previous.map(item => item.id === tab.id ? { ...item, mapState: { ...view } } : item);
         saveTabs(updated);
         return updated;
       });
-      setActive(next.id); setDraft(next.sql); setView(next.mapState); setRenderedView(next.mapState); setToolbarOpen(openQuery);
+      setActive(next.id); setDraft(next.sql); setView(next.mapState); setRenderedView(next.mapState);
     }
-    replaceUrlSettings(next, next.mapState, units); setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false);
+    if (openQuery) {
+      setToolbarOpen(true); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false);
+    }
+    replaceUrlSettings(next, next.mapState, units); setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false); setRenderingOpen(false); setAboutOpen(false);
     if (ready.current && !isCurrent) void run(next, next.mapState, next.sql);
   }
   function add() {
-    // A query changes the selected routes, not the place the user is looking
-    // at. New tabs therefore inherit the live camera and visual settings.
     const next = { ...defaultTab, mapState: { ...view }, style: { ...tab.style }, id: crypto.randomUUID(), title: "New Query" };
     const updated = [...tabs, next]; setTabs(updated); saveTabs(updated); choose(next, true);
   }
@@ -470,8 +465,6 @@ export function App() {
     const nextTab = { ...tab, style: { ...tab.style, ...style } };
     const updated = tabs.map(item => item.id === tab.id ? nextTab : item);
     setTabs(updated); saveTabs(updated);
-    // Clean changes the logical activities view, so refresh the last
-    // successfully executed SQL automatically. Unsaved SQL remains a draft.
     if (style.cleanEnabled !== undefined && style.cleanEnabled !== tab.style.cleanEnabled && ready.current) void run(nextTab, view, tab.sql);
   }
   function saveSpatialFilter(spatialFilter: QueryTab["spatialFilter"], rerun: boolean) {
@@ -484,9 +477,7 @@ export function App() {
     const spatialFilter = { predicate, polygon: tab.spatialFilter?.polygon ?? [], visible: tab.spatialFilter?.visible ?? false };
     saveSpatialFilter(spatialFilter, spatialFilter.polygon.length >= 3);
   }
-  function startSpatialDraw() {
-    setSpatialDraft([]); setSpatialDrawing(true); setToolbarOpen(false); setSelected(null); setProfileHover(null); setHover(null);
-  }
+  function startSpatialDraw() { setSpatialDraft([]); setSpatialDrawing(true); setToolbarOpen(false); setSelected(null); setProfileHover(null); setHover(null); }
   function acceptSpatialDraw() {
     if (spatialDraft.length < 3) return;
     const spatialFilter = { predicate: tab.spatialFilter?.predicate ?? "intersects" as const, polygon: spatialDraft, visible: false };
@@ -496,8 +487,14 @@ export function App() {
   function changeTheme(theme: ThemeMode) { setThemeMode(theme); saveTheme(theme); }
   function changeUnits(next: UnitSystem) { setUnits(next); saveUnits(next); }
   function changeSystemResolution(next: SystemResolution) { setSystemResolution(next); saveSystemResolution(next); }
-  function openSystemSettings() {
-    setSystemSettingsOpen(true); setMenuOpen(false); setSchemaOpen(false); setToolbarOpen(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false);
+  function openSystemSettings() { setSystemSettingsOpen(true); setMenuOpen(false); setSchemaOpen(false); setToolbarOpen(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false); }
+  function showMapMode() {
+    setToolbarOpen(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false);
+    setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false);
+  }
+  function showQueryMode() {
+    setToolbarOpen(true); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false);
+    setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false);
   }
   const openActivity = useCallback(async (activity: RouteMetadata) => {
     setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false); setToolbarOpen(false);
@@ -505,9 +502,7 @@ export function App() {
     try {
       const detail = await engine.getActivity(activity.activityId);
       if (detail) setSelected(detail);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not load activity details.");
-    }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load activity details."); }
   }, [engine]);
   async function openTableActivity(activity: ActivityListItem) {
     setTableOpen(false); setSelected(null); setProfileHover(null);
@@ -515,9 +510,7 @@ export function App() {
     try {
       const detail = await engine.getActivity(activity.activityId);
       if (detail) setSelected(detail);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   }
   function zoomToSelected() {
     if (!selected?.fullPath.length) return;
@@ -525,16 +518,8 @@ export function App() {
     const latitudes = selected.fullPath.map(point => point[1]);
     setView(fitBounds([Math.min(...longitudes), Math.min(...latitudes), Math.max(...longitudes), Math.max(...latitudes)], 16, mapElement.current));
   }
-  async function copySchema() {
-    await navigator.clipboard.writeText(QUERY_SCHEMA);
-    setSchemaCopied(true); window.setTimeout(() => setSchemaCopied(false), 1500);
-  }
-  async function copyTabLink() {
-    replaceUrlSettings(tab, view, units);
-    const url = new URL(window.location.href);
-    await navigator.clipboard.writeText(url.toString());
-    setLinkCopied(true); window.setTimeout(() => setLinkCopied(false), 1500);
-  }
+  async function copySchema() { await navigator.clipboard.writeText(QUERY_SCHEMA); setSchemaCopied(true); window.setTimeout(() => setSchemaCopied(false), 1500); }
+  async function copyTabLink() { replaceUrlSettings(tab, view, units); const url = new URL(window.location.href); await navigator.clipboard.writeText(url.toString()); setLinkCopied(true); window.setTimeout(() => setLinkCopied(false), 1500); }
   async function publishTabs() {
     const session = loadSession();
     if (!session) { setAccountView("login"); setAccountOpen(true); return; }
@@ -558,11 +543,8 @@ export function App() {
       setScopeLoading(true); setError("");
       const value = await engine.getSummary();
       setSummary(value); setScopedSummary(value);
-    } catch (reason) {
-      setStatsOpen(false); setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setScopeLoading(false);
-    }
+    } catch (reason) { setStatsOpen(false); setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setScopeLoading(false); }
   }
   async function toggleTable() {
     if (tableOpen) { setTableOpen(false); return; }
@@ -572,11 +554,8 @@ export function App() {
     try {
       setTableLoading(true); setError("");
       setTableActivities(await engine.getActivities());
-    } catch (reason) {
-      setTableOpen(false); setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setTableLoading(false);
-    }
+    } catch (reason) { setTableOpen(false); setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setTableLoading(false); }
   }
 
   function changeViewportScope(enabled: boolean) {
@@ -588,9 +567,7 @@ export function App() {
         setTableLoading(true);
         void engine.getActivities().then(setTableActivities).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setTableLoading(false));
       }
-    } else if (tableOpen) {
-      setTableLoading(true);
-    }
+    } else if (tableOpen) setTableLoading(true);
   }
 
   function toggleTableSort(next: typeof tableSort) {
@@ -599,12 +576,7 @@ export function App() {
   }
   const tableRows = useMemo(() => [...tableActivities].sort((left, right) => {
     const values: Record<typeof tableSort, [string | number, string | number]> = {
-      name: [left.name, right.name],
-      sport: [left.sportType, right.sportType],
-      date: [left.startTime ?? "", right.startTime ?? ""],
-      distance: [left.distanceM ?? -1, right.distanceM ?? -1],
-      gain: [left.elevationGainM ?? -1, right.elevationGainM ?? -1],
-      maximum: [left.maxElevationM ?? -1, right.maxElevationM ?? -1],
+      name: [left.name, right.name], sport: [left.sportType, right.sportType], date: [left.startTime ?? "", right.startTime ?? ""], distance: [left.distanceM ?? -1, right.distanceM ?? -1], gain: [left.elevationGainM ?? -1, right.elevationGainM ?? -1], maximum: [left.maxElevationM ?? -1, right.maxElevationM ?? -1],
     };
     const [a, b] = values[tableSort];
     const order = typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b));
@@ -614,9 +586,7 @@ export function App() {
   const overviewBatches = useMemo(() => isolateSelected ? [] : routeBatches, [isolateSelected, routeBatches]);
   const overviewColors = useMemo(() => routeBatches.map(batch => routeColors(batch, activity => {
     if (activity.activityId === selected?.activityId) return [0, 0, 0, 0];
-    return tab.style.heatEnabled
-      ? colorForWeight(heat.scores.get(activity.activityId) ?? 0, heat.maxScore, tab.style.heatPalette, tab.style.heatTemperature)
-      : routeColor(tab.style.color, 190);
+    return tab.style.heatEnabled ? colorForWeight(heat.scores.get(activity.activityId) ?? 0, heat.maxScore, tab.style.heatPalette, tab.style.heatTemperature) : routeColor(tab.style.color, 190);
   })), [heat, routeBatches, selected, tab.style.color, tab.style.heatEnabled, tab.style.heatPalette, tab.style.heatTemperature]);
   const hoverColors = useMemo(() => hover ? routeBatches.map(batch => routeColors(batch, activity => activity.activityId === hover.item.activityId ? routeColor(tab.style.color, 255) : [0, 0, 0, 0])) : [], [hover, routeBatches, tab.style.color]);
   const overviewPathData = useMemo(() => routeBatches.map((batch, index) => binaryPathData(batch, overviewColors[index])), [overviewColors, routeBatches]);
@@ -630,14 +600,8 @@ export function App() {
       new PathLayer({ id: `routes-${index}`, data: overviewPathData[index], _pathType: "open", positionFormat: "XY", getWidth: tab.style.heatEnabled ? lineWidths.heat : lineWidths.route, widthUnits: "pixels", widthMinPixels: 0.35, pickable: false }),
       new PathLayer({ id: `route-hit-targets-${index}`, data: pickingPathData[index], _pathType: "open", positionFormat: "XY", getColor: [0, 0, 0, 0], getWidth: lineWidths.route + 10, widthUnits: "pixels", widthMinPixels: 10, pickable: !spatialDrawing, onHover: (info: PickingInfo) => { if (spatialDrawing) return; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item) { setHover(null); return; } const x = info.x, y = info.y, activityId = item.activityId; void engine.getRouteMetadata(activityId).then(metadata => { if (metadata) setHover({ x, y, item: metadata, origin: "map" }); }); }, onClick: (info: PickingInfo) => { if (spatialDrawing) return false; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item) return false; void openActivity(item); return true; } }),
     ]),
-    ...(hover && !spatialDrawing ? routeBatches.map((batch, index) =>
-      new PathLayer({ id: `hover-route-${index}`, data: hoverPathData[index], _pathType: "open", positionFormat: "XY", getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8 }),
-    ) : []),
-    ...(selected && isolateSelected ? [
-      new PathLayer<RouteSegment>({ id: "isolated-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.route, widthUnits: "pixels", widthMinPixels: 0.35, pickable: !spatialDrawing }),
-    ] : selected ? [
-      new PathLayer<RouteSegment>({ id: "selected-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8, pickable: !spatialDrawing }),
-    ] : []),
+    ...(hover && !spatialDrawing ? routeBatches.map((batch, index) => new PathLayer({ id: `hover-route-${index}`, data: hoverPathData[index], _pathType: "open", positionFormat: "XY", getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8 })) : []),
+    ...(selected && isolateSelected ? [new PathLayer<RouteSegment>({ id: "isolated-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.route, widthUnits: "pixels", widthMinPixels: 0.35, pickable: !spatialDrawing })] : selected ? [new PathLayer<RouteSegment>({ id: "selected-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8, pickable: !spatialDrawing })] : []),
     ...(profileHover && !spatialDrawing ? [new ScatterplotLayer<ElevationSample>({ id: "profile-position", data: [profileHover], getPosition: item => item.position, getFillColor: [71, 107, 204, 255], getLineColor: [255, 255, 255, 255], getRadius: 8, radiusUnits: "pixels", stroked: true, lineWidthMinPixels: 3 })] : []),
   ], [hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, spatialDraft, spatialDrawing, tab.spatialFilter, tab.style.color, tab.style.heatEnabled]);
 
@@ -649,11 +613,18 @@ export function App() {
       {sessionIdentity.email ? <button className="avatar-button" aria-label="Open account menu" aria-expanded={accountMenuOpen} onClick={() => { setAccountMenuOpen(open => !open); setMenuOpen(false); setLogoMenuOpen(false); }}>{sessionIdentity.picture ? <img src={sessionIdentity.picture} alt="" referrerPolicy="no-referrer" /> : <span>{(sessionIdentity.name || sessionIdentity.email).slice(0, 1).toUpperCase()}</span>}</button> : <button className="login-button" onClick={() => { setAccountView("login"); setAccountOpen(true); setLogoMenuOpen(false); setMenuOpen(false); }}>Log in</button>}
     </header>
 
+    <nav className="workspace-modes" aria-label="View mode">
+      <button className={workspaceMode === "map" ? "active" : ""} aria-pressed={workspaceMode === "map"} onClick={showMapMode}>Map</button>
+      <button className={workspaceMode === "query" ? "active" : ""} aria-pressed={workspaceMode === "query"} onClick={showQueryMode}>Query</button>
+      <button className={workspaceMode === "stats" ? "active" : ""} aria-pressed={workspaceMode === "stats"} disabled={!selectionReady.current} onClick={() => { if (!statsOpen) void toggleStats(); }}>Stats</button>
+      <button className={workspaceMode === "table" ? "active" : ""} aria-pressed={workspaceMode === "table"} disabled={!selectionReady.current || tableLoading} onClick={() => { if (!tableOpen) void toggleTable(); }}>Table</button>
+    </nav>
+
     {logoMenuOpen && <nav className="logo-menu utility-panel" aria-label="Squiggles navigation"><button onClick={() => { setAboutOpen(true); setLogoMenuOpen(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setToolbarOpen(false); }}>About</button><button disabled={busy} onClick={() => { void openDirectory(); setLogoMenuOpen(false); }}>{datasetName ? "Change dataset" : "Open dataset"}</button><button onClick={() => { setSchemaOpen(true); setLogoMenuOpen(false); }}>AI Skills</button><button onClick={() => { openSystemSettings(); setLogoMenuOpen(false); }}>System settings</button></nav>}
 
     {menuOpen && <nav className="mobile-menu utility-panel" aria-label="Query navigation">
       <section><span className="eyebrow">SAVED QUERIES</span>{tabs.map(item => <button className={item.id === tab.id ? "active" : ""} key={item.id} onClick={() => { choose(item); setMenuOpen(false); }}>{item.title}</button>)}<button onClick={() => { add(); setMenuOpen(false); }}>New query</button></section>
-      <section><button onClick={() => { choose(tab, true); setMenuOpen(false); }}>Query settings</button><button disabled={!selectionReady.current} onClick={() => { void toggleStats(); setMenuOpen(false); }}>Statistics</button><button disabled={!selectionReady.current || tableLoading} onClick={() => { void toggleTable(); setMenuOpen(false); }}>Table</button><button disabled={!selectionReady.current} onClick={() => { setRenderingOpen(true); setStatsOpen(false); setTableOpen(false); setAboutOpen(false); setToolbarOpen(false); setSchemaOpen(false); setMenuOpen(false); setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>Rendering</button></section>
+      <section><button disabled={!selectionReady.current} onClick={() => { setRenderingOpen(true); setStatsOpen(false); setTableOpen(false); setAboutOpen(false); setToolbarOpen(false); setSchemaOpen(false); setMenuOpen(false); setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>Rendering</button></section>
     </nav>}
 
     {accountMenuOpen && <nav className="account-menu utility-panel" aria-label="Account navigation"><button onClick={() => { setAccountView("account"); setAccountOpen(true); setAccountMenuOpen(false); }}>Account</button><button onClick={() => { setAccountView("upload"); setAccountOpen(true); setAccountMenuOpen(false); }}>Upload Archive</button><button onClick={() => { void publishTabs(); setAccountMenuOpen(false); }}>Publish link</button><button onClick={() => { clearSession(); refreshIdentity(); setAccountMenuOpen(false); }}>Log out</button></nav>}
@@ -685,8 +656,6 @@ export function App() {
     <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
       <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />
       <DeckGL controller={spatialDrawing ? false : { dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: 0 }} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
-        // Ignore camera callbacks produced while an asynchronously loaded published
-        // view is being applied. Only a real pointer/wheel gesture may own the camera.
         if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isZooming) return;
         const next = viewState as MapState;
         setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });
@@ -720,9 +689,7 @@ function ElevationProfile({ samples, active, units, onHover }: { samples: Elevat
     while (low < high) { const middle = Math.floor((low + high) / 2); if (samples[middle].distanceM < target) low = middle + 1; else high = middle; }
     onHover(samples[low]);
   }
-  const activeLabel = active
-    ? `${integer.format(elevationValue(active.elevationM, units))} ${elevationUnit(units)} · ${distanceValue(active.distanceM, units).toFixed(1)} ${distanceUnit(units)}`
-    : "Touch or hover to trace route";
+  const activeLabel = active ? `${integer.format(elevationValue(active.elevationM, units))} ${elevationUnit(units)} · ${distanceValue(active.distanceM, units).toFixed(1)} ${distanceUnit(units)}` : "Touch or hover to trace route";
   return <div className="profile"><div><strong>Elevation profile</strong><span>{activeLabel}</span></div><svg aria-label="Elevation profile chart" role="img" viewBox={`0 0 ${width} ${height}`} onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); move(event); }} onPointerMove={move} onPointerCancel={() => onHover(null)} onPointerLeave={event => { if (event.pointerType === "mouse") onHover(null); }}><defs><linearGradient id="profile-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={ELECTRIC_BLUE} stopOpacity=".38"/><stop offset="1" stopColor={ELECTRIC_BLUE} stopOpacity=".03"/></linearGradient></defs><line x1={left} x2={width - right} y1={top} y2={top} className="profile-grid"/><line x1={left} x2={width - right} y1={height - bottom} y2={height - bottom} className="profile-grid"/><polygon points={`${left},${height - bottom} ${points} ${width - right},${height - bottom}`} fill="url(#profile-fill)"/><polyline points={points} fill="none" stroke="#fff" strokeWidth="5" opacity=".9"/><polyline points={points} fill="none" stroke={ELECTRIC_BLUE} strokeWidth="2.5"/>{active && <><line x1={x(active)} x2={x(active)} y1={top} y2={height - bottom} className="profile-cursor"/><circle cx={x(active)} cy={y(active)} r="5" fill={ELECTRIC_BLUE} stroke="#fff" strokeWidth="2"/></>}<text x={left + 2} y={top + 11}>{integer.format(elevationValue(maximumElevation, units))} {elevationUnit(units)}</text><text x={left + 2} y={height - bottom - 5}>{integer.format(elevationValue(minimumElevation, units))} {elevationUnit(units)}</text><text x={width - right} y={height - 5} textAnchor="end">{distanceValue(maximumDistance, units).toFixed(1)} {distanceUnit(units)}</text></svg></div>;
 }
 
