@@ -24,6 +24,15 @@ describe("drawn spatial filters", () => {
     expect(result).toContain("a.xmin <= -105.1");
   });
 
+  it("repeats bbox pruning on the current render geometry relation", () => {
+    const result = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "intersects", polygon, visible: false });
+    expect(result).toContain("FROM activity_geometry a");
+    expect(result.match(/a\.xmax >= -105\.3/g)).toHaveLength(2);
+    expect(result.match(/a\.xmin <= -105\.1/g)).toHaveLength(2);
+    expect(result.match(/a\.ymax >= 39\.9/g)).toHaveLength(2);
+    expect(result.match(/a\.ymin <= 40\.1/g)).toHaveLength(2);
+  });
+
   it("uses one polygon geometry and DuckDB Spatial for exact checks", () => {
     const result = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "intersects", polygon, visible: false });
     expect(result).toContain("ST_GeomFromText('POLYGON((");
@@ -49,8 +58,9 @@ describe("drawn spatial filters", () => {
 
   it("uses ST_Within for the stricter predicate", () => {
     const result = applySpatialFilterSql("SELECT activity_id FROM activities", { predicate: "within", polygon, visible: true });
-    expect(result).toContain("WHERE ST_Within(");
-    expect(result).not.toContain("WHERE ST_Intersects(");
+    expect(result).toContain("WHERE a.xmax >= -105.3");
+    expect(result).toContain("AND ST_Within(");
+    expect(result).not.toContain("AND ST_Intersects(");
   });
 
   it("calculates polygon bounds", () => {
