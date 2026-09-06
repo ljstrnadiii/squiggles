@@ -12,7 +12,9 @@ def canonical_locators(canonical_root: Path) -> dict[str, tuple[str, int]]:
         relative = f"activities/{path.relative_to(canonical_root).as_posix()}"
         parquet = pq.ParquetFile(path)
         for row_group in range(parquet.num_row_groups):
-            ids = parquet.read_row_group(row_group, columns=["activity_id"])["activity_id"].to_pylist()
+            ids = parquet.read_row_group(row_group, columns=["activity_id"])[
+                "activity_id"
+            ].to_pylist()
             for activity_id in ids:
                 key = str(activity_id)
                 if key in locators:
