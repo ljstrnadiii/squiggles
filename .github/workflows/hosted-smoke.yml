@@ -26,7 +26,7 @@ jobs:
         run: python scripts/profile_hosted_browser.py
       - name: Upload browser profile
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hosted-browser-profile
           path: browser-profile-artifacts
@@ -34,7 +34,7 @@ jobs:
           retention-days: 14
       - name: Upload browser failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hosted-browser-failure
           path: browser-smoke-artifacts
