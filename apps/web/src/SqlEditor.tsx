@@ -7,7 +7,7 @@ const ACTIVITY_COLUMNS = [
   "elapsed_seconds", "moving_seconds", "elevation_gain_m", "elevation_loss_m", "min_elevation_m",
   "max_elevation_m", "point_count", "clean_point_count", "dropped_jump_points",
   "dropped_elevation_points", "clean_distance_m", "clean_elevation_gain_m", "clean_max_elevation_m",
-  "xmin", "ymin", "xmax", "ymax", "geometry", "geometry_clean", "track_points",
+  "xmin", "ymin", "xmax", "ymax",
 ];
 
 const templates: Record<string, string> = {
@@ -19,11 +19,7 @@ const templates: Record<string, string> = {
   long: "SELECT activity_id\nFROM activities\nWHERE distance_m >= 50000",
   high: `SELECT activity_id
 FROM activities
-WHERE EXISTS (
-  SELECT 1
-  FROM unnest(track_points) AS points(point)
-  WHERE point.elevation_m >= 3657.6
-)`,
+WHERE max_elevation_m >= 3657.6`,
 };
 
 export function SqlEditor({ value, dark, onChange }: { value: string; dark: boolean; onChange: (value: string) => void }) {
