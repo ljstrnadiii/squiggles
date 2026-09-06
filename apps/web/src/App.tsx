@@ -440,7 +440,14 @@ export function App() {
     const isCurrent = next.id === active;
     setSpatialDrawing(false); setSpatialDraft([]);
     if (isCurrent) setToolbarOpen(open => !open);
-    else { setActive(next.id); setDraft(next.sql); setView(next.mapState); setRenderedView(next.mapState); setToolbarOpen(openQuery); }
+    else {
+      setTabs(previous => {
+        const updated = previous.map(item => item.id === tab.id ? { ...item, mapState: { ...view } } : item);
+        saveTabs(updated);
+        return updated;
+      });
+      setActive(next.id); setDraft(next.sql); setView(next.mapState); setRenderedView(next.mapState); setToolbarOpen(openQuery);
+    }
     replaceUrlSettings(next, next.mapState, units); setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false);
     if (ready.current && !isCurrent) void run(next, next.mapState, next.sql);
   }
