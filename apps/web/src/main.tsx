@@ -5,6 +5,6 @@ import { PanelEnhancements } from "./PanelEnhancements";
 import "./styles.css";
 import "./panelEnhancements.css";
 import "./spatial.css";
-import "./workspaceModes.css";
+import "./mapDisclosure.css";
 
 createRoot(document.getElementById("root")!).render(<StrictMode><><App /><PanelEnhancements /></></StrictMode>);
