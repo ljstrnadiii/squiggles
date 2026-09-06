@@ -5,7 +5,7 @@ from collections.abc import Iterable, Sequence
 
 from shapely.geometry import LineString
 
-RENDER_PYRAMID_VERSION = "4"
+RENDER_PYRAMID_VERSION = "5"
 # One level per ~2 Web Mercator zooms. Around 40 degrees latitude these are
 # approximately one pixel of geometric error at zooms 6, 8, 10, ..., 18.
 # The final level is canonical full geometry.
@@ -51,7 +51,6 @@ def simplify_coordinates_meters(
     projected = LineString([_project(longitude, latitude) for longitude, latitude in points])
     simplified = projected.simplify(tolerance_m, preserve_topology=False)
     result = [_unproject(float(x), float(y)) for x, y in simplified.coords]
-    # Preserve exact endpoints so every render level starts and ends at the same samples.
     result[0] = points[0]
     result[-1] = points[-1]
     return [[longitude, latitude] for longitude, latitude in result]
