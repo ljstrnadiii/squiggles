@@ -5,6 +5,7 @@ import sys
 import urllib.request
 
 BASE_URL = "https://squiggles.io"
+RENDER_PYRAMID_VERSION = "4"
 
 
 def get_json(url: str) -> dict:
@@ -33,16 +34,17 @@ def main() -> None:
 
     root = f"{BASE_URL}/datasets/{dataset_id}"
     manifest = get_json(f"{root}/dataset.json")
-    if manifest.get("render_pyramid_version") != "3":
+    if manifest.get("render_pyramid_version") != RENDER_PYRAMID_VERSION:
         raise RuntimeError(
-            f"expected render pyramid v3, got {manifest.get('render_pyramid_version')!r}"
+            f"expected render pyramid v{RENDER_PYRAMID_VERSION}, "
+            f"got {manifest.get('render_pyramid_version')!r}"
         )
     shards = manifest.get("shards") or []
     levels = manifest.get("render_levels") or []
     if not shards:
         raise RuntimeError("manifest has no canonical shards")
     if not levels or any(not level.get("files") for level in levels):
-        raise RuntimeError("manifest has no v3 render files")
+        raise RuntimeError(f"manifest has no v{RENDER_PYRAMID_VERSION} render files")
 
     print(
         "manifest",
