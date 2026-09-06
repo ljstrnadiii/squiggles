@@ -418,17 +418,6 @@ async function ensureCanonicalGeometry(clean: boolean) {
   );
 }
 
-async function ensureRenderGeometry(lod: Lod, clean: boolean) {
-  const level = clampAvailableLod(lod);
-  const relation = parquetRelation(renderFiles(level), false);
-  if (!relation) throw new Error(`Render LOD ${level} has no files`);
-  const geometry = clean ? "geometry_clean AS geometry" : "geometry";
-  const prefix = clean ? "clean_" : "";
-  await connection!.query(
-    `CREATE OR REPLACE TEMP VIEW activity_geometry AS SELECT activity_id,${geometry},${prefix}xmin AS xmin,${prefix}ymin AS ymin,${prefix}xmax AS xmax,${prefix}ymax AS ymax FROM ${relation}`,
-  );
-}
-
 function selectionJoin(): string {
   return selectionAll ? "" : " SEMI JOIN current_selection s USING(activity_id)";
 }
@@ -768,6 +757,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       });
       return;
     }
+
     if (request.type === "summary") {
       if (request.clean && !supportsClean) {
         throw new Error("Clean view requires dataset schema 1.2.0 or newer; recompile first");
@@ -836,7 +826,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     }
     await configureActivitiesView(request.clean);
     if (request.needsCanonicalGeometry) {
-      await ensureRenderGeometry(request.lod, request.clean && supportsClean);
+      await ensureCanonicalGeometry(request.clean && supportsClean);
     }
     selectionAll = isUniversalSelectionSql(request.sql);
     if (selectionAll) {
