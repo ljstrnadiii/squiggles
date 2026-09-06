@@ -7,7 +7,7 @@ import pandera.pyarrow as pa_model
 import pyarrow as pa
 from pandera.typing.pyarrow import Table
 
-SCHEMA_VERSION = "1.5.0"
+SCHEMA_VERSION = "1.6.0"
 GEOMETRY_COLUMNS = (
     "geometry",
     "geometry_lod0",
@@ -183,7 +183,14 @@ def geo_metadata(bounds: list[float]) -> dict[bytes, bytes]:
 def metadata_arrow_schema() -> pa.Schema:
     canonical = activity_arrow_schema()
     fields = [field for field in canonical if field.name not in {*GEOMETRY_COLUMNS, "track_points"}]
-    return pa.schema([*fields, pa.field("activity_family", pa.string(), False)])
+    return pa.schema(
+        [
+            *fields,
+            pa.field("activity_family", pa.string(), False),
+            pa.field("canonical_path", pa.string(), False),
+            pa.field("canonical_row_group", pa.int32(), False),
+        ]
+    )
 
 
 def render_arrow_schema() -> pa.Schema:

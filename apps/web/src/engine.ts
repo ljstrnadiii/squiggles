@@ -14,6 +14,7 @@ import type {
   ViewportResult,
   ViewportSize,
 } from "./contracts";
+import { assertSupportedDatasetSchema } from "./datasetSchema";
 import { lodForView, lodForViewport, type Lod } from "./lod";
 import { normalizeSelectionSql } from "./querySql";
 import {
@@ -308,9 +309,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
           });
     const manifestMs = performance.now() - manifestStarted;
 
-    if (!["1.5.0"].includes(manifest.schema_version)) {
-      throw new Error(`Unsupported dataset schema ${manifest.schema_version}`);
-    }
+    assertSupportedDatasetSchema(manifest.schema_version);
     if (!manifest.render_levels?.length || manifest.render_levels.some((level) => !level.files)) {
       throw new Error("Dataset render format is stale; recompile it with the current compiler");
     }

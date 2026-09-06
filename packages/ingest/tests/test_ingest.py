@@ -206,8 +206,8 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
     assert progress[-1] == (2, 2)
     assert manifest["activity_count"] == 2
     assert manifest["rejection_count"] == 1
-    assert manifest["schema_version"] == "1.5.0"
-    assert manifest["render_pyramid_version"] == "4"
+    assert manifest["schema_version"] == "1.6.0"
+    assert manifest["render_pyramid_version"] == "5"
     assert all("activity_family=" in shard["path"] for shard in manifest["shards"])
     assert all("start_year=" not in shard["path"] for shard in manifest["shards"])
     assert all("start_month=" not in shard["path"] for shard in manifest["shards"])
@@ -222,6 +222,11 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
     metadata_table = pq.ParquetFile(output / manifest["metadata"][0]["path"]).read()
     assert "geometry" not in metadata_table.column_names
     assert "track_points" not in metadata_table.column_names
+    assert metadata_table["canonical_path"].null_count == 0
+    assert metadata_table["canonical_row_group"].null_count == 0
+    canonical_paths = set(metadata_table["canonical_path"].to_pylist())
+    assert canonical_paths <= {shard["path"] for shard in manifest["shards"]}
+    assert all(value >= 0 for value in metadata_table["canonical_row_group"].to_pylist())
 
     levels = manifest["render_levels"]
     assert [level["lod"] for level in levels] == list(range(8))
@@ -281,16 +286,16 @@ def test_compile_validate_and_refuse_overwrite(tmp_path: Path) -> None:
         progress_callback=lambda completed, total: rebuild_progress.append((completed, total)),
     )
     assert rebuild_progress[-1] == (8, 8)
-    assert rebuilt["schema_version"] == "1.5.0"
+    assert rebuilt["schema_version"] == "1.6.0"
     assert rebuilt["derived_from_schema_version"] == "1.3.0"
     assert validate_dataset(rebuilt_path)["activity_count"] == 2
-    published = versioned_manifest(rebuilt, "schema-1.5.0-test")
-    assert published["build"]["id"] == "schema-1.5.0-test"
+    published = versioned_manifest(rebuilt, "schema-1.6.0-test")
+    assert published["build"]["id"] == "schema-1.6.0-test"
     assert all(
-        entry["path"].startswith("builds/schema-1.5.0-test/") for entry in published["shards"]
+        entry["path"].startswith("builds/schema-1.6.0-test/") for entry in published["shards"]
     )
     assert all(
-        file["path"].startswith("builds/schema-1.5.0-test/render/lod=")
+        file["path"].startswith("builds/schema-1.6.0-test/render/lod=")
         for level in published["render_levels"]
         for file in level["files"]
     )

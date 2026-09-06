@@ -5,10 +5,12 @@ function number(value: number) {
   return Number(value.toFixed(7)).toString();
 }
 
-export function polygonBounds(polygon: readonly [number, number][]): [number, number, number, number] {
+export function polygonBounds(
+  polygon: readonly [number, number][],
+): [number, number, number, number] {
   if (polygon.length < 3) throw new Error("Spatial filter needs at least three vertices");
-  const xs = polygon.map(point => point[0]);
-  const ys = polygon.map(point => point[1]);
+  const xs = polygon.map((point) => point[0]);
+  const ys = polygon.map((point) => point[1]);
   return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
 }
 
@@ -18,7 +20,7 @@ function polygonWkt(polygon: readonly [number, number][]) {
 }
 
 function activityGeometry() {
-  return "ST_MakeLine(list_transform(a.geometry, lambda p : ST_Point(list_extract(p,1),list_extract(p,2))))";
+  return "CAST(CAST(list_transform(a.geometry, lambda p : CAST(struct_pack(x := list_extract(p,1), y := list_extract(p,2)) AS POINT_2D)) AS LINESTRING_2D) AS GEOMETRY)";
 }
 
 export function applySpatialFilterSql(sql: string, filter?: SpatialFilter): string {
@@ -26,9 +28,10 @@ export function applySpatialFilterSql(sql: string, filter?: SpatialFilter): stri
   const [xmin, ymin, xmax, ymax] = polygonBounds(filter.polygon);
   const polygon = `ST_GeomFromText('${polygonWkt(filter.polygon)}')`;
   const route = activityGeometry();
-  const predicate = filter.predicate === "within"
-    ? `ST_Within(${route}, spatial_polygon.geom)`
-    : `ST_Intersects(${route}, spatial_polygon.geom)`;
+  const predicate =
+    filter.predicate === "within"
+      ? `ST_Within(${route}, spatial_polygon.geom)`
+      : `ST_Intersects(${route}, spatial_polygon.geom)`;
   const bbox = `a.xmax >= ${number(xmin)} AND a.xmin <= ${number(xmax)}\n  AND a.ymax >= ${number(ymin)} AND a.ymin <= ${number(ymax)}`;
   return `WITH spatial_user_selection AS (
 ${sql}
