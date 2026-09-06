@@ -41,4 +41,19 @@ describe("DuckDB worker startup", () => {
     );
     expect(openBlock).not.toContain("CREATE OR REPLACE VIEW canonical_source");
   });
+
+  it("binds spatial selection geometry to the requested render LOD instead of canonical", () => {
+    const worker = readFileSync(join(process.cwd(), "src/duckdb.worker.ts"), "utf8");
+    const executeBlock = worker.slice(
+      worker.indexOf('if (request.clean && !supportsClean)', worker.indexOf('if (request.type === "render")')),
+      worker.indexOf("selectionAll = isUniversalSelectionSql(request.sql)"),
+    );
+
+    expect(worker).toContain("async function ensureRenderGeometry(lod: Lod, clean: boolean)");
+    expect(worker).toContain("const relation = parquetRelation(renderFiles(level), false);");
+    expect(executeBlock).toContain(
+      "await ensureRenderGeometry(request.lod, request.clean && supportsClean);",
+    );
+    expect(executeBlock).not.toContain("await ensureCanonicalGeometry(");
+  });
 });
