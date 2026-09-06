@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-
 from activity_map_ingest.canonical_locator import canonical_locators
 
 
