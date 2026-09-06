@@ -9,6 +9,7 @@ import type {
   SystemResolution,
 } from "./contracts";
 import { RESOLUTION_VERTEX_BUDGETS, type Lod } from "./lod";
+import { materializeMetadataSql, residentMetadataRelation } from "./metadataCacheSql";
 import { isUniversalSelectionSql } from "./selection";
 
 type Bounds = [number, number, number, number];
@@ -83,6 +84,7 @@ let selectionAll = false;
 let registeredFiles: RegisteredFile[] = [];
 let registeredCanonicalFiles: RegisteredFile[] = [];
 let canonicalViewReady = false;
+let metadataMaterialized = false;
 let registeredRenderLevels = new Map<Lod, RegisteredFile[]>();
 let initializationTimings = { selectBundleMs: 0, instantiateMs: 0, connectMs: 0 };
 
@@ -372,35 +374,39 @@ function parquetRelation(files: RegisteredFile[], hivePartitioning: boolean): st
 }
 
 function viewportRelation(files: RegisteredFile[], clean: boolean): string | null {
-  const source = parquetRelation(files, false);
-  if (!source) return null;
-  if (!clean) return source;
-  return `(SELECT * REPLACE (
-    coalesce(clean_distance_m,distance_m) AS distance_m,
-    coalesce(clean_elevation_gain_m,elevation_gain_m) AS elevation_gain_m,
-    coalesce(clean_elevation_loss_m,elevation_loss_m) AS elevation_loss_m,
-    coalesce(clean_min_elevation_m,min_elevation_m) AS min_elevation_m,
-    coalesce(clean_max_elevation_m,max_elevation_m) AS max_elevation_m,
-    clean_point_count AS point_count,
-    clean_xmin AS xmin, clean_ymin AS ymin, clean_xmax AS xmax, clean_ymax AS ymax
-  ) FROM ${source})`;
+  if (files.length === 0) return null;
+  return residentMetadataRelation(clean);
+}
+
+async function ensureMetadataMaterialized() {
+  if (metadataMaterialized) return 0;
+  const started = performance.now();
+  await connection!.query(materializeMetadataSql());
+  await connection!.query(
+    `CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM ${residentMetadataRelation(false)}`,
+  );
+  metadataMaterialized = true;
+  const elapsed = performance.now() - started;
+  console.info("[squiggles:perf]", "metadata-materialized", {
+    totalMs: Math.round(elapsed),
+    rows: registeredFiles.reduce((total, file) => total + file.rowCount, 0),
+    bytes: registeredFiles.reduce((total, file) => total + file.byteSize, 0),
+  });
+  return elapsed;
 }
 
 async function configureActivitiesView(clean: boolean) {
+  await ensureMetadataMaterialized();
   const enabled = clean && supportsClean;
   if (enabled === cleanViewEnabled) return;
   if (!enabled) {
-    await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");
+    await connection!.query(
+      `CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM ${residentMetadataRelation(false)}`,
+    );
   } else {
-    await connection!.query(`CREATE OR REPLACE TEMP VIEW activities AS SELECT * REPLACE (
-      coalesce(clean_distance_m,distance_m) AS distance_m,
-      coalesce(clean_elevation_gain_m,elevation_gain_m) AS elevation_gain_m,
-      coalesce(clean_elevation_loss_m,elevation_loss_m) AS elevation_loss_m,
-      coalesce(clean_min_elevation_m,min_elevation_m) AS min_elevation_m,
-      coalesce(clean_max_elevation_m,max_elevation_m) AS max_elevation_m,
-      clean_point_count AS point_count,
-      clean_xmin AS xmin, clean_ymin AS ymin, clean_xmax AS xmax, clean_ymax AS ymax
-    ) FROM activity_source`);
+    await connection!.query(
+      `CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM ${residentMetadataRelation(true)}`,
+    );
   }
   cleanViewEnabled = enabled;
 }
@@ -607,8 +613,7 @@ async function render(
 
 async function summarize(bounds: Bounds | undefined, clean: boolean) {
   const { files } = viewportScan(bounds);
-  const relation = viewportRelation(files, clean);
-  if (!relation) {
+  if (!files.length) {
     return {
       activityCount: 0,
       distanceM: 0,
@@ -627,6 +632,8 @@ async function summarize(bounds: Bounds | undefined, clean: boolean) {
       lastActivity: null,
     };
   }
+  await ensureMetadataMaterialized();
+  const relation = residentMetadataRelation(clean);
   const field = (cleanName: string, rawName: string) =>
     clean ? `coalesce(a.${cleanName},a.${rawName})` : `a.${rawName}`;
   const dropped = supportsClean
@@ -678,6 +685,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       );
       selectionAll = false;
       canonicalViewReady = false;
+      metadataMaterialized = false;
       const renderFilesToRegister = request.renderLevels.flatMap((level) => level.files);
       const registrationStarted = performance.now();
       for (const file of [...request.files, ...request.metadataFiles, ...renderFilesToRegister]) {
@@ -779,11 +787,12 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       const field = (cleanName: string, rawName: string) =>
         clean ? `coalesce(a.${cleanName},a.${rawName})` : `a.${rawName}`;
       const { files } = viewportScan(request.bounds);
-      const relation = viewportRelation(files, clean);
-      if (!relation) {
+      if (!files.length) {
         self.postMessage({ id: request.id, ok: true, value: [] });
         return;
       }
+      await ensureMetadataMaterialized();
+      const relation = residentMetadataRelation(clean);
       const table = await connection!.query(
         `SELECT a.activity_id,a.name,a.sport_type,CAST(a.start_time AS VARCHAR) start_time,${field("clean_distance_m", "distance_m")} distance_m,${field("clean_elevation_gain_m", "elevation_gain_m")} elevation_gain_m,${field("clean_max_elevation_m", "max_elevation_m")} max_elevation_m,a.source_url,a.${prefix}xmin xmin,a.${prefix}ymin ymin,a.${prefix}xmax xmax,a.${prefix}ymax ymax FROM ${relation} a${selectionJoin()} WHERE ${viewportContainmentPredicate(request.bounds, clean)}`,
       );
