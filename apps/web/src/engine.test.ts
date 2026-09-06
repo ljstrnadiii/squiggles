@@ -66,7 +66,7 @@ function workerRecorder(posted: Record<string, unknown>[]) {
 
 function v3Manifest() {
   return {
-    schema_version: "1.5.0",
+    schema_version: "1.6.0",
     activity_count: 1,
     rejection_count: 0,
     bbox: [-105, 40, -104, 41],
