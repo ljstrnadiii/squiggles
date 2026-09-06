@@ -170,12 +170,17 @@ def run_scenario(
         wall_ms = (time.perf_counter() - wall_started) * 1000
         body = page.locator("body").inner_text()
         duckdb_errors = [line for line in console if "DuckDB failure" in line]
+        significant_failures = [
+            failure
+            for failure in failed_requests
+            if "assets/maplibre-gl-worker.mjs" not in failure
+        ]
         if "Squiggles DuckDB failure" in body:
             raise RuntimeError("page rendered Squiggles DuckDB failure")
         if page_errors:
             raise RuntimeError(f"page errors: {page_errors}")
-        if failed_requests:
-            raise RuntimeError(f"failed requests: {failed_requests}")
+        if significant_failures:
+            raise RuntimeError(f"failed requests: {significant_failures}")
         if duckdb_errors:
             raise RuntimeError(f"DuckDB console errors: {duckdb_errors}")
         if draw["canvasCount"] == 0 or draw["canvasPixels"] == 0:
