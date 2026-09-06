@@ -46,10 +46,18 @@ function heatCell(longitude: number, latitude: number, view: MapState, width: nu
   return { x: Math.floor(point.x / cellPixels), y: Math.floor(point.y / cellPixels), total: 0 };
 }
 
+function visibleVertexCount(ownCells: Map<string, number>) {
+  let count = 0;
+  for (const value of ownCells.values()) count += value;
+  return count;
+}
+
 /**
  * Score complete routes from only the settled visible viewport. Geometry may
  * come from an enclosing viewport cache entry; off-screen cached vertices do
- * not affect heat scores or the color-scale maximum.
+ * not affect heat scores or the color-scale maximum. Scores are normalized by
+ * each route's visible vertex count so long routes do not become artificially
+ * hotter simply because they contribute more points.
  */
 export function buildHeatData(activities: RouteActivity[], view: MapState, width: number, height: number, cellPixels = 8): HeatResult {
   const started = performance.now();
@@ -78,7 +86,7 @@ export function buildHeatData(activities: RouteActivity[], view: MapState, width
   let maxScore = 0;
   activities.forEach((activity, activityIndex) => {
     const ownCells = activityCells[activityIndex];
-    let score = 0;
+    let totalOverlap = 0;
     for (const [cellKey, ownVertexCount] of ownCells) {
       const cell = globalCells.get(cellKey)!;
       let otherVertexCount = 0;
@@ -88,8 +96,10 @@ export function buildHeatData(activities: RouteActivity[], view: MapState, width
           otherVertexCount += (globalCells.get(neighborKey)?.total ?? 0) - (ownCells.get(neighborKey) ?? 0);
         }
       }
-      score += ownVertexCount * Math.max(0, otherVertexCount);
+      totalOverlap += ownVertexCount * Math.max(0, otherVertexCount);
     }
+    const routeVertices = visibleVertexCount(ownCells);
+    const score = routeVertices > 0 ? totalOverlap / routeVertices : 0;
     scores.set(activity.activityId, score);
     maxScore = Math.max(maxScore, score);
   });
@@ -132,7 +142,7 @@ export function buildBinaryHeatData(batches: BinaryRouteBatch[], view: MapState,
   const scores = new Map<string, number>();
   let maxScore = 0;
   for (const [activityId, ownCells] of activityCells) {
-    let score = 0;
+    let totalOverlap = 0;
     for (const [cellKey, ownVertexCount] of ownCells) {
       const cell = globalCells.get(cellKey)!;
       let otherVertexCount = 0;
@@ -142,8 +152,10 @@ export function buildBinaryHeatData(batches: BinaryRouteBatch[], view: MapState,
           otherVertexCount += (globalCells.get(neighborKey)?.total ?? 0) - (ownCells.get(neighborKey) ?? 0);
         }
       }
-      score += ownVertexCount * Math.max(0, otherVertexCount);
+      totalOverlap += ownVertexCount * Math.max(0, otherVertexCount);
     }
+    const routeVertices = visibleVertexCount(ownCells);
+    const score = routeVertices > 0 ? totalOverlap / routeVertices : 0;
     scores.set(activityId, score);
     maxScore = Math.max(maxScore, score);
   }
@@ -224,7 +236,7 @@ export async function buildBinaryHeatDataCooperative(
   const scores = new Map<string, number>();
   let maxScore = 0;
   for (const [activityId, ownCells] of activityCells) {
-    let score = 0;
+    let totalOverlap = 0;
     for (const [cellKey, ownVertexCount] of ownCells) {
       const cell = globalCells.get(cellKey)!;
       let otherVertexCount = 0;
@@ -234,10 +246,12 @@ export async function buildBinaryHeatDataCooperative(
           otherVertexCount += (globalCells.get(neighborKey)?.total ?? 0) - (ownCells.get(neighborKey) ?? 0);
         }
       }
-      score += ownVertexCount * Math.max(0, otherVertexCount);
+      totalOverlap += ownVertexCount * Math.max(0, otherVertexCount);
       operations += 1;
       if ((operations & 4095) === 0 && !await cooperate()) return null;
     }
+    const routeVertices = visibleVertexCount(ownCells);
+    const score = routeVertices > 0 ? totalOverlap / routeVertices : 0;
     scores.set(activityId, score);
     maxScore = Math.max(maxScore, score);
   }
