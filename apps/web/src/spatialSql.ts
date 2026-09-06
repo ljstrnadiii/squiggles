@@ -29,6 +29,7 @@ export function applySpatialFilterSql(sql: string, filter?: SpatialFilter): stri
   const predicate = filter.predicate === "within"
     ? `ST_Within(${route}, spatial_polygon.geom)`
     : `ST_Intersects(${route}, spatial_polygon.geom)`;
+  const bbox = `a.xmax >= ${number(xmin)} AND a.xmin <= ${number(xmax)}\n  AND a.ymax >= ${number(ymin)} AND a.ymin <= ${number(ymax)}`;
   return `WITH spatial_user_selection AS (
 ${sql}
 ),
@@ -39,12 +40,12 @@ spatial_candidate_ids AS MATERIALIZED (
   SELECT a.activity_id
   FROM activities a
   SEMI JOIN spatial_user_selection s USING(activity_id)
-  WHERE a.xmax >= ${number(xmin)} AND a.xmin <= ${number(xmax)}
-    AND a.ymax >= ${number(ymin)} AND a.ymin <= ${number(ymax)}
+  WHERE ${bbox}
 )
 SELECT a.activity_id
 FROM activity_geometry a
 SEMI JOIN spatial_candidate_ids c USING(activity_id)
 CROSS JOIN spatial_polygon
-WHERE ${predicate}`;
+WHERE ${bbox}
+  AND ${predicate}`;
 }
