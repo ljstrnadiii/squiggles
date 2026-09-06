@@ -1,0 +1,3 @@
+.app:has(.status.working) .map > div:not(.maplibre-base) {
+  visibility: hidden;
+}
