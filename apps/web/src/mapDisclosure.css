@@ -1,0 +1,91 @@
+.mobile-query-title::after {
+  content: "›";
+  flex: none;
+  margin-left: 3px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+.mobile-query-title[aria-expanded="true"]::after {
+  transform: rotate(90deg);
+}
+
+.mobile-menu section:first-child .eyebrow {
+  font-size: 0;
+}
+
+.mobile-menu section:first-child .eyebrow::after {
+  content: "MAPS";
+  font-size: 9px;
+}
+
+.mobile-menu section:first-child > button:not(:last-child) {
+  position: relative;
+  padding-left: 24px;
+}
+
+.mobile-menu section:first-child > button:not(:last-child)::before {
+  content: "›";
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  transform: translateY(-52%);
+}
+
+.mobile-menu section:first-child > button.active:not(:last-child)::before {
+  content: "⌄";
+  color: var(--accent);
+}
+
+.mobile-menu section:first-child > button.active:not(:last-child) {
+  color: var(--text);
+  font-weight: 750;
+}
+
+.mobile-menu section:first-child > button:last-child {
+  margin-top: 5px;
+  border-top: 1px solid var(--line-soft);
+  border-radius: 0;
+  padding-top: 9px;
+  color: var(--muted);
+}
+
+.mobile-menu section:nth-child(2)::before {
+  content: "CURRENT MAP";
+  padding: 5px 7px;
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+
+.mobile-menu section:nth-child(2) > button:nth-child(-n + 3) {
+  padding-left: 18px;
+}
+
+.mobile-menu section:nth-child(2) > button:nth-child(4) {
+  margin-top: 6px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line-soft);
+  border-radius: 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+@media (max-width: 600px) {
+  .mobile-menu {
+    grid-template-columns: minmax(0, 1fr);
+    max-height: calc(100dvh - 62px);
+    overflow-y: auto;
+  }
+
+  .mobile-menu section + section {
+    border-left: 0;
+    border-top: 1px solid var(--line-soft);
+  }
+}
