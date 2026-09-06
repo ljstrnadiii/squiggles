@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import * as duckdb from "@duckdb/duckdb-wasm";
 
-import { canonicalSourceSql } from "./canonicalSource";
+import { canonicalSourceSql, targetedCanonicalSourceSql } from "./canonicalSource";
 import type {
   BinaryRouteBatch,
   ResolutionRenderPlans,
@@ -373,11 +373,6 @@ function parquetRelation(files: RegisteredFile[], hivePartitioning: boolean): st
   return `read_parquet([${paths}],hive_partitioning=${hivePartitioning})`;
 }
 
-function viewportRelation(files: RegisteredFile[], clean: boolean): string | null {
-  if (files.length === 0) return null;
-  return residentMetadataRelation(clean);
-}
-
 async function ensureMetadataMaterialized() {
   if (metadataMaterialized) return 0;
   const started = performance.now();
@@ -706,7 +701,9 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       const activitiesStarted = performance.now();
       await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");
       const activitiesViewMs = performance.now() - activitiesStarted;
-      supportsClean = ["1.2.0", "1.3.0", "1.4.0", "1.5.0"].includes(request.schemaVersion);
+      supportsClean = ["1.2.0", "1.3.0", "1.4.0", "1.5.0", "1.6.0"].includes(
+        request.schemaVersion,
+      );
       cleanViewEnabled = false;
       respond(request.id, {
         initializeMs,
@@ -750,14 +747,38 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       if (request.clean && !supportsClean) {
         throw new Error("Clean view requires dataset schema 1.2.0 or newer; recompile first");
       }
+      const started = performance.now();
       const clean = request.clean && supportsClean;
-      await ensureCanonicalGeometry(clean);
+      const activityId = request.activityId.replaceAll("'", "''");
+      await ensureMetadataMaterialized();
+      const locatorStarted = performance.now();
+      const locatorTable = await connection!.query(
+        `SELECT canonical_path,canonical_row_group FROM ${residentMetadataRelation(false)} WHERE activity_id='${activityId}' LIMIT 1`,
+      );
+      const locatorMs = performance.now() - locatorStarted;
+      const locator = locatorTable.toArray()[0] as unknown as Record<string, unknown> | undefined;
+      if (!locator) {
+        self.postMessage({ id: request.id, ok: true, value: null });
+        return;
+      }
+      const canonicalPath = String(locator.canonical_path);
+      const canonicalRowGroup = Number(scalar(locator.canonical_row_group));
+      const source = targetedCanonicalSourceSql(registeredCanonicalFiles, canonicalPath);
       const geometry = clean ? "geometry_clean" : "geometry";
       const points = clean ? "list_filter(track_points,p->p.clean)" : "track_points";
+      const canonicalStarted = performance.now();
       const table = await connection!.query(
-        `SELECT activity_id,name,sport_type,CAST(start_time AS VARCHAR) start_time,${clean ? "coalesce(clean_distance_m,distance_m)" : "distance_m"} distance_m,${clean ? "coalesce(clean_elevation_gain_m,elevation_gain_m)" : "elevation_gain_m"} elevation_gain_m,${clean ? "coalesce(clean_max_elevation_m,max_elevation_m)" : "max_elevation_m"} max_elevation_m,source_url,${geometry} geometry,list_transform(${points},p->[p.longitude,p.latitude,p.elevation_m]) elevation_profile FROM canonical_source WHERE activity_id='${request.activityId.replaceAll("'", "''")}' LIMIT 1`,
+        `SELECT activity_id,name,sport_type,CAST(start_time AS VARCHAR) start_time,${clean ? "coalesce(clean_distance_m,distance_m)" : "distance_m"} distance_m,${clean ? "coalesce(clean_elevation_gain_m,elevation_gain_m)" : "elevation_gain_m"} elevation_gain_m,${clean ? "coalesce(clean_max_elevation_m,max_elevation_m)" : "max_elevation_m"} max_elevation_m,source_url,${geometry} geometry,list_transform(${points},p->[p.longitude,p.latitude,p.elevation_m]) elevation_profile FROM ${source} WHERE activity_id='${activityId}' LIMIT 1`,
       );
+      const canonicalReadMs = performance.now() - canonicalStarted;
       const row = table.toArray()[0] as unknown as Record<string, unknown> | undefined;
+      console.info("[squiggles:perf]", "activity-detail", {
+        totalMs: Math.round(performance.now() - started),
+        locatorMs: Math.round(locatorMs),
+        canonicalReadMs: Math.round(canonicalReadMs),
+        canonicalPath,
+        canonicalRowGroup,
+      });
       self.postMessage({
         id: request.id,
         ok: true,
