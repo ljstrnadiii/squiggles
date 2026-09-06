@@ -163,7 +163,13 @@ section.toolbar[aria-label="Query and map settings"] header > button[aria-label^
   line-height: 1.5;
 }
 
-.diagnostics-copy {
+.diagnostics-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.diagnostics-actions button {
   width: 100%;
   padding: 9px 12px;
   border: 1px solid var(--line);
@@ -230,5 +236,9 @@ section.toolbar[aria-label="Query and map settings"] header > button[aria-label^
     border-bottom: 0;
     border-left: 0;
     border-radius: 10px 10px 0 0;
+  }
+
+  .diagnostics-actions {
+    grid-template-columns: 1fr;
   }
 }
