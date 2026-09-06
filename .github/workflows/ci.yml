@@ -48,6 +48,8 @@ jobs:
           packages/ingest/tests/test_ingest.py::test_compile_validate_and_refuse_overwrite
       - name: Run remaining Python tests
         run: uv run --frozen pytest -k 'not test_compile_validate_and_refuse_overwrite'
+      - name: Benchmark resident metadata cache
+        run: uv run --frozen python scripts/benchmark_metadata_cache.py
 
   web:
     runs-on: ubuntu-latest
@@ -112,8 +114,6 @@ jobs:
           push: true
           tags: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/squiggles-ingest:${{ github.sha }}
 
-      # Stage only the new Batch job definition first. The currently deployed web app
-      # remains untouched while datasets are rebuilt to the new render format.
       - name: Stage ingest compiler
         uses: pulumi/actions@v7
         id: pulumi-ingest
@@ -139,8 +139,6 @@ jobs:
           RENDER_PYRAMID_VERSION: "4"
         run: python scripts/rebuild_render_pyramids.py
 
-      # Only after every stale dataset has successfully activated the new render
-      # version do we reconcile the full stack and publish the v4-only website.
       - name: Deploy application
         uses: pulumi/actions@v7
         id: pulumi
