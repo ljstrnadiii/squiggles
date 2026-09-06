@@ -5,6 +5,7 @@ type PanelTargets = {
   table: HTMLElement | null;
   toolbar: HTMLElement | null;
   logoMenu: HTMLElement | null;
+  queryMenu: HTMLElement | null;
 };
 
 type NetworkInformation = {
@@ -22,6 +23,9 @@ function targets(): PanelTargets {
     ),
     logoMenu: document.querySelector<HTMLElement>(
       'nav.logo-menu[aria-label="Squiggles navigation"]',
+    ),
+    queryMenu: document.querySelector<HTMLElement>(
+      'nav.mobile-menu[aria-label="Query navigation"]',
     ),
   };
 }
@@ -72,11 +76,31 @@ function diagnosticSnapshot() {
   };
 }
 
+function openRenderingDiagnostics() {
+  const title = document.querySelector<HTMLButtonElement>("button.mobile-query-title");
+  if (!title) return;
+  if (title.getAttribute("aria-expanded") !== "true") title.click();
+  window.setTimeout(() => {
+    const queryMenu = document.querySelector<HTMLElement>(
+      'nav.mobile-menu[aria-label="Query navigation"]',
+    );
+    const rendering = [...(queryMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
+      (button) => button.textContent?.trim() === "Rendering",
+    );
+    rendering?.click();
+  }, 0);
+}
+
 function Diagnostics({ onClose }: { onClose: () => void }) {
   const snapshot = diagnosticSnapshot();
 
   const copy = async () => {
     await navigator.clipboard?.writeText(JSON.stringify(snapshot, null, 2));
+  };
+
+  const openRendering = () => {
+    onClose();
+    openRenderingDiagnostics();
   };
 
   return (
@@ -159,13 +183,14 @@ function Diagnostics({ onClose }: { onClose: () => void }) {
         </tbody>
       </table>
       <p>
-        Rendering-specific LOD, row-group, vertex-budget, GeoArrow, and cache metrics remain
-        available in the query Rendering panel while they are migrated into this combined
-        Diagnostics surface.
+        Open the rendering view for LOD, row-group, vertex-budget, GeoArrow, and cache metrics.
       </p>
-      <button className="diagnostics-copy" onClick={() => void copy()}>
-        Copy diagnostics
-      </button>
+      <div className="diagnostics-actions">
+        <button onClick={openRendering}>Rendering diagnostics</button>
+        <button className="diagnostics-copy" onClick={() => void copy()}>
+          Copy diagnostics
+        </button>
+      </div>
     </section>
   );
 }
@@ -184,7 +209,8 @@ export function PanelEnhancements() {
         const unchanged =
           previous.table === next.table &&
           previous.toolbar === next.toolbar &&
-          previous.logoMenu === next.logoMenu;
+          previous.logoMenu === next.logoMenu &&
+          previous.queryMenu === next.queryMenu;
         return unchanged ? previous : next;
       });
 
@@ -210,6 +236,25 @@ export function PanelEnhancements() {
     logo.addEventListener("click", openAfterFiveTaps);
     return () => logo.removeEventListener("click", openAfterFiveTaps);
   }, [panels.logoMenu]);
+
+  useEffect(() => {
+    if (!panels.queryMenu) return;
+    const firstSection = panels.queryMenu.querySelector("section:first-child");
+    const mapButtons = [
+      ...(firstSection?.querySelectorAll<HTMLButtonElement>("button:not(:last-child)") ?? []),
+    ].filter((button) => !button.classList.contains("active"));
+
+    const reopenAfterSwitch = () => {
+      window.setTimeout(() => {
+        const title = document.querySelector<HTMLButtonElement>("button.mobile-query-title");
+        if (title?.getAttribute("aria-expanded") !== "true") title?.click();
+      }, 0);
+    };
+
+    mapButtons.forEach((button) => button.addEventListener("click", reopenAfterSwitch));
+    return () =>
+      mapButtons.forEach((button) => button.removeEventListener("click", reopenAfterSwitch));
+  }, [panels.queryMenu]);
 
   useEffect(() => {
     if (!panels.table) setTableExpanded(false);
