@@ -21,8 +21,7 @@ NATIVE_CONVERSION = (
     "AS LINESTRING_2D) AS GEOMETRY)"
 )
 POLYGON = (
-    "ST_GeomFromText('POLYGON((-105.3 39.8,-104.7 39.8,-104.7 40.2,"
-    "-105.3 40.2,-105.3 39.8))')"
+    "ST_GeomFromText('POLYGON((-105.3 39.8,-104.7 39.8,-104.7 40.2,-105.3 40.2,-105.3 39.8))')"
 )
 
 
@@ -100,9 +99,7 @@ def main() -> None:
             "predicateMs": round(native_predicate_ms, 1),
             "totalMs": round(native_total_ms, 1),
         },
-        "conversionSpeedupX": round(
-            current_conversion_ms / max(native_conversion_ms, 0.001), 2
-        ),
+        "conversionSpeedupX": round(current_conversion_ms / max(native_conversion_ms, 0.001), 2),
         "totalSpeedupX": round(current_total_ms / max(native_total_ms, 0.001), 2),
     }
     print("SPATIAL_CONVERSION_BENCHMARK", json.dumps(report, sort_keys=True))
