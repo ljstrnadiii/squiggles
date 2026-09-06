@@ -17,7 +17,7 @@ CURRENT_CONVERSION = (
 )
 NATIVE_CONVERSION = (
     "CAST(CAST(list_transform(geometry, lambda p : "
-    "struct_pack(x := list_extract(p, 1), y := list_extract(p, 2))) "
+    "CAST(struct_pack(x := list_extract(p, 1), y := list_extract(p, 2)) AS POINT_2D)) "
     "AS LINESTRING_2D) AS GEOMETRY)"
 )
 POLYGON = (
