@@ -9,6 +9,8 @@ import type {
   QueryResult,
   QueryTab,
   RouteActivity,
+  RouteMetadata,
+  SummaryStats,
   SystemResolution,
   ViewportBounds,
   ViewportResult,
@@ -127,6 +129,9 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   private cacheEvictions = 0;
   private resolution: SystemResolution = "medium";
   private consumedPublishedPlans = new Set<string>();
+  private summaryCache = new Map<string, Promise<SummaryStats>>();
+  private tableCache = new Map<string, Promise<ActivityListItem[]>>();
+  private metadataCache = new Map<string, Promise<RouteMetadata | null>>();
 
   private get cacheBudget() {
     return cacheBudget(this.resolution);
@@ -170,6 +175,18 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
         throw new Error(formatDuckDBDiagnostic(body, error));
       }
     }
+  }
+
+  private async waitForStatsPanel(): Promise<void> {
+    if (typeof document === "undefined" || document.querySelector(".rich-stats")) return;
+    await new Promise<void>((resolve) => {
+      const observer = new MutationObserver(() => {
+        if (!document.querySelector(".rich-stats")) return;
+        observer.disconnect();
+        resolve();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
   }
 
   private requestedLod(
@@ -285,6 +302,9 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     this.cache.clear();
     this.cacheBytes = 0;
     this.cacheEvictions = 0;
+    this.summaryCache.clear();
+    this.tableCache.clear();
+    this.metadataCache.clear();
     this.consumedPublishedPlans.clear();
     clearRenderPlanHints();
 
@@ -439,6 +459,8 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
 
     this.clean = nextClean;
     this.selectionKey = `${this.datasetRevision}|${this.clean ? 1 : 0}|${sql}`;
+    this.summaryCache.clear();
+    this.tableCache.clear();
     activateRenderTab(tab.id);
     recordRenderPlan(tab.id, { plans: result.resolutionPlans, bounds });
     perf("selection-execute", {
@@ -508,16 +530,58 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     );
   }
 
-  getSummary(bounds?: ViewportBounds): Promise<import("./contracts").SummaryStats> {
-    return this.networkRequest({ type: "summary", bounds, clean: this.clean });
+  getSummary(bounds?: ViewportBounds): Promise<SummaryStats> {
+    if (bounds) return this.networkRequest({ type: "summary", bounds, clean: this.clean });
+    const key = `${this.selectionKey}|summary`;
+    const cached = this.summaryCache.get(key);
+    if (cached) return cached;
+    const request = (async () => {
+      await this.waitForStatsPanel();
+      if (key !== `${this.selectionKey}|summary`) return this.getSummary();
+      const started = performance.now();
+      const result = await this.networkRequest<SummaryStats>({ type: "summary", clean: this.clean });
+      perf("summary-fetch", { totalMs: Math.round(performance.now() - started), cached: false });
+      return result;
+    })();
+    this.summaryCache.set(key, request);
+    return request;
   }
 
   getActivities(bounds?: ViewportBounds): Promise<ActivityListItem[]> {
-    return this.networkRequest({ type: "table", bounds, clean: this.clean });
+    if (bounds) return this.networkRequest({ type: "table", bounds, clean: this.clean });
+    const key = `${this.selectionKey}|table`;
+    const cached = this.tableCache.get(key);
+    if (cached) return cached;
+    const started = performance.now();
+    const request = this.networkRequest<ActivityListItem[]>({ type: "table", clean: this.clean }).then(
+      (result) => {
+        perf("table-fetch", { totalMs: Math.round(performance.now() - started), cached: false });
+        return result;
+      },
+    );
+    this.tableCache.set(key, request);
+    return request;
   }
 
-  getRouteMetadata(activityId: string): Promise<import("./contracts").RouteMetadata | null> {
-    return this.networkRequest({ type: "metadata", activityId, clean: this.clean });
+  getRouteMetadata(activityId: string): Promise<RouteMetadata | null> {
+    const key = `${this.datasetRevision}|${this.clean ? 1 : 0}|${activityId}`;
+    const cached = this.metadataCache.get(key);
+    if (cached) return cached;
+    const started = performance.now();
+    const request = this.networkRequest<RouteMetadata | null>({
+      type: "metadata",
+      activityId,
+      clean: this.clean,
+    }).then((result) => {
+      perf("metadata-fetch", {
+        totalMs: Math.round(performance.now() - started),
+        activityId,
+        cached: false,
+      });
+      return result;
+    });
+    this.metadataCache.set(key, request);
+    return request;
   }
 
   getActivity(activityId: string): Promise<RouteActivity | null> {
