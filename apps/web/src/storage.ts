@@ -20,11 +20,7 @@ export const highRunsTab: QueryTab = {
   sql: `SELECT activity_id
 FROM activities
 WHERE lower(sport_type) LIKE '%run%'
-  AND EXISTS (
-    SELECT 1
-    FROM unnest(track_points) AS points(point)
-    WHERE point.elevation_m >= 3657.6
-  )`,
+  AND max_elevation_m >= 3657.6`,
   style: { ...defaultStyle },
 };
 
@@ -41,7 +37,10 @@ export function loadTabs(): QueryTab[] {
       delete currentStyle.lineWidth;
       const merged = { ...defaultStyle, ...currentStyle, ...(legacyScale === undefined ? {} : { lineWidthScale: legacyScale }) };
       const style = { ...merged, lineWidthScale: Math.max(0.25, Math.min(4, merged.lineWidthScale)) };
-      return { ...tab, style: { ...style, color: normalizeRouteColor(style.color) } };
+      const normalized = { ...tab, style: { ...style, color: normalizeRouteColor(style.color) } };
+      return normalized.id === highRunsTab.id
+        ? { ...normalized, title: highRunsTab.title, sql: highRunsTab.sql }
+        : normalized;
     }) : [defaultTab];
     return tabs.some(tab => tab.id === highRunsTab.id) ? tabs : [...tabs, highRunsTab];
   } catch {
