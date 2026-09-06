@@ -61,6 +61,7 @@ type Request =
       clean: boolean;
       startingVertexEstimate?: number;
       needsCanonicalGeometry: boolean;
+      canonicalBounds?: Bounds;
     }
   | {
       id: number;
@@ -405,16 +406,21 @@ async function configureActivitiesView(clean: boolean) {
   cleanViewEnabled = enabled;
 }
 
-async function ensureCanonicalGeometry(clean: boolean) {
-  if (!canonicalViewReady) {
-    await connection!.query(
-      `CREATE OR REPLACE VIEW canonical_source AS ${canonicalSourceSql(registeredCanonicalFiles)}`,
-    );
-    canonicalViewReady = true;
-  }
-  const geometry = clean ? "geometry_clean AS geometry" : "geometry";
+async function ensureCanonicalSource() {
+  if (canonicalViewReady) return;
   await connection!.query(
-    `CREATE OR REPLACE TEMP VIEW activity_geometry AS SELECT activity_id,${geometry},xmin,ymin,xmax,ymax,clean_xmin,clean_ymin,clean_xmax,clean_ymax FROM canonical_source`,
+    `CREATE OR REPLACE VIEW canonical_source AS ${canonicalSourceSql(registeredCanonicalFiles)}`,
+  );
+  canonicalViewReady = true;
+}
+
+async function ensureCanonicalGeometry(clean: boolean, bounds?: Bounds) {
+  const scan = viewportScan(bounds, registeredCanonicalFiles);
+  const files = scan.files.length ? scan.files : registeredCanonicalFiles.slice(0, 1);
+  const source = canonicalSourceSql(files);
+  const geometry = clean ? "a.geometry_clean AS geometry" : "a.geometry";
+  await connection!.query(
+    `CREATE OR REPLACE TEMP VIEW activity_geometry AS SELECT a.activity_id,${geometry},a.xmin,a.ymin,a.xmax,a.ymax,a.clean_xmin,a.clean_ymin,a.clean_xmax,a.clean_ymax FROM (${source}) a WHERE ${viewportPredicate(bounds, clean)}`,
   );
 }
 
@@ -743,7 +749,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
         throw new Error("Clean view requires dataset schema 1.2.0 or newer; recompile first");
       }
       const clean = request.clean && supportsClean;
-      await ensureCanonicalGeometry(clean);
+      await ensureCanonicalSource();
       const geometry = clean ? "geometry_clean" : "geometry";
       const points = clean ? "list_filter(track_points,p->p.clean)" : "track_points";
       const table = await connection!.query(
@@ -826,7 +832,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     }
     await configureActivitiesView(request.clean);
     if (request.needsCanonicalGeometry) {
-      await ensureCanonicalGeometry(request.clean && supportsClean);
+      await ensureCanonicalGeometry(request.clean && supportsClean, request.canonicalBounds);
     }
     selectionAll = isUniversalSelectionSql(request.sql);
     if (selectionAll) {
