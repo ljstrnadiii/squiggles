@@ -21,4 +21,24 @@ describe("DuckDB worker startup", () => {
     }
     expect(engine).toContain('perf("worker-open-phases"');
   });
+
+  it("creates activity_source from a SELECT over read_parquet and keeps canonical lazy", () => {
+    const worker = readFileSync(join(process.cwd(), "src/duckdb.worker.ts"), "utf8");
+
+    expect(worker).toContain(
+      "const metadataRelation = parquetRelation(request.metadataFiles, false);",
+    );
+    expect(worker).toContain(
+      "CREATE OR REPLACE VIEW activity_source AS SELECT * FROM ${metadataRelation}",
+    );
+    expect(worker).not.toContain(
+      "CREATE OR REPLACE VIEW activity_source AS ${parquetRelation(request.metadataFiles, false)}",
+    );
+
+    const openBlock = worker.slice(
+      worker.indexOf('if (request.type === "open")'),
+      worker.indexOf('if (request.type === "metadata")'),
+    );
+    expect(openBlock).not.toContain("CREATE OR REPLACE VIEW canonical_source");
+  });
 });

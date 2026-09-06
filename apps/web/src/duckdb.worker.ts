@@ -677,6 +677,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
         request.renderLevels.map((level) => [level.lod, level.files]),
       );
       selectionAll = false;
+      canonicalViewReady = false;
       const renderFilesToRegister = request.renderLevels.flatMap((level) => level.files);
       const registrationStarted = performance.now();
       for (const file of [...request.files, ...request.metadataFiles, ...renderFilesToRegister]) {
@@ -687,13 +688,14 @@ self.onmessage = async (event: MessageEvent<Request>) => {
         }
       }
       const registerFilesMs = performance.now() - registrationStarted;
+      const metadataRelation = parquetRelation(request.metadataFiles, false);
+      if (!metadataRelation) throw new Error("Dataset has no metadata files");
       const activitySourceStarted = performance.now();
       await connection!.query(
-        `CREATE OR REPLACE VIEW activity_source AS ${parquetRelation(request.metadataFiles, false)}`,
+        `CREATE OR REPLACE VIEW activity_source AS SELECT * FROM ${metadataRelation}`,
       );
       const activitySourceViewMs = performance.now() - activitySourceStarted;
-      await connection!.query(`CREATE OR REPLACE VIEW canonical_source AS ${canonicalSourceSql(request.files)}`);
-        const activitiesStarted = performance.now();
+      const activitiesStarted = performance.now();
       await connection!.query("CREATE OR REPLACE TEMP VIEW activities AS SELECT * FROM activity_source");
       const activitiesViewMs = performance.now() - activitiesStarted;
       supportsClean = ["1.2.0", "1.3.0", "1.4.0", "1.5.0"].includes(request.schemaVersion);
@@ -844,7 +846,12 @@ self.onmessage = async (event: MessageEvent<Request>) => {
 
     const selectedCount = selectionAll
       ? registeredFiles.reduce((total, file) => total + file.rowCount, 0)
-      : Number(scalar((await connection!.query("SELECT count(*) total FROM current_selection")).toArray()[0]?.total ?? 0));
+      : Number(
+          scalar(
+            (await connection!.query("SELECT count(*) total FROM current_selection")).toArray()[0]
+              ?.total ?? 0,
+          ),
+        );
     const clean = request.clean && supportsClean;
     const viewport = await render(
       request.lod,
