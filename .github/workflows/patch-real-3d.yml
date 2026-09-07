@@ -20,7 +20,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @squiggles/web add @deck.gl/geo-layers@9.3.10 @deck.gl/extensions@9.3.10
+      - name: Pin deck terrain graph
+        run: pnpm --filter @squiggles/web add @deck.gl/geo-layers@9.3.10 @deck.gl/extensions@9.3.10 @deck.gl/mesh-layers@9.3.10 @deck.gl/aggregation-layers@9.3.10 @luma.gl/core@9.3.6 @luma.gl/engine@9.3.6 @luma.gl/shadertools@9.3.6 @luma.gl/webgl@9.3.6
       - name: Patch app
         shell: python
         run: |
