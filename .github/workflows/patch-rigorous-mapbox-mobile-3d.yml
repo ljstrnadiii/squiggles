@@ -24,16 +24,19 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          p=Path('apps/web/src/App.tsx')
-          s=p.read_text()
+          p=Path('apps/web/src/App.tsx'); s=p.read_text()
+          s=s.replace('import { _TerrainExtension as TerrainExtension } from "@deck.gl/extensions";\n','')
+          s=s.replace('import { TerrainLayer } from "@deck.gl/geo-layers";\n','')
           old='''  async function openSource(source: DatasetSource, requestedView?: MapState, initialTab = tab) {\n    try {\n      setBusy(true); setError(\"\"); setStatus(\"Reading dataset manifest…\");\n      const dataset = await engine.openDataset(source, (completed, total) => setStatus(`Opening dataset · ${completed.toLocaleString()} / ${total.toLocaleString()} files`));\n      ready.current = true; setDatasetName(dataset.name);\n      const initialView = requestedView ?? fitBounds(dataset.manifest.bbox);\n      setView(initialView);'''
           new='''  async function openSource(source: DatasetSource, requestedView?: MapState, initialTab = tab) {\n    const openingView = viewRef.current;\n    try {\n      setBusy(true); setError(\"\"); setStatus(\"Reading dataset manifest…\");\n      const dataset = await engine.openDataset(source, (completed, total) => setStatus(`Opening dataset · ${completed.toLocaleString()} / ${total.toLocaleString()} files`));\n      ready.current = true; setDatasetName(dataset.name);\n      const latestView = viewRef.current;\n      const cameraMovedWhileOpening = Math.abs(latestView.longitude - openingView.longitude) > 1e-7 || Math.abs(latestView.latitude - openingView.latitude) > 1e-7 || Math.abs(latestView.zoom - openingView.zoom) > 1e-7 || Math.abs(latestView.bearing - openingView.bearing) > 1e-7 || Math.abs(latestView.pitch - openingView.pitch) > 1e-7;\n      const fitted = fitBounds(dataset.manifest.bbox);\n      const initialView = requestedView ?? (cameraMovedWhileOpening ? latestView : initialTab.style.viewMode === \"3d\" ? { ...fitted, bearing: openingView.bearing, pitch: openingView.pitch > 0 ? openingView.pitch : 50 } : fitted);\n      setView(initialView);'''
           if s.count(old)!=1: raise SystemExit(f'openSource matches {s.count(old)}')
           s=s.replace(old,new)
-          old2='new TerrainLayer({ id: "terrain-source", elevationData: terrainTiles, elevationDecoder: terrainDecoder, minZoom: 0, maxZoom: 14, strategy: "no-overlap", operation: "terrain" })'
-          new2='new TerrainLayer({ id: "terrain-source", elevationData: terrainTiles, elevationDecoder: terrainDecoder, minZoom: 0, maxZoom: 14, strategy: "no-overlap", operation: "terrain+draw", color: [0, 0, 0, 0], material: false })'
-          if s.count(old2)!=1: raise SystemExit(f'terrain source matches {s.count(old2)}')
-          s=s.replace(old2,new2)
+          start='''  const terrainExtension = useMemo(() => new TerrainExtension(), []);\n  const terrainSource = useMemo(() => tab.style.viewMode === "3d" ? new TerrainLayer({ id: "terrain-source", elevationData: terrainTiles, elevationDecoder: terrainDecoder, minZoom: 0, maxZoom: 14, strategy: "no-overlap", operation: "terrain" }) : null, [tab.style.viewMode]);\n  const terrainExtensions = useMemo(() => terrainSource ? [terrainExtension] : [], [terrainExtension, terrainSource]);\n  const layers = useMemo(() => [\n    ...(terrainSource ? [terrainSource] : []),'''
+          repl='''  const routeParameters = useMemo(() => tab.style.viewMode === "3d" ? { depthTest: false } : undefined, [tab.style.viewMode]);\n  const layers = useMemo(() => ['''
+          if s.count(start)!=1: raise SystemExit(f'terrain block matches {s.count(start)}')
+          s=s.replace(start,repl)
+          s=s.replace('extensions: terrainExtensions, widthUnits:', 'parameters: routeParameters, widthUnits:')
+          s=s.replace('tab.style.heatEnabled, terrainExtensions, terrainSource]);','tab.style.heatEnabled, routeParameters]);')
           p.write_text(s)
           PY
       - name: Verify static checks
@@ -71,18 +74,16 @@ jobs:
                   url=f'{base}?lng=-105.2705&lat=40.0150&zoom=11&bearing=0&pitch={pitch}&basemap=carto-light&view={mode}&heat=0&color=%23ff0000'
                   page.goto(url,wait_until='domcontentloaded',timeout=30000)
                   page.wait_for_function("() => (document.querySelector('.status')?.getAttribute('aria-label')||'').includes('routes selected')",timeout=70000)
-                  page.wait_for_timeout(2500); current=page.url
+                  page.wait_for_timeout(2000); current=page.url
                   assert 'zoom=11.' in current, current
                   if mode=='3d': assert 'pitch=50' in current, current
                   cdp=ctx.new_cdp_session(page)
-                  shot=base64.b64decode(cdp.send('Page.captureScreenshot',{'format':'png','fromSurface':True})['data'])
-                  counts[mode]=red_pixels(shot)
+                  shot=base64.b64decode(cdp.send('Page.captureScreenshot',{'format':'png','fromSurface':True})['data']); counts[mode]=red_pixels(shot)
                   rect=page.locator('.maplibre-base').bounding_box(); assert rect
                   x=rect['x']+rect['width']/2; y=rect['y']+rect['height']/2; before=page.url
                   pts=[{'x':x-40,'y':y+20,'radiusX':5,'radiusY':5,'force':1,'id':1},{'x':x+40,'y':y+20,'radiusX':5,'radiusY':5,'force':1,'id':2}]
                   cdp.send('Input.dispatchTouchEvent',{'type':'touchStart','touchPoints':pts})
-                  for dy in (15,30,45,60):
-                      cdp.send('Input.dispatchTouchEvent',{'type':'touchMove','touchPoints':[dict(pts[0],y=y+20-dy),dict(pts[1],y=y+20-dy)]}); time.sleep(.05)
+                  for dy in (15,30,45,60): cdp.send('Input.dispatchTouchEvent',{'type':'touchMove','touchPoints':[dict(pts[0],y=y+20-dy),dict(pts[1],y=y+20-dy)]}); time.sleep(.05)
                   cdp.send('Input.dispatchTouchEvent',{'type':'touchEnd','touchPoints':[]}); page.wait_for_timeout(750)
                   after=page.url
                   if mode=='3d': assert after != before and 'pitch=50.0' not in after, (before,after)
@@ -91,12 +92,23 @@ jobs:
               assert counts['2d'] > 5, counts
               assert counts['3d'] > 5, counts
               assert counts['3d'] > counts['2d'] * 0.1, counts
-              browser.close()
+              # startup-race regression: interact before dataset finishes; final camera must not snap back to fitBounds
+              ctx=browser.new_context(viewport={'width':430,'height':932},device_scale_factor=2,is_mobile=True,has_touch=True)
+              page=ctx.new_page(); page.goto(base,wait_until='domcontentloaded',timeout=30000)
+              page.wait_for_selector('.maplibre-base',timeout=10000); rect=page.locator('.maplibre-base').bounding_box(); assert rect
+              page.mouse.move(rect['x']+rect['width']/2,rect['y']+rect['height']/2); page.mouse.wheel(0,-900); page.wait_for_timeout(300)
+              moved=page.url
+              page.wait_for_function("() => (document.querySelector('.status')?.getAttribute('aria-label')||'').includes('routes selected')",timeout=70000)
+              page.wait_for_timeout(500); final=page.url
+              print('STARTUP_CAMERA',moved,final)
+              assert moved != base and final != base
+              assert final.split('zoom=')[1].split('&')[0] != '1.00', final
+              ctx.close(); browser.close()
           PY
       - name: Commit verified implementation
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add apps/web/src/App.tsx
-          git commit -m "fix: preserve startup camera and render 3D routes"
+          git commit -m "fix: stabilize startup camera and 3D route overlay"
           git push origin HEAD:fix/rigorous-mapbox-mobile-3d
