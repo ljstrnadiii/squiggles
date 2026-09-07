@@ -15,12 +15,14 @@ describe("saved map disclosure navigation", () => {
     expect(app).not.toContain('aria-label="View mode"');
   });
 
-  it("labels the saved-query navigation as maps with disclosure carets", () => {
+  it("keeps disclosure on the current map control without carets beside listed maps", () => {
     expect(main).toContain('import "./mapDisclosure.css"');
     expect(css).toContain('content: "MAPS"');
     expect(css).toContain('content: "CURRENT MAP"');
+    expect(css).toContain('.mobile-query-title::after');
     expect(css).toContain('content: "›"');
-    expect(css).toContain('content: "⌄"');
+    expect(css).not.toContain('button:not(:last-child)::before');
+    expect(css).not.toContain('content: "⌄"');
   });
 
   it("stacks the map list and its tools on narrow screens", () => {

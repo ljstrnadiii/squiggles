@@ -174,14 +174,14 @@ describe("App", () => {
   });
 
   it("restores map settings from the URL and keeps changes shareable", async () => {
-    window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=9.25&basemap=imagery&heat=0&palette=ice&temperature=2.4&thickness=1.6&clean=1&color=%23abcdef&units=imperial");
+    window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=9.25&basemap=carto-dark&heat=0&palette=ice&temperature=2.4&thickness=1.6&clean=1&color=%23abcdef&units=imperial");
     render(<App />);
     openLogoMenu();
     fireEvent.click(screen.getByRole("button", { name: "System settings" }));
     expect(screen.getByRole("button", { name: "Use imperial units" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Close system settings" }));
     openQuerySettings();
-    expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("imagery");
+    expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("carto-dark");
     expect(screen.getByRole("checkbox", { name: "Clean" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Heat" })).not.toBeChecked();
     expect(screen.getByRole("slider", { name: "Heat temperature" })).toHaveValue("2.4");
@@ -192,7 +192,7 @@ describe("App", () => {
   });
 
   it("creates a query tab at the current camera instead of the default location", async () => {
-    window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=11.25&basemap=imagery");
+    window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=11.25&basemap=carto-dark");
     render(<App />);
     openQueryMenu();
     fireEvent.click(screen.getByRole("button", { name: "New query" }));
@@ -200,6 +200,6 @@ describe("App", () => {
     await waitFor(() => expect(new URL(window.location.href).searchParams.get("lng")).toBe("-106.25000"));
     expect(new URL(window.location.href).searchParams.get("zoom")).toBe("11.25");
     const stored = JSON.parse(localStorage.getItem("activity-map.tabs.v1") ?? "[]") as { title: string; mapState: { longitude: number; latitude: number; zoom: number }; style: { basemap: string } }[];
-    expect(stored.find(item => item.title === "New Query")).toMatchObject({ mapState: { longitude: -106.25, latitude: 39.5, zoom: 11.25 }, style: { basemap: "imagery" } });
+    expect(stored.find(item => item.title === "New Query")).toMatchObject({ mapState: { longitude: -106.25, latitude: 39.5, zoom: 11.25 }, style: { basemap: "carto-dark" } });
   });
 });
