@@ -27,7 +27,10 @@ def runtime_dataset_id() -> str:
 
 def wait_for_routes(page: Page, timeout: int = 70_000) -> str:
     page.wait_for_function(
-        """() => (document.querySelector('.status')?.getAttribute('aria-label') || '').includes('routes selected')""",
+        (
+            "() => (document.querySelector('.status')?.getAttribute('aria-label') || '')"
+            ".includes('routes selected')"
+        ),
         timeout=timeout,
     )
     return page.locator(".status").get_attribute("aria-label") or ""
@@ -54,9 +57,15 @@ def exercise_pitched_routes(browser: Browser, dataset_id: str) -> None:
         )
         page = context.new_page()
         page_errors: list[str] = []
-        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.on(
+            "pageerror",
+            lambda error, errors=page_errors: errors.append(str(error)),
+        )
         page.goto(
-            f"{base}?lng=-105.2705&lat=40.0150&zoom=11&bearing=0&pitch={pitch}&basemap=carto-light&view={mode}&heat=0&color=%23ff0000",
+            (
+                f"{base}?lng=-105.2705&lat=40.0150&zoom=11&bearing=0&pitch={pitch}"
+                f"&basemap=carto-light&view={mode}&heat=0&color=%23ff0000"
+            ),
             wait_until="domcontentloaded",
             timeout=30_000,
         )
@@ -81,8 +90,22 @@ def exercise_pitched_routes(browser: Browser, dataset_id: str) -> None:
             y = rect["y"] + rect["height"] / 2
             before = page.url
             points = [
-                {"x": x - 40, "y": y + 20, "radiusX": 5, "radiusY": 5, "force": 1, "id": 1},
-                {"x": x + 40, "y": y + 20, "radiusX": 5, "radiusY": 5, "force": 1, "id": 2},
+                {
+                    "x": x - 40,
+                    "y": y + 20,
+                    "radiusX": 5,
+                    "radiusY": 5,
+                    "force": 1,
+                    "id": 1,
+                },
+                {
+                    "x": x + 40,
+                    "y": y + 20,
+                    "radiusX": 5,
+                    "radiusY": 5,
+                    "force": 1,
+                    "id": 2,
+                },
             ]
             cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": points})
             for delta in (15, 30, 45, 60):
