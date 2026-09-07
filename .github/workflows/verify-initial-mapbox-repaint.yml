@@ -7,7 +7,6 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - uses: actions/checkout@v7
         with:
@@ -23,13 +22,25 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm typecheck
-      - name: Require production Mapbox token
+      - name: Read deployed public Mapbox token
+        run: |
+          python - <<'PY'
+          import os, re, urllib.request
+          index = urllib.request.urlopen('https://squiggles.io/', timeout=30).read().decode()
+          scripts = re.findall(r'<script[^>]+src="([^"]+\.js)"', index)
+          if not scripts:
+              raise SystemExit('No deployed JS bundle found')
+          bundle_url = urllib.request.urljoin('https://squiggles.io/', scripts[-1])
+          bundle = urllib.request.urlopen(bundle_url, timeout=30).read().decode()
+          match = re.search(r'pk\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+', bundle)
+          if not match:
+              raise SystemExit('No deployed Mapbox public token found')
+          with open(os.environ['GITHUB_ENV'], 'a') as handle:
+              handle.write(f'VITE_MAPBOX_ACCESS_TOKEN={match.group(0)}\n')
+          print('Loaded deployed public Mapbox token')
+          PY
+      - name: Build with production Mapbox path
         env:
-          VITE_MAPBOX_ACCESS_TOKEN: ${{ vars.VITE_MAPBOX_ACCESS_TOKEN }}
-        run: test -n "$VITE_MAPBOX_ACCESS_TOKEN"
-      - name: Build with production Mapbox token
-        env:
-          VITE_MAPBOX_ACCESS_TOKEN: ${{ vars.VITE_MAPBOX_ACCESS_TOKEN }}
           VITE_DATASET_BASE_URL: https://squiggles.io/datasets
         run: pnpm --filter @squiggles/web build
       - name: Assert first pitched frame paints routes
