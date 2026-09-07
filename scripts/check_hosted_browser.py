@@ -89,8 +89,7 @@ def exercise_pitched_routes(browser: Browser, dataset_id: str) -> None:
         if mode == "3d":
             if counts[mode] <= 5:
                 raise RuntimeError(
-                    "initial pitched routes were not visibly rendered before interaction: "
-                    f"{counts}"
+                    f"initial pitched routes were not visibly rendered before interaction: {counts}"
                 )
             rect = page.locator(".maplibre-base").bounding_box()
             if not rect:
