@@ -1,5 +1,6 @@
 export type MapState = { longitude: number; latitude: number; zoom: number; bearing: number; pitch: number };
 export type Basemap = "mapbox-standard" | "mapbox-satellite" | "mapbox-outdoors" | "carto-light" | "carto-dark" | "blank";
+export type BasemapOptions = { labels: boolean; roads: boolean; trails: boolean; boundaries: boolean; objects3d: boolean };
 export type MapViewMode = "2d" | "3d";
 export type HeatPalette = "sunset" | "viridis" | "fire" | "ice";
 export type ThemeMode = "system" | "light" | "dark";
@@ -9,6 +10,7 @@ export type MapStyle = {
   color: string;
   lineWidthScale: number;
   basemap: Basemap;
+  basemapOptions: BasemapOptions;
   viewMode: MapViewMode;
   heatEnabled: boolean;
   heatPalette: HeatPalette;

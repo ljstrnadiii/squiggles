@@ -4,7 +4,7 @@ import DeckGL from "@deck.gl/react";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { StyleSpecification } from "maplibre-gl";
 
-import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, MapViewMode, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";
+import type { ActivityListItem, Basemap, BasemapOptions, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, MapViewMode, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";
 import { binaryPathData, pickedActivity, routeColors } from "./binaryRoutes";
 import { BrowserDuckDBEngine } from "./engine";
 import { buildBinaryHeatDataCooperative, colorForWeight, type CooperativeHeatResult } from "./heat";
@@ -24,6 +24,10 @@ type MapboxCamera = { center: [number, number]; zoom: number; bearing?: number; 
 type MapboxMapInstance = {
   jumpTo(options: MapboxCamera): void;
   setStyle(style: StyleSpecification | string): void;
+  setConfigProperty(importId: string, name: string, value: boolean): void;
+  getStyle(): { layers?: Array<{ id: string; type: string; layout?: { visibility?: string } }> };
+  setLayoutProperty(layerId: string, name: "visibility", value: "visible" | "none"): void;
+  on(event: "style.load", listener: () => void): void;
   remove(): void;
 };
 type MapboxMapConstructor = new (options: {
@@ -82,6 +86,11 @@ function tabsWithUrlSettings(tabs: QueryTab[]) {
   const temperature = finiteParameter(parameters, "temperature", 0.5, 3);
   const thickness = finiteParameter(parameters, "thickness", 0.25, 4);
   const color = parameters.get("color");
+  const labels = parameters.get("labels");
+  const roads = parameters.get("roads");
+  const trails = parameters.get("trails");
+  const boundaries = parameters.get("boundaries");
+  const objects3d = parameters.get("objects3d");
   const next: QueryTab = {
     ...target,
     mapState: longitude === undefined || latitude === undefined || zoom === undefined ? target.mapState : { longitude, latitude, zoom, bearing: bearing ?? target.mapState.bearing ?? 0, pitch: pitch ?? target.mapState.pitch ?? 0 },
@@ -95,6 +104,14 @@ function tabsWithUrlSettings(tabs: QueryTab[]) {
       ...(parameters.get("heat") === "1" ? { heatEnabled: true } : parameters.get("heat") === "0" ? { heatEnabled: false } : {}),
       ...(parameters.get("clean") === "1" ? { cleanEnabled: true } : parameters.get("clean") === "0" ? { cleanEnabled: false } : {}),
       ...(color && /^#[0-9a-f]{6}$/i.test(color) ? { color: normalizeRouteColor(color) } : {}),
+      basemapOptions: {
+        ...target.style.basemapOptions,
+        ...(labels === "1" ? { labels: true } : labels === "0" ? { labels: false } : {}),
+        ...(roads === "1" ? { roads: true } : roads === "0" ? { roads: false } : {}),
+        ...(trails === "1" ? { trails: true } : trails === "0" ? { trails: false } : {}),
+        ...(boundaries === "1" ? { boundaries: true } : boundaries === "0" ? { boundaries: false } : {}),
+        ...(objects3d === "1" ? { objects3d: true } : objects3d === "0" ? { objects3d: false } : {}),
+      },
     },
   };
   return tabs.map(item => item.id === next.id ? next : item);
@@ -125,6 +142,11 @@ function replaceUrlSettings(tab: QueryTab, view: MapState, units: UnitSystem) {
   url.searchParams.set("bearing", view.bearing.toFixed(1));
   url.searchParams.set("pitch", view.pitch.toFixed(1));
   url.searchParams.set("basemap", tab.style.basemap);
+  url.searchParams.set("labels", tab.style.basemapOptions.labels ? "1" : "0");
+  url.searchParams.set("roads", tab.style.basemapOptions.roads ? "1" : "0");
+  url.searchParams.set("trails", tab.style.basemapOptions.trails ? "1" : "0");
+  url.searchParams.set("boundaries", tab.style.basemapOptions.boundaries ? "1" : "0");
+  url.searchParams.set("objects3d", tab.style.basemapOptions.objects3d ? "1" : "0");
   url.searchParams.set("view", tab.style.viewMode);
   url.searchParams.set("heat", tab.style.heatEnabled ? "1" : "0");
   url.searchParams.set("palette", tab.style.heatPalette);
@@ -170,29 +192,50 @@ function fitBounds([xmin, ymin, xmax, ymax]: [number, number, number, number], m
 
 type TableSort = "name" | "sport" | "date" | "distance" | "gain" | "maximum";
 
-function rasterStyle(basemap: "carto-light" | "carto-dark"): StyleSpecification {
+function rasterStyle(basemap: "carto-light" | "carto-dark", labels = false): StyleSpecification {
   const source = rasterStyles[basemap];
-  return { version: 8, sources: { basemap: { type: "raster", tiles: source.tiles, tileSize: 256, maxzoom: source.maxzoom, attribution: source.attribution } }, layers: [{ id: "basemap", type: "raster", source: "basemap" }] };
+  const tiles = labels ? source.tiles : source.tiles.map(tile => tile.replace("_all/", "_nolabels/"));
+  return { version: 8, sources: { basemap: { type: "raster", tiles, tileSize: 256, maxzoom: source.maxzoom, attribution: source.attribution } }, layers: [{ id: "basemap", type: "raster", source: "basemap" }] };
 }
 
-function mapStyle(basemap: Basemap, theme: "light" | "dark"): StyleSpecification | string {
+function mapStyle(basemap: Basemap, theme: "light" | "dark", options: BasemapOptions): StyleSpecification | string {
   if (basemap === "blank") return { ...blankStyle, layers: [{ id: "background", type: "background", paint: { "background-color": theme === "dark" ? "#07100e" : "#edf2ef" } }] };
-  if (basemap === "carto-light" || basemap === "carto-dark") return rasterStyle(basemap);
-  return mapboxAccessToken ? mapboxStyles[basemap] : rasterStyle(theme === "dark" ? "carto-dark" : "carto-light");
+  if (basemap === "carto-light" || basemap === "carto-dark") return rasterStyle(basemap, options.labels);
+  return mapboxAccessToken ? mapboxStyles[basemap] : rasterStyle(theme === "dark" ? "carto-dark" : "carto-light", options.labels);
 }
 
-function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; theme: "light" | "dark" }) {
+function applyBasemapOptions(map: MapboxMapInstance, basemap: Basemap, options: BasemapOptions) {
+  if (basemap === "mapbox-standard" || basemap === "mapbox-satellite") {
+    for (const property of ["showPlaceLabels", "showPointOfInterestLabels", "showRoadLabels", "showTransitLabels"]) map.setConfigProperty("basemap", property, options.labels);
+    map.setConfigProperty("basemap", "showAdminBoundaries", options.boundaries);
+    map.setConfigProperty("basemap", "showPedestrianRoads", options.trails);
+    if (basemap === "mapbox-satellite") map.setConfigProperty("basemap", "showRoadsAndTransit", options.roads);
+    if (basemap === "mapbox-standard") map.setConfigProperty("basemap", "show3dObjects", options.objects3d);
+    return;
+  }
+  if (basemap === "mapbox-outdoors" && !options.labels) {
+    for (const layer of map.getStyle().layers ?? []) if (layer.type === "symbol") map.setLayoutProperty(layer.id, "visibility", "none");
+  }
+}
+
+function BaseMap({ view, basemap, options, theme }: { view: MapState; basemap: Basemap; options: BasemapOptions; theme: "light" | "dark" }) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapboxMapInstance | null>(null);
   const initialView = useRef(view);
   const initialBasemap = useRef(basemap);
   const initialTheme = useRef(theme);
-  const appliedStyle = useRef(`${basemap}:${theme}`);
+  const initialOptions = useRef(options);
+  const appliedStyle = useRef(`${basemap}:${theme}:${JSON.stringify(options)}`);
+  const currentBasemap = useRef(basemap);
+  const currentOptions = useRef(options);
+  currentBasemap.current = basemap;
+  currentOptions.current = options;
   useEffect(() => {
     if (!container.current || !window.mapboxgl) return;
     const initial = initialView.current;
     const MapboxMap = window.mapboxgl.Map;
-    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: false, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
+    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current, initialOptions.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: false, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
+    map.current.on("style.load", () => { if (map.current) applyBasemapOptions(map.current, currentBasemap.current, currentOptions.current); });
     const closeAttribution = () => container.current?.querySelector(".mapboxgl-ctrl-attrib")?.classList.remove("mapboxgl-compact-show");
     window.setTimeout(closeAttribution, 0);
     window.setTimeout(closeAttribution, 750);
@@ -202,11 +245,11 @@ function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; t
     map.current?.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: view.bearing ?? 0, pitch: view.pitch ?? 0 });
   }, [view]);
   useEffect(() => {
-    const key = `${basemap}:${theme}`;
+    const key = `${basemap}:${theme}:${JSON.stringify(options)}`;
     if (appliedStyle.current === key) return;
     appliedStyle.current = key;
-    map.current?.setStyle(mapStyle(basemap, theme));
-  }, [basemap, theme]);
+    map.current?.setStyle(mapStyle(basemap, theme, options));
+  }, [basemap, options, theme]);
   return <div className="maplibre-base" ref={container} />;
 }
 
@@ -734,6 +777,11 @@ export function App() {
       <section className="toolbar-section"><h3>Map</h3><div className="settings-grid">
         <label data-tooltip="Use Mapbox Standard for general context, Satellite for imagery, Outdoors for contours and trails, or CARTO for maximum route contrast.">Basemap<select className="basemap-select" aria-label="Basemap" value={tab.style.basemap} onChange={event => changeStyle({ basemap: event.target.value as Basemap })}><option value="mapbox-standard">Mapbox Standard</option><option value="mapbox-satellite">Mapbox Satellite</option><option value="mapbox-outdoors">Mapbox Outdoors / Topo</option><option value="carto-light">CARTO Light</option><option value="carto-dark">CARTO Dark</option><option value="blank">Blank / offline</option></select></label>
         <label data-tooltip="Tilt the Web Mercator camera without enabling terrain, keeping routes and the basemap on the same projection.">View<div className="view-mode-control" role="group" aria-label="Map view"><button type="button" aria-label="Use 2D map view" aria-pressed={tab.style.viewMode === "2d"} onClick={() => changeViewMode("2d")}>2D</button><button type="button" aria-label="Use 3D map view" aria-pressed={tab.style.viewMode === "3d"} onClick={() => changeViewMode("3d")}>3D</button></div></label>
+        {tab.style.basemap !== "blank" && <label className="check" data-tooltip="Show basemap text and icons. Off by default so routes remain the primary visual layer."><input aria-label="Basemap labels" type="checkbox" checked={tab.style.basemapOptions.labels} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, labels: event.target.checked } })} /> Labels</label>}
+        {tab.style.basemap === "mapbox-satellite" && <label className="check" data-tooltip="Show roads and transit networks over satellite imagery."><input aria-label="Basemap roads" type="checkbox" checked={tab.style.basemapOptions.roads} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, roads: event.target.checked } })} /> Roads</label>}
+        {(tab.style.basemap === "mapbox-standard" || tab.style.basemap === "mapbox-satellite") && <label className="check" data-tooltip="Show pedestrian roads, paths, and trails."><input aria-label="Basemap trails" type="checkbox" checked={tab.style.basemapOptions.trails} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, trails: event.target.checked } })} /> Trails</label>}
+        {(tab.style.basemap === "mapbox-standard" || tab.style.basemap === "mapbox-satellite") && <label className="check" data-tooltip="Show administrative boundaries."><input aria-label="Basemap boundaries" type="checkbox" checked={tab.style.basemapOptions.boundaries} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, boundaries: event.target.checked } })} /> Boundaries</label>}
+        {tab.style.basemap === "mapbox-standard" && <label className="check" data-tooltip="Show Mapbox Standard 3D objects such as buildings, landmarks, and trees."><input aria-label="Basemap 3D objects" type="checkbox" checked={tab.style.basemapOptions.objects3d} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, objects3d: event.target.checked } })} /> 3D objects</label>}
         <label data-tooltip="Choose the base route and hover-highlight color.">Route color<input aria-label="Route color" type="color" value={tab.style.color} onChange={event => changeStyle({ color: event.target.value })} /></label>
         <label className="temperature" data-tooltip="Multiply a route width equal to 0.15% of the map's shorter dimension. The width stays visually consistent at every zoom."><span>Thickness</span><input aria-label="Route thickness" type="range" min="0.25" max="4" step="0.05" value={tab.style.lineWidthScale} onChange={event => changeStyle({ lineWidthScale: Number(event.target.value) })} /><output>{tab.style.lineWidthScale.toFixed(2)}×</output></label>
       </div><p className="network-note">{mapboxAccessToken ? "Wi‑Fi recommended for the best experience with remote archives and basemaps." : "Mapbox token not configured; Mapbox choices use a CARTO fallback locally."}</p></section>
@@ -750,8 +798,8 @@ export function App() {
     {error && <div className="error global-error" role="alert"><strong>Something needs attention</strong><span>{error}</span><button className="error-close" aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
 
     <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
-      <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />
-      <DeckGL controller={spatialDrawing ? false : tab.style.viewMode === "3d" ? { dragRotate: true, touchRotate: true } : { dragRotate: false, touchRotate: false }} layers={layers} viewState={view} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isRotating || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
+      <BaseMap view={view} basemap={tab.style.basemap} options={tab.style.basemapOptions} theme={effectiveTheme} />
+      <DeckGL controller={spatialDrawing ? false : tab.style.viewMode === "3d" ? { dragRotate: true, touchRotate: true, touchZoom: true } : { dragRotate: false, touchRotate: false }} touchAction="none" eventRecognizerOptions={{ multipan: { pointers: 2, threshold: 1 } }} layers={layers} viewState={view} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isRotating || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
         if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isRotating && !interactionState.isZooming) return;
         const next = viewState as MapState;
         setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom, bearing: next.bearing ?? 0, pitch: next.pitch ?? 0 });
