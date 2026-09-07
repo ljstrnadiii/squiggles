@@ -1,0 +1,89 @@
+name: Debug Mapbox mobile browser
+on:
+  push:
+    branches: [debug/mapbox-mobile-browser]
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python -m pip install playwright==1.55.0
+      - name: Exercise deployed map
+        run: |
+          python - <<'PY'
+          import json, time
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+
+          OUT=Path('mapbox-debug'); OUT.mkdir(exist_ok=True)
+          scenarios=[
+            ('2d','https://squiggles.io/?lng=-105.2705&lat=40.0150&zoom=11&bearing=0&pitch=0&basemap=mapbox-standard&view=2d'),
+            ('3d','https://squiggles.io/?lng=-105.2705&lat=40.0150&zoom=11&bearing=0&pitch=50&basemap=mapbox-standard&view=3d'),
+          ]
+          results={}
+          with sync_playwright() as p:
+            browser=p.chromium.launch(channel='chrome', headless=True)
+            for name,url in scenarios:
+              console=[]; errors=[]; failed=[]; responses=[]
+              ctx=browser.new_context(viewport={'width':430,'height':932}, device_scale_factor=2, is_mobile=True, has_touch=True)
+              page=ctx.new_page()
+              page.on('console', lambda m, a=console: a.append(f'{m.type}: {m.text}'))
+              page.on('pageerror', lambda e, a=errors: a.append(str(e)))
+              page.on('requestfailed', lambda r, a=failed: a.append(f'{r.method} {r.url}: {r.failure}'))
+              page.on('response', lambda r, a=responses: a.append((r.status,r.url)) if ('terrain' in r.url or 'mapbox' in r.url) else None)
+              resp=page.goto(url, wait_until='domcontentloaded', timeout=30000)
+              try:
+                page.wait_for_function("""() => (document.querySelector('.status')?.getAttribute('aria-label')||'').includes('routes selected')""", timeout=70000)
+              except Exception: pass
+              page.wait_for_timeout(3000)
+              before=page.url
+              state_before=page.evaluate("""() => ({
+                status: document.querySelector('.status')?.getAttribute('aria-label')||null,
+                canvases:[...document.querySelectorAll('canvas')].map(c=>({class:c.className,width:c.width,height:c.height,rect:c.getBoundingClientRect().toJSON()})),
+                mapRect: document.querySelector('.maplibre-base')?.getBoundingClientRect().toJSON()||null,
+                webgl2: (()=>{const c=document.createElement('canvas'); return !!c.getContext('webgl2')})()
+              })""")
+              page.screenshot(path=OUT/f'{name}-initial.png', full_page=True)
+              rect=page.locator('.maplibre-base').bounding_box()
+              if rect:
+                x=rect['x']+rect['width']/2; y=rect['y']+rect['height']/2
+                page.mouse.move(x,y)
+                page.mouse.wheel(0,-700)
+                page.wait_for_timeout(1500)
+                after_wheel=page.url
+                page.mouse.move(x,y); page.mouse.down(); page.mouse.move(x+70,y+40,steps=8); page.mouse.up()
+                page.wait_for_timeout(1500)
+                after_drag=page.url
+                cdp=ctx.new_cdp_session(page)
+                pts=[{'x':x-45,'y':y+30,'radiusX':5,'radiusY':5,'force':1,'id':1},{'x':x+45,'y':y+30,'radiusX':5,'radiusY':5,'force':1,'id':2}]
+                cdp.send('Input.dispatchTouchEvent', {'type':'touchStart','touchPoints':pts})
+                for dy in [15,30,45,60,75]:
+                  moved=[dict(pts[0],y=y+30-dy),dict(pts[1],y=y+30-dy)]
+                  cdp.send('Input.dispatchTouchEvent', {'type':'touchMove','touchPoints':moved})
+                  time.sleep(.05)
+                cdp.send('Input.dispatchTouchEvent', {'type':'touchEnd','touchPoints':[]})
+                page.wait_for_timeout(1500)
+                after_touch=page.url
+              else:
+                after_wheel=after_drag=after_touch=before
+              page.screenshot(path=OUT/f'{name}-after.png', full_page=True)
+              results[name]={
+                'http': resp.status if resp else None,
+                'before': before,'afterWheel':after_wheel,'afterDrag':after_drag,'afterTouch':after_touch,
+                'state':state_before,'errors':errors,'failed':failed,
+                'terrainResponses':[{'status':s,'url':u} for s,u in responses if 'terrain' in u][-100:],
+                'console':console[-200:]
+              }
+              ctx.close()
+            browser.close()
+          print(json.dumps(results, indent=2))
+          (OUT/'results.json').write_text(json.dumps(results,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mapbox-mobile-debug
+          path: mapbox-debug
+          retention-days: 3
