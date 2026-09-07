@@ -309,6 +309,9 @@ export function App() {
   async function run(queryTab = tab, mapState = view, sql = queryTab.id === tab.id ? draft : queryTab.sql) {
     try {
       if (!ready.current) throw new Error("Open a dataset first");
+      // A selection change invalidates every viewport result that was started
+      // against the previous selection, even if its worker query is still running.
+      viewportRequest.current += 1;
       selectionReady.current = false;
       setRouteBatches([]);
       setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false);
@@ -394,8 +397,11 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!ready.current || !selectionReady.current || mapInteracting) return;
+    // Invalidate the previous request before checking interaction state. During
+    // a drag/wheel gesture we intentionally defer the next query, but a result
+    // for the camera we just left must never be allowed to repaint the map.
     const request = ++viewportRequest.current;
+    if (!ready.current || !selectionReady.current || mapInteracting) return;
     const timer = window.setTimeout(async () => {
       const bounds = viewportBounds(view, mapElement.current);
       if (!bounds) return;
@@ -410,7 +416,7 @@ export function App() {
       }
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [engine, mapInteracting, summary.activityCount, systemResolution, view]);
+  }, [engine, mapInteracting, systemResolution, view]);
 
   useEffect(() => {
     if (!viewportScope || (!statsOpen && !tableOpen) || !selectionReady.current) return;
