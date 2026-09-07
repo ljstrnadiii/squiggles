@@ -1,0 +1,112 @@
+name: Patch rigorous Mapbox mobile 3D fix
+on:
+  push:
+    branches: [fix/rigorous-mapbox-mobile-3d]
+permissions:
+  contents: write
+jobs:
+  patch-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/rigorous-mapbox-mobile-3d
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.22.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Patch implementation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('apps/web/src/App.tsx')
+          s=p.read_text()
+          old='''  async function openSource(source: DatasetSource, requestedView?: MapState, initialTab = tab) {\n    try {\n      setBusy(true); setError(\"\"); setStatus(\"Reading dataset manifest…\");\n      const dataset = await engine.openDataset(source, (completed, total) => setStatus(`Opening dataset · ${completed.toLocaleString()} / ${total.toLocaleString()} files`));\n      ready.current = true; setDatasetName(dataset.name);\n      const initialView = requestedView ?? fitBounds(dataset.manifest.bbox);\n      setView(initialView);'''
+          new='''  async function openSource(source: DatasetSource, requestedView?: MapState, initialTab = tab) {\n    const openingView = viewRef.current;\n    try {\n      setBusy(true); setError(\"\"); setStatus(\"Reading dataset manifest…\");\n      const dataset = await engine.openDataset(source, (completed, total) => setStatus(`Opening dataset · ${completed.toLocaleString()} / ${total.toLocaleString()} files`));\n      ready.current = true; setDatasetName(dataset.name);\n      const latestView = viewRef.current;\n      const cameraMovedWhileOpening = Math.abs(latestView.longitude - openingView.longitude) > 1e-7 || Math.abs(latestView.latitude - openingView.latitude) > 1e-7 || Math.abs(latestView.zoom - openingView.zoom) > 1e-7 || Math.abs(latestView.bearing - openingView.bearing) > 1e-7 || Math.abs(latestView.pitch - openingView.pitch) > 1e-7;\n      const fitted = fitBounds(dataset.manifest.bbox);\n      const initialView = requestedView ?? (cameraMovedWhileOpening ? latestView : initialTab.style.viewMode === \"3d\" ? { ...fitted, bearing: openingView.bearing, pitch: openingView.pitch > 0 ? openingView.pitch : 50 } : fitted);\n      setView(initialView);'''
+          if s.count(old)!=1: raise SystemExit(f'openSource matches {s.count(old)}')
+          s=s.replace(old,new)
+          old2='''  const terrainExtensions = useMemo(() => terrainSource ? [terrainExtension] : [], [terrainExtension, terrainSource]);\n  const layers = useMemo(() => ['''
+          new2='''  const terrainExtensions = useMemo(() => terrainSource ? [terrainExtension] : [], [terrainExtension, terrainSource]);\n  const terrainLayerProps = useMemo(() => terrainSource ? { extensions: terrainExtensions, terrainDrawMode: \"offset\" as const } : { extensions: terrainExtensions }, [terrainExtensions, terrainSource]);\n  const layers = useMemo(() => ['''
+          if s.count(old2)!=1: raise SystemExit('terrain helper mismatch')
+          s=s.replace(old2,new2)
+          s=s.replace('extensions: terrainExtensions, widthUnits:', '...terrainLayerProps, widthUnits:')
+          s=s.replace('tab.style.heatEnabled, terrainExtensions, terrainSource]);','tab.style.heatEnabled, terrainLayerProps, terrainSource]);')
+          p.write_text(s)
+          PY
+      - name: Verify static checks
+        run: |
+          pnpm lint
+          pnpm test
+          pnpm typecheck
+          pnpm build
+      - name: Build browser-test app
+        env:
+          VITE_MAPBOX_ACCESS_TOKEN: ${{ vars.VITE_MAPBOX_ACCESS_TOKEN }}
+          VITE_DATASET_BASE_URL: https://squiggles.io/datasets
+        run: pnpm --filter @squiggles/web build
+      - name: Run mobile browser assertions
+        env:
+          DATASET_ID: 97d948ec-47c1-435a-add9-65eee580fa49
+        run: |
+          python -m pip install playwright==1.55.0 pillow
+          pnpm --filter @squiggles/web exec vite preview --host 127.0.0.1 --port 4173 > /tmp/vite.log 2>&1 &
+          VITE_PID=$!
+          trap 'kill $VITE_PID || true' EXIT
+          for i in {1..30}; do curl -fsS http://127.0.0.1:4173/ >/dev/null && break; sleep 1; done
+          python - <<'PY'
+          import base64, io, os, time
+          from PIL import Image
+          from playwright.sync_api import sync_playwright
+          ds=os.environ['DATASET_ID']
+          base=f'http://127.0.0.1:4173/m/{ds}'
+          def red_pixels(raw):
+              im=Image.open(io.BytesIO(raw)).convert('RGB')
+              return sum(1 for r,g,b in im.getdata() if r>180 and r>g*1.35 and r>b*1.25)
+          with sync_playwright() as p:
+              browser=p.chromium.launch(channel='chrome',headless=True)
+              counts={}
+              for mode,pitch in [('2d',0),('3d',50)]:
+                  ctx=browser.new_context(viewport={'width':430,'height':932},device_scale_factor=2,is_mobile=True,has_touch=True)
+                  page=ctx.new_page()
+                  errors=[]; page.on('pageerror',lambda e: errors.append(str(e)))
+                  url=f'{base}?lng=-105.2705&lat=40.0150&zoom=11&bearing=0&pitch={pitch}&basemap=mapbox-standard&view={mode}&heat=0&color=%23ff0000'
+                  page.goto(url,wait_until='domcontentloaded',timeout=30000)
+                  page.wait_for_function("() => (document.querySelector('.status')?.getAttribute('aria-label')||'').includes('routes selected')",timeout=70000)
+                  page.wait_for_timeout(3000)
+                  current=page.url
+                  assert 'zoom=11.00' in current or 'zoom=11.' in current, current
+                  if mode=='3d': assert 'pitch=50.0' in current or 'pitch=50' in current, current
+                  cdp=ctx.new_cdp_session(page)
+                  shot=base64.b64decode(cdp.send('Page.captureScreenshot',{'format':'png','fromSurface':True})['data'])
+                  counts[mode]=red_pixels(shot)
+                  rect=page.locator('.maplibre-base').bounding_box(); assert rect
+                  x=rect['x']+rect['width']/2; y=rect['y']+rect['height']/2
+                  before=page.url
+                  pts=[{'x':x-40,'y':y+20,'radiusX':5,'radiusY':5,'force':1,'id':1},{'x':x+40,'y':y+20,'radiusX':5,'radiusY':5,'force':1,'id':2}]
+                  cdp.send('Input.dispatchTouchEvent',{'type':'touchStart','touchPoints':pts})
+                  for dy in (15,30,45,60):
+                      cdp.send('Input.dispatchTouchEvent',{'type':'touchMove','touchPoints':[dict(pts[0],y=y+20-dy),dict(pts[1],y=y+20-dy)]}); time.sleep(.05)
+                  cdp.send('Input.dispatchTouchEvent',{'type':'touchEnd','touchPoints':[]})
+                  page.wait_for_timeout(1000)
+                  after=page.url
+                  if mode=='3d': assert after != before and 'pitch=50.0' not in after, (before,after)
+                  assert not errors, errors
+                  ctx.close()
+              print('ROUTE_RED_PIXELS',counts)
+              assert counts['2d'] > 1000, counts
+              assert counts['3d'] > 1000, counts
+              assert counts['3d'] > counts['2d'] * 0.05, counts
+              browser.close()
+          PY
+      - name: Commit verified implementation
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/web/src/App.tsx
+          git commit -m "fix: preserve startup camera and render 3D routes"
+          git push origin HEAD:fix/rigorous-mapbox-mobile-3d
