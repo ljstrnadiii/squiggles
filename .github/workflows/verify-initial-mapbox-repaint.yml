@@ -28,9 +28,10 @@ jobs:
           import os, re, urllib.request
           index = urllib.request.urlopen('https://squiggles.io/', timeout=30).read().decode()
           scripts = re.findall(r'<script[^>]+src="([^"]+\.js)"', index)
-          if not scripts:
-              raise SystemExit('No deployed JS bundle found')
-          bundle_url = urllib.request.urljoin('https://squiggles.io/', scripts[-1])
+          app_scripts = [src for src in scripts if '/assets/index-' in src]
+          if not app_scripts:
+              raise SystemExit(f'No deployed Vite app bundle found: {scripts}')
+          bundle_url = urllib.request.urljoin('https://squiggles.io/', app_scripts[0])
           bundle = urllib.request.urlopen(bundle_url, timeout=30).read().decode()
           match = re.search(r'pk\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+', bundle)
           if not match:
