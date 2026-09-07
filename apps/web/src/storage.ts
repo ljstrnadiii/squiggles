@@ -14,7 +14,7 @@ export const defaultTab: QueryTab = {
   id: "all",
   title: "All Activities",
   sql: "SELECT activity_id FROM activities",
-  mapState: { longitude: -105, latitude: 39, zoom: 5 },
+  mapState: { longitude: -105, latitude: 39, zoom: 5, bearing: 0, pitch: 0 },
   style: defaultStyle,
 };
 
@@ -43,7 +43,12 @@ export function loadTabs(): QueryTab[] {
       const migratedBasemap = legacyBasemaps[currentStyle.basemap] ?? currentStyle.basemap;
       const merged = { ...defaultStyle, ...currentStyle, basemap: migratedBasemap, ...(legacyScale === undefined ? {} : { lineWidthScale: legacyScale }) };
       const style = { ...merged, lineWidthScale: Math.max(0.25, Math.min(4, merged.lineWidthScale)) };
-      return { ...tab, style: { ...style, color: normalizeRouteColor(style.color) } };
+      const mapState = {
+        ...tab.mapState,
+        bearing: Number.isFinite(tab.mapState?.bearing) ? tab.mapState.bearing : 0,
+        pitch: Number.isFinite(tab.mapState?.pitch) ? tab.mapState.pitch : 0,
+      };
+      return { ...tab, mapState, style: { ...style, color: normalizeRouteColor(style.color) } };
     }) : [defaultTab];
     return tabs.some(tab => tab.id === highRunsTab.id) ? tabs : [...tabs, highRunsTab];
   } catch {
