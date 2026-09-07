@@ -1,0 +1,66 @@
+name: Patch Mapbox init regression
+on:
+  push:
+    branches: [fix/mapbox-init-regression]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/mapbox-init-regression
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.22.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Patch implementation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('apps/web/src/App.tsx')
+          s = p.read_text()
+          s = s.replace('  const initialLayers = useRef(layers);', '  const latestLayers = useRef(layers);')
+          s = s.replace('  currentBasemap.current = basemap; currentOptions.current = options; currentViewMode.current = viewMode;\n  onViewChangeRef.current = onViewChange; onInteractionChangeRef.current = onInteractionChange; onDeckClickRef.current = onDeckClick;', '  currentBasemap.current = basemap; currentOptions.current = options; currentViewMode.current = viewMode; latestLayers.current = layers;\n  onViewChangeRef.current = onViewChange; onInteractionChangeRef.current = onInteractionChange; onDeckClickRef.current = onDeckClick;')
+          old = '''    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current, initialOptions.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: true, touchPitch: true, touchZoomRotate: true, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
+    map.current.on("load", () => {
+      if (!map.current || overlay.current) return;
+      overlay.current = new MapboxOverlay({ interleaved: true, layers: initialLayers.current, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });
+      map.current.addControl(overlay.current);
+    });'''
+          new = '''    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current, initialOptions.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: true, touchPitch: true, touchZoomRotate: true, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
+    const attachOverlay = () => {
+      if (!map.current) return;
+      if (!overlay.current) {
+        overlay.current = new MapboxOverlay({ interleaved: true, layers: latestLayers.current, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });
+        map.current.addControl(overlay.current);
+      } else {
+        overlay.current.setProps({ layers: latestLayers.current, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });
+      }
+    };
+    attachOverlay();
+    map.current.on("load", attachOverlay);'''
+          if s.count(old) != 1:
+              raise SystemExit(f'overlay block matches: {s.count(old)}')
+          s = s.replace(old, new)
+          p.write_text(s)
+          PY
+      - name: Verify
+        run: |
+          pnpm lint
+          pnpm test
+          pnpm typecheck
+          pnpm build
+      - name: Commit
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/web/src/App.tsx
+          git commit -m "fix: restore Mapbox overlay initialization"
+          git push origin HEAD:fix/mapbox-init-regression
