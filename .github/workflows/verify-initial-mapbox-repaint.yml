@@ -3,11 +3,11 @@ on:
   push:
     branches: [fix/initial-mapbox-repaint]
 permissions:
-  contents: write
+  contents: read
 jobs:
   verify:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
+    environment: production
     steps:
       - uses: actions/checkout@v7
         with:
@@ -20,28 +20,13 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Apply repaint candidate
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          p=Path('apps/web/src/App.tsx'); s=p.read_text()
-          old='''  getPitch(): number;\n  addControl(control: unknown): void;'''
-          new='''  getPitch(): number;\n  triggerRepaint(): void;\n  addControl(control: unknown): void;'''
-          if s.count(old)!=1: raise SystemExit('Mapbox type anchor mismatch')
-          s=s.replace(old,new)
-          old='''      map.current.addControl(overlay.current);\n      configureMapboxNavigation(map.current, currentViewMode.current, true);'''
-          new='''      map.current.addControl(overlay.current);\n      configureMapboxNavigation(map.current, currentViewMode.current, true);\n      map.current.triggerRepaint();'''
-          if s.count(old)!=1: raise SystemExit('install overlay anchor mismatch')
-          s=s.replace(old,new)
-          old='''  useEffect(() => { latestLayers.current = layers; overlay.current?.setProps({ layers, onClick: (info: PickingInfo) => onDeckClickRef.current(info) }); }, [layers]);'''
-          new='''  useEffect(() => {\n    latestLayers.current = layers;\n    overlay.current?.setProps({ layers, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });\n    map.current?.triggerRepaint();\n  }, [layers]);'''
-          if s.count(old)!=1: raise SystemExit('layer update anchor mismatch')
-          s=s.replace(old,new)
-          p.write_text(s)
-          PY
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm typecheck
+      - name: Require production Mapbox token
+        env:
+          VITE_MAPBOX_ACCESS_TOKEN: ${{ vars.VITE_MAPBOX_ACCESS_TOKEN }}
+        run: test -n "$VITE_MAPBOX_ACCESS_TOKEN"
       - name: Build with production Mapbox token
         env:
           VITE_MAPBOX_ACCESS_TOKEN: ${{ vars.VITE_MAPBOX_ACCESS_TOKEN }}
@@ -94,10 +79,3 @@ jobs:
               assert page.url != before, (before,page.url)
               context.close(); browser.close()
           PY
-      - name: Commit verified app change
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add apps/web/src/App.tsx
-          git commit -m "fix: repaint routes after Mapbox overlay updates"
-          git push origin HEAD:fix/initial-mapbox-repaint
