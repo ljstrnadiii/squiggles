@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const source = readFileSync(join(import.meta.dirname, "PanelEnhancements.tsx"), "utf8");
 const disclosure = readFileSync(join(import.meta.dirname, "mapDisclosure.css"), "utf8");
+const panelCss = readFileSync(join(import.meta.dirname, "panelEnhancements.css"), "utf8");
 
 describe("map navigation enhancements", () => {
   it("keeps the map menu open after switching to another saved map", () => {
@@ -20,5 +21,10 @@ describe("map navigation enhancements", () => {
     expect(source).toContain("Rendering diagnostics");
     expect(source).toContain("openRenderingDiagnostics");
     expect(source).toContain('button.textContent?.trim() === "Rendering"');
+  });
+
+  it("anchors normal mobile query settings at the bottom and expanded settings to the full viewport", () => {
+    expect(panelCss).toContain('section.toolbar[aria-label="Query and map settings"]:not([data-panel-expanded]) {\n    top: auto;');
+    expect(panelCss).toContain('section.toolbar[aria-label="Query and map settings"][data-panel-expanded] {\n    top: 0;');
   });
 });
