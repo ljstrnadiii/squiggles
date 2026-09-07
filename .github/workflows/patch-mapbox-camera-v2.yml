@@ -1,0 +1,203 @@
+name: Patch Mapbox camera authority v2
+
+on:
+  push:
+    branches:
+      - fix/mapbox-camera-authority
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/mapbox-camera-authority
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.22.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @squiggles/web add @deck.gl/mapbox@9.3.10
+      - name: Make Mapbox authoritative
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('apps/web/src/App.tsx')
+          s = p.read_text()
+          def r(a, b):
+              global s
+              if s.count(a) != 1:
+                  raise SystemExit(f'match count {s.count(a)} for {a[:120]!r}')
+              s = s.replace(a, b)
+
+          r('import { WebMercatorViewport, type PickingInfo } from "@deck.gl/core";', 'import { WebMercatorViewport, type Layer, type PickingInfo } from "@deck.gl/core";')
+          r('import { PathLayer, ScatterplotLayer } from "@deck.gl/layers";\nimport DeckGL from "@deck.gl/react";', 'import { PathLayer, ScatterplotLayer } from "@deck.gl/layers";\nimport { MapboxOverlay } from "@deck.gl/mapbox";')
+
+          old_types = '''type MapboxMapInstance = {
+          jumpTo(options: MapboxCamera): void;
+          setStyle(style: StyleSpecification | string): void;
+          setConfigProperty(importId: string, name: string, value: boolean): void;
+          getStyle(): { layers?: Array<{ id: string; type: string; layout?: { visibility?: string } }> };
+          setLayoutProperty(layerId: string, name: "visibility", value: "visible" | "none"): void;
+          addSource(id: string, source: { type: "raster-dem"; tiles: string[]; tileSize: number; maxzoom: number; encoding: "terrarium"; attribution: string }): void;
+          getSource(id: string): unknown;
+          setTerrain(terrain: { source: string; exaggeration: number } | null): void;
+          isStyleLoaded(): boolean;
+          on(event: "style.load", listener: () => void): void;
+          remove(): void;
+          };
+          type MapboxMapConstructor = new (options: {
+          container: HTMLElement;
+          style: StyleSpecification | string;
+          center: [number, number];
+          zoom: number;
+          bearing: number;
+          pitch: number;
+          interactive: boolean;
+          attributionControl: boolean;
+          accessToken?: string;
+          }) => MapboxMapInstance;'''.replace('          ', '')
+          new_types = '''type MapboxMapInstance = {
+          jumpTo(options: MapboxCamera): void;
+          setStyle(style: StyleSpecification | string): void;
+          setConfigProperty(importId: string, name: string, value: boolean): void;
+          getStyle(): { layers?: Array<{ id: string; type: string; layout?: { visibility?: string } }> };
+          setLayoutProperty(layerId: string, name: "visibility", value: "visible" | "none"): void;
+          addSource(id: string, source: { type: "raster-dem"; tiles: string[]; tileSize: number; maxzoom: number; encoding: "terrarium"; attribution: string }): void;
+          getSource(id: string): unknown;
+          setTerrain(terrain: { source: string; exaggeration: number } | null): void;
+          isStyleLoaded(): boolean;
+          getCenter(): { lng: number; lat: number };
+          getZoom(): number;
+          getBearing(): number;
+          getPitch(): number;
+          addControl(control: unknown): void;
+          touchPitch: { enable(): void; disable(): void };
+          touchZoomRotate: { enableRotation(): void; disableRotation(): void };
+          dragRotate: { enable(): void; disable(): void };
+          on(event: string, listener: () => void): void;
+          remove(): void;
+          };
+          type MapboxMapConstructor = new (options: {
+          container: HTMLElement;
+          style: StyleSpecification | string;
+          center: [number, number];
+          zoom: number;
+          bearing: number;
+          pitch: number;
+          interactive: boolean;
+          touchPitch?: boolean;
+          touchZoomRotate?: boolean;
+          dragRotate?: boolean;
+          attributionControl: boolean;
+          accessToken?: string;
+          }) => MapboxMapInstance;'''.replace('          ', '')
+          r(old_types, new_types)
+
+          start = s.index('function BaseMap({ view, basemap, options, viewMode, theme }:')
+          end = s.index('\nfunction viewportBounds(', start)
+          new_base = '''function mapCamera(map: MapboxMapInstance): MapState {
+          const center = map.getCenter();
+          return { longitude: center.lng, latitude: center.lat, zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
+          }
+
+          function BaseMap({ view, basemap, options, viewMode, theme, layers, onDeckClick, onViewChange, onInteractionChange }: {
+          view: MapState;
+          basemap: Basemap;
+          options: BasemapOptions;
+          viewMode: MapViewMode;
+          theme: "light" | "dark";
+          layers: Layer[];
+          onDeckClick: (info: PickingInfo) => void;
+          onViewChange: (view: MapState) => void;
+          onInteractionChange: (active: boolean) => void;
+          }) {
+          const container = useRef<HTMLDivElement>(null);
+          const map = useRef<MapboxMapInstance | null>(null);
+          const overlay = useRef<MapboxOverlay | null>(null);
+          const initialView = useRef(view);
+          const initialBasemap = useRef(basemap);
+          const initialTheme = useRef(theme);
+          const initialOptions = useRef(options);
+          const initialViewMode = useRef(viewMode);
+          const initialLayers = useRef(layers);
+          const appliedStyle = useRef(`${basemap}:${theme}:${JSON.stringify(options)}`);
+          const currentBasemap = useRef(basemap);
+          const currentOptions = useRef(options);
+          const currentViewMode = useRef(viewMode);
+          const currentOnViewChange = useRef(onViewChange);
+          const currentOnInteractionChange = useRef(onInteractionChange);
+          const currentOnDeckClick = useRef(onDeckClick);
+          currentBasemap.current = basemap;
+          currentOptions.current = options;
+          currentViewMode.current = viewMode;
+          currentOnViewChange.current = onViewChange;
+          currentOnInteractionChange.current = onInteractionChange;
+          currentOnDeckClick.current = onDeckClick;
+
+          useEffect(() => {
+          if (!container.current || !window.mapboxgl) return;
+          const initial = initialView.current;
+          const MapboxMap = window.mapboxgl.Map;
+          const instance = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current, initialOptions.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: true, touchPitch: initialViewMode.current === "3d", touchZoomRotate: true, dragRotate: initialViewMode.current === "3d", attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
+          map.current = instance;
+          overlay.current = new MapboxOverlay({ interleaved: true, layers: initialLayers.current, onClick: info => currentOnDeckClick.current(info) });
+          instance.addControl(overlay.current);
+          instance.on("style.load", () => { if (map.current) { applyBasemapOptions(map.current, currentBasemap.current, currentOptions.current); applyTerrain(map.current, currentViewMode.current === "3d"); } });
+          instance.on("move", () => currentOnViewChange.current(mapCamera(instance)));
+          instance.on("movestart", () => currentOnInteractionChange.current(true));
+          instance.on("moveend", () => { currentOnViewChange.current(mapCamera(instance)); currentOnInteractionChange.current(false); });
+          const closeAttribution = () => container.current?.querySelector(".mapboxgl-ctrl-attrib")?.classList.remove("mapboxgl-compact-show");
+          window.setTimeout(closeAttribution, 0); window.setTimeout(closeAttribution, 750);
+          return () => { instance.remove(); overlay.current = null; map.current = null; };
+          }, []);
+
+          useLayoutEffect(() => {
+          const instance = map.current;
+          if (!instance) return;
+          const actual = mapCamera(instance);
+          if (Math.abs(actual.longitude - view.longitude) > 1e-7 || Math.abs(actual.latitude - view.latitude) > 1e-7 || Math.abs(actual.zoom - view.zoom) > 1e-5 || Math.abs(actual.bearing - (view.bearing ?? 0)) > 1e-4 || Math.abs(actual.pitch - (view.pitch ?? 0)) > 1e-4) instance.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: view.bearing ?? 0, pitch: view.pitch ?? 0 });
+          }, [view]);
+          useEffect(() => { overlay.current?.setProps({ layers, onClick: info => currentOnDeckClick.current(info) }); }, [layers]);
+          useEffect(() => {
+          const instance = map.current;
+          if (!instance) return;
+          if (viewMode === "3d") { instance.touchPitch.enable(); instance.touchZoomRotate.enableRotation(); instance.dragRotate.enable(); }
+          else { instance.touchPitch.disable(); instance.touchZoomRotate.disableRotation(); instance.dragRotate.disable(); }
+          if (instance.isStyleLoaded()) applyTerrain(instance, viewMode === "3d");
+          }, [viewMode]);
+          useEffect(() => {
+          const key = `${basemap}:${theme}:${JSON.stringify(options)}`;
+          if (appliedStyle.current === key) return;
+          appliedStyle.current = key;
+          map.current?.setStyle(mapStyle(basemap, theme, options));
+          }, [basemap, options, theme]);
+          return <div className="maplibre-base" ref={container} />;
+          }'''.replace('          ', '')
+          s = s[:start] + new_base + s[end:]
+
+          render_start = s.index('      <BaseMap view={view} basemap={tab.style.basemap}')
+          render_end = s.index('\n      {spatialDrawing', render_start)
+          new_render = '''      <BaseMap view={view} basemap={tab.style.basemap} options={tab.style.basemapOptions} viewMode={tab.style.viewMode} theme={effectiveTheme} layers={layers} onViewChange={setView} onInteractionChange={setMapInteracting} onDeckClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) { const longitude = coordinate[0], latitude = coordinate[1]; if (longitude !== undefined && latitude !== undefined) setSpatialDraft(previous => [...previous, [longitude, latitude]]); } return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />'''
+          s = s[:render_start] + new_render + s[render_end:]
+          p.write_text(s)
+      - name: Verify
+        run: |
+          pnpm lint
+          pnpm test
+          pnpm typecheck
+          pnpm build
+      - name: Commit
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/web/package.json apps/web/src/App.tsx pnpm-lock.yaml
+          git commit -m "fix: make Mapbox authoritative for map camera"
+          git push origin HEAD:fix/mapbox-camera-authority
