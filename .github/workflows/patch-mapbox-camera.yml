@@ -16,122 +16,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: feature/add-mapbox-basemaps-and-3d
-      - name: Apply camera persistence changes
+      - name: Include rotation in interaction state
         shell: python
         run: |
           from pathlib import Path
-
           path = Path('apps/web/src/App.tsx')
           text = path.read_text()
-
-          replacements = [
-            (
-              '  const zoom = finiteParameter(parameters, "zoom", 0, 24);\n  const basemap = parameters.get("basemap");',
-              '  const zoom = finiteParameter(parameters, "zoom", 0, 24);\n  const bearing = finiteParameter(parameters, "bearing", -180, 180);\n  const pitch = finiteParameter(parameters, "pitch", 0, 60);\n  const basemap = parameters.get("basemap");',
-            ),
-            (
-              '    mapState: longitude === undefined || latitude === undefined || zoom === undefined ? target.mapState : { longitude, latitude, zoom },',
-              '    mapState: longitude === undefined || latitude === undefined || zoom === undefined ? target.mapState : { longitude, latitude, zoom, bearing: bearing ?? target.mapState.bearing ?? 0, pitch: pitch ?? target.mapState.pitch ?? 0 },',
-            ),
-            (
-              '      ...(viewMode && viewModes.has(viewMode as MapViewMode) ? { viewMode: viewMode as MapViewMode } : {}),',
-              '      ...(viewMode && viewModes.has(viewMode as MapViewMode) ? { viewMode: viewMode as MapViewMode } : pitch !== undefined && pitch > 0 ? { viewMode: "3d" as const } : {}),',
-            ),
-            (
-              '  url.searchParams.set("zoom", view.zoom.toFixed(2));\n  url.searchParams.set("basemap", tab.style.basemap);',
-              '  url.searchParams.set("zoom", view.zoom.toFixed(2));\n  url.searchParams.set("bearing", view.bearing.toFixed(1));\n  url.searchParams.set("pitch", view.pitch.toFixed(1));\n  url.searchParams.set("basemap", tab.style.basemap);',
-            ),
-            (
-              '    return { longitude: (xmin + xmax) / 2, latitude: (ymin + ymax) / 2, zoom: Math.max(1, Math.min(maximumZoom, Math.log2(360 / span) - 0.8)) };',
-              '    return { longitude: (xmin + xmax) / 2, latitude: (ymin + ymax) / 2, zoom: Math.max(1, Math.min(maximumZoom, Math.log2(360 / span) - 0.8)), bearing: 0, pitch: 0 };',
-            ),
-            (
-              '  return { longitude: fitted.longitude, latitude: fitted.latitude, zoom: fitted.zoom };',
-              '  return { longitude: fitted.longitude, latitude: fitted.latitude, zoom: fitted.zoom, bearing: 0, pitch: 0 };',
-            ),
-            (
-              'function BaseMap({ view, basemap, theme, pitch }: { view: MapState; basemap: Basemap; theme: "light" | "dark"; pitch: number }) {',
-              'function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; theme: "light" | "dark" }) {',
-            ),
-            (
-              '  const initialPitch = useRef(pitch);\n',
-              '',
-            ),
-            (
-              '    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: 0, pitch: initialPitch.current, interactive: false, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });',
-              '    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: false, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });',
-            ),
-            (
-              '    map.current?.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: 0, pitch });\n  }, [pitch, view]);',
-              '    map.current?.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: view.bearing ?? 0, pitch: view.pitch ?? 0 });\n  }, [view]);',
-            ),
-            (
-              'function viewportBounds(view: MapState, element: HTMLElement | null, respectDrawer = false, pitch = 0): ViewportBounds | undefined {\n  if (!element) return undefined;\n  const viewport = new WebMercatorViewport({ ...view, bearing: 0, pitch, width: element.clientWidth, height: element.clientHeight });',
-              'function viewportBounds(view: MapState, element: HTMLElement | null, respectDrawer = false): ViewportBounds | undefined {\n  if (!element) return undefined;\n  const viewport = new WebMercatorViewport({ ...view, bearing: view.bearing ?? 0, pitch: view.pitch ?? 0, width: element.clientWidth, height: element.clientHeight });',
-            ),
-            (
-              '  const mapPitch = tab.style.viewMode === "3d" ? 50 : 0;\n',
-              '',
-            ),
-            (
-              '      const queryPitch = queryTab.style.viewMode === "3d" ? 50 : 0;\n      const result = await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current, false, queryPitch));',
-              '      const result = await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current));',
-            ),
-            (
-              '      const bounds = viewportBounds(view, mapElement.current, false, mapPitch);',
-              '      const bounds = viewportBounds(view, mapElement.current);',
-            ),
-            (
-              '  }, [engine, mapInteracting, mapPitch, systemResolution, view]);',
-              '  }, [engine, mapInteracting, systemResolution, view]);',
-            ),
-            (
-              '      const bounds = viewportBounds(renderedView, mapElement.current, true, mapPitch);',
-              '      const bounds = viewportBounds(renderedView, mapElement.current, true);',
-            ),
-            (
-              '  }, [engine, mapPitch, renderedView, statsOpen, tableOpen, viewportScope]);',
-              '  }, [engine, renderedView, statsOpen, tableOpen, viewportScope]);',
-            ),
-            (
-              '  function saveSpatialFilter(spatialFilter: QueryTab["spatialFilter"], rerun: boolean) {',
-              '  function changeViewMode(viewMode: MapViewMode) {\n    changeStyle({ viewMode });\n    setView(current => viewMode === "2d"\n      ? { ...current, bearing: 0, pitch: 0 }\n      : { ...current, pitch: current.pitch > 0 ? current.pitch : 50 });\n  }\n  function saveSpatialFilter(spatialFilter: QueryTab["spatialFilter"], rerun: boolean) {',
-            ),
-            (
-              'onClick={() => changeStyle({ viewMode: "2d" })}>2D</button><button type="button" aria-label="Use 3D map view" aria-pressed={tab.style.viewMode === "3d"} onClick={() => changeStyle({ viewMode: "3d" })}>3D</button>',
-              'onClick={() => changeViewMode("2d")}>2D</button><button type="button" aria-label="Use 3D map view" aria-pressed={tab.style.viewMode === "3d"} onClick={() => changeViewMode("3d")}>3D</button>',
-            ),
-            (
-              '      <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} pitch={mapPitch} />',
-              '      <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />',
-            ),
-            (
-              '<DeckGL controller={spatialDrawing ? false : { dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: mapPitch }}',
-              '<DeckGL controller={spatialDrawing ? false : tab.style.viewMode === "3d" ? { dragRotate: true, touchRotate: true } : { dragRotate: false, touchRotate: false }} layers={layers} viewState={view}',
-            ),
-            (
-              '        setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });',
-              '        setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom, bearing: next.bearing ?? 0, pitch: next.pitch ?? 0 });',
-            ),
-          ]
-
-          for old, new in replacements:
-            count = text.count(old)
-            if count != 1:
-              raise SystemExit(f'expected exactly one match, found {count}: {old[:100]!r}')
-            text = text.replace(old, new)
-
-          path.write_text(text)
-
-          test = Path('apps/web/src/App.test.tsx')
-          test_text = test.read_text()
-          test_text = test_text.replace('expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("streets");\n    expect(screen.getByRole("option", { name: "Imagery" })).toBeInTheDocument();', 'expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("mapbox-standard");\n    expect(screen.getByRole("option", { name: "Mapbox Satellite" })).toBeInTheDocument();\n    expect(screen.getByRole("button", { name: "Use 2D map view" })).toHaveAttribute("aria-pressed", "true");\n    fireEvent.click(screen.getByRole("button", { name: "Use 3D map view" }));\n    expect(screen.getByRole("button", { name: "Use 3D map view" })).toHaveAttribute("aria-pressed", "true");')
-          test.write_text(test_text)
+          old = 'onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {\n        if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isZooming) return;'
+          new = 'onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isRotating || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {\n        if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isRotating && !interactionState.isZooming) return;'
+          count = text.count(old)
+          if count != 1:
+            raise SystemExit(f'expected exactly one interaction-state match, found {count}')
+          path.write_text(text.replace(old, new))
       - name: Commit patch
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add apps/web/src/App.tsx apps/web/src/App.test.tsx
+          git add apps/web/src/App.tsx
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m "feat: persist interactive 3d camera"
+          git commit -m "fix: track 3d camera rotation interactions"
           git push origin HEAD:feature/add-mapbox-basemaps-and-3d
