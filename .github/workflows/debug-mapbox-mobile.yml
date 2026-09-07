@@ -18,9 +18,11 @@ jobs:
           from playwright.sync_api import sync_playwright
 
           OUT=Path('mapbox-debug'); OUT.mkdir(exist_ok=True)
+          DATASET='97d948ec-47c1-435a-add9-65eee580fa49'
+          base=f'https://squiggles.io/m/{DATASET}'
           scenarios=[
-            ('2d','https://squiggles.io/?lng=-105.2705&lat=40.0150&zoom=11&bearing=0&pitch=0&basemap=mapbox-standard&view=2d'),
-            ('3d','https://squiggles.io/?lng=-105.2705&lat=40.0150&zoom=11&bearing=0&pitch=50&basemap=mapbox-standard&view=3d'),
+            ('2d',f'{base}?lng=-105.2705&lat=40.0150&zoom=11&bearing=0&pitch=0&basemap=mapbox-standard&view=2d'),
+            ('3d',f'{base}?lng=-105.2705&lat=40.0150&zoom=11&bearing=0&pitch=50&basemap=mapbox-standard&view=3d'),
           ]
           results={}
           with sync_playwright() as p:
@@ -50,21 +52,21 @@ jobs:
               if rect:
                 x=rect['x']+rect['width']/2; y=rect['y']+rect['height']/2
                 page.mouse.move(x,y)
-                page.mouse.wheel(0,-700)
-                page.wait_for_timeout(1500)
+                page.mouse.wheel(0,-500)
+                page.wait_for_timeout(1000)
                 after_wheel=page.url
-                page.mouse.move(x,y); page.mouse.down(); page.mouse.move(x+70,y+40,steps=8); page.mouse.up()
-                page.wait_for_timeout(1500)
+                page.mouse.move(x,y); page.mouse.down(); page.mouse.move(x+50,y+30,steps=8); page.mouse.up()
+                page.wait_for_timeout(1000)
                 after_drag=page.url
                 cdp=ctx.new_cdp_session(page)
                 pts=[{'x':x-45,'y':y+30,'radiusX':5,'radiusY':5,'force':1,'id':1},{'x':x+45,'y':y+30,'radiusX':5,'radiusY':5,'force':1,'id':2}]
                 cdp.send('Input.dispatchTouchEvent', {'type':'touchStart','touchPoints':pts})
-                for dy in [15,30,45,60,75]:
+                for dy in [15,30,45,60]:
                   moved=[dict(pts[0],y=y+30-dy),dict(pts[1],y=y+30-dy)]
                   cdp.send('Input.dispatchTouchEvent', {'type':'touchMove','touchPoints':moved})
                   time.sleep(.05)
                 cdp.send('Input.dispatchTouchEvent', {'type':'touchEnd','touchPoints':[]})
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(1000)
                 after_touch=page.url
               else:
                 after_wheel=after_drag=after_touch=before
