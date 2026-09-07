@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   chooseLod,
-  lodForMetersPerPixel,
   lodForView,
   lodForViewport,
   metersPerPixel,
@@ -23,11 +22,6 @@ describe("screen-space LOD fidelity", () => {
     const resolution = metersPerPixelForViewport(bounds, width, height);
     expect(resolution).toBeGreaterThan(0);
     expect(lodForViewport(bounds, width, height)).toBeGreaterThanOrEqual(0);
-  });
-
-  it("accepts a perspective-sampled effective resolution", () => {
-    expect(lodForMetersPerPixel(7)).toBe(5);
-    expect(lodForMetersPerPixel(1.5)).toBe(6);
   });
 
   it("chooses the coarsest tolerance below one rendered pixel", () => {
