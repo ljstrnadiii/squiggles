@@ -1,8 +1,8 @@
-import { WebMercatorViewport, type PickingInfo } from "@deck.gl/core";
+import { WebMercatorViewport, type Layer, type PickingInfo } from "@deck.gl/core";
 import { _TerrainExtension as TerrainExtension } from "@deck.gl/extensions";
 import { TerrainLayer } from "@deck.gl/geo-layers";
 import { PathLayer, ScatterplotLayer } from "@deck.gl/layers";
-import DeckGL from "@deck.gl/react";
+import { MapboxOverlay } from "@deck.gl/mapbox";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { StyleSpecification } from "maplibre-gl";
 
@@ -33,7 +33,15 @@ type MapboxMapInstance = {
   getSource(id: string): unknown;
   setTerrain(terrain: { source: string; exaggeration: number } | null): void;
   isStyleLoaded(): boolean;
-  on(event: "style.load", listener: () => void): void;
+  getCenter(): { lng: number; lat: number };
+  getZoom(): number;
+  getBearing(): number;
+  getPitch(): number;
+  addControl(control: unknown): void;
+  touchPitch: { enable(): void; disable(): void };
+  touchZoomRotate: { enableRotation(): void; disableRotation(): void };
+  dragRotate: { enable(): void; disable(): void };
+  on(event: string, listener: () => void): void;
   remove(): void;
 };
 type MapboxMapConstructor = new (options: {
@@ -44,6 +52,9 @@ type MapboxMapConstructor = new (options: {
   bearing: number;
   pitch: number;
   interactive: boolean;
+  touchPitch?: boolean;
+  touchZoomRotate?: boolean;
+  dragRotate?: boolean;
   attributionControl: boolean;
   accessToken?: string;
 }) => MapboxMapInstance;
@@ -232,35 +243,77 @@ function applyTerrain(map: MapboxMapInstance, enabled: boolean) {
   map.setTerrain({ source: "squiggles-terrain", exaggeration: 1 });
 }
 
-function BaseMap({ view, basemap, options, viewMode, theme }: { view: MapState; basemap: Basemap; options: BasemapOptions; viewMode: MapViewMode; theme: "light" | "dark" }) {
+function mapCamera(map: MapboxMapInstance): MapState {
+  const center = map.getCenter();
+  return { longitude: center.lng, latitude: center.lat, zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
+}
+
+function BaseMap({ view, basemap, options, viewMode, theme, layers, onDeckClick, onViewChange, onInteractionChange }: {
+  view: MapState;
+  basemap: Basemap;
+  options: BasemapOptions;
+  viewMode: MapViewMode;
+  theme: "light" | "dark";
+  layers: Layer[];
+  onDeckClick: (info: PickingInfo) => void;
+  onViewChange: (view: MapState) => void;
+  onInteractionChange: (active: boolean) => void;
+}) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapboxMapInstance | null>(null);
+  const overlay = useRef<MapboxOverlay | null>(null);
   const initialView = useRef(view);
   const initialBasemap = useRef(basemap);
   const initialTheme = useRef(theme);
   const initialOptions = useRef(options);
+  const initialViewMode = useRef(viewMode);
+  const initialLayers = useRef(layers);
   const appliedStyle = useRef(`${basemap}:${theme}:${JSON.stringify(options)}`);
   const currentBasemap = useRef(basemap);
   const currentOptions = useRef(options);
   const currentViewMode = useRef(viewMode);
+  const currentOnViewChange = useRef(onViewChange);
+  const currentOnInteractionChange = useRef(onInteractionChange);
+  const currentOnDeckClick = useRef(onDeckClick);
   currentBasemap.current = basemap;
   currentOptions.current = options;
   currentViewMode.current = viewMode;
+  currentOnViewChange.current = onViewChange;
+  currentOnInteractionChange.current = onInteractionChange;
+  currentOnDeckClick.current = onDeckClick;
+
   useEffect(() => {
     if (!container.current || !window.mapboxgl) return;
     const initial = initialView.current;
     const MapboxMap = window.mapboxgl.Map;
-    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current, initialOptions.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: false, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
-    map.current.on("style.load", () => { if (map.current) { applyBasemapOptions(map.current, currentBasemap.current, currentOptions.current); applyTerrain(map.current, currentViewMode.current === "3d"); } });
+    const instance = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current, initialOptions.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: true, touchPitch: initialViewMode.current === "3d", touchZoomRotate: true, dragRotate: initialViewMode.current === "3d", attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
+    map.current = instance;
+    overlay.current = new MapboxOverlay({ interleaved: true, layers: initialLayers.current, onClick: info => currentOnDeckClick.current(info) });
+    instance.addControl(overlay.current);
+    instance.on("style.load", () => { if (map.current) { applyBasemapOptions(map.current, currentBasemap.current, currentOptions.current); applyTerrain(map.current, currentViewMode.current === "3d"); } });
+    instance.on("move", () => currentOnViewChange.current(mapCamera(instance)));
+    instance.on("movestart", () => currentOnInteractionChange.current(true));
+    instance.on("moveend", () => { currentOnViewChange.current(mapCamera(instance)); currentOnInteractionChange.current(false); });
     const closeAttribution = () => container.current?.querySelector(".mapboxgl-ctrl-attrib")?.classList.remove("mapboxgl-compact-show");
     window.setTimeout(closeAttribution, 0);
     window.setTimeout(closeAttribution, 750);
-    return () => { map.current?.remove(); map.current = null; };
+    return () => { instance.remove(); overlay.current = null; map.current = null; };
   }, []);
+
   useLayoutEffect(() => {
-    map.current?.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: view.bearing ?? 0, pitch: view.pitch ?? 0 });
+    const instance = map.current;
+    if (!instance) return;
+    const actual = mapCamera(instance);
+    if (Math.abs(actual.longitude - view.longitude) > 1e-7 || Math.abs(actual.latitude - view.latitude) > 1e-7 || Math.abs(actual.zoom - view.zoom) > 1e-5 || Math.abs(actual.bearing - (view.bearing ?? 0)) > 1e-4 || Math.abs(actual.pitch - (view.pitch ?? 0)) > 1e-4) instance.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: view.bearing ?? 0, pitch: view.pitch ?? 0 });
   }, [view]);
-  useEffect(() => { if (map.current?.isStyleLoaded()) applyTerrain(map.current, viewMode === "3d"); }, [viewMode]);
+  useEffect(() => { overlay.current?.setProps({ layers, onClick: info => currentOnDeckClick.current(info) }); }, [layers]);
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance) return;
+    if (viewMode === "3d") { instance.touchPitch.enable(); instance.touchZoomRotate.enableRotation(); instance.dragRotate.enable(); }
+    else { instance.touchPitch.disable(); instance.touchZoomRotate.disableRotation(); instance.dragRotate.disable(); }
+    if (instance.isStyleLoaded()) applyTerrain(instance, viewMode === "3d");
+  }, [viewMode]);
   useEffect(() => {
     const key = `${basemap}:${theme}:${JSON.stringify(options)}`;
     if (appliedStyle.current === key) return;
@@ -269,7 +322,6 @@ function BaseMap({ view, basemap, options, viewMode, theme }: { view: MapState; 
   }, [basemap, options, theme]);
   return <div className="maplibre-base" ref={container} />;
 }
-
 function viewportBounds(view: MapState, element: HTMLElement | null, respectDrawer = false): ViewportBounds | undefined {
   if (!element) return undefined;
   const viewport = new WebMercatorViewport({ ...view, bearing: view.bearing ?? 0, pitch: view.pitch ?? 0, width: element.clientWidth, height: element.clientHeight });
@@ -819,11 +871,7 @@ export function App() {
     {error && <div className="error global-error" role="alert"><strong>Something needs attention</strong><span>{error}</span><button className="error-close" aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
 
     <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
-      <BaseMap view={view} basemap={tab.style.basemap} options={tab.style.basemapOptions} viewMode={tab.style.viewMode} theme={effectiveTheme} />
-      <DeckGL controller={spatialDrawing ? false : tab.style.viewMode === "3d" ? { dragRotate: true, touchRotate: true, touchZoom: true } : { dragRotate: false, touchRotate: false }} touchAction="none" eventRecognizerOptions={{ multipan: { pointers: 2, threshold: 1 } }} layers={layers} viewState={view} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isRotating || interactionState.isZooming))} onViewStateChange={({ viewState }) => {
-        const next = viewState as MapState;
-        setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom, bearing: next.bearing ?? 0, pitch: next.pitch ?? 0 });
-      }} onClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) { const longitude = coordinate[0], latitude = coordinate[1]; if (longitude !== undefined && latitude !== undefined) setSpatialDraft(previous => [...previous, [longitude, latitude]]); } return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />
+      <BaseMap view={view} basemap={tab.style.basemap} options={tab.style.basemapOptions} viewMode={tab.style.viewMode} theme={effectiveTheme} layers={layers} onViewChange={setView} onInteractionChange={setMapInteracting} onDeckClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) { const longitude = coordinate[0], latitude = coordinate[1]; if (longitude !== undefined && latitude !== undefined) setSpatialDraft(previous => [...previous, [longitude, latitude]]); } return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />
       {spatialDrawing && <><div className="spatial-draw-tools" role="group" aria-label="Polygon drawing controls"><button aria-label="Undo last polygon vertex" title="Undo last point" disabled={spatialDraft.length === 0} onClick={() => setSpatialDraft(previous => previous.slice(0, -1))}>↶</button><button className="accept" aria-label="Accept polygon" title="Accept polygon" disabled={spatialDraft.length < 3} onClick={acceptSpatialDraw}>✓</button></div><div className="spatial-draw-hint">Tap the map to add polygon vertices · ↶ undo · ✓ apply</div></>}
       {!spatialDrawing && hover?.origin === "map" && <div className="tooltip" style={{ left: hover.x + 12, top: hover.y + 12 }}><strong>{hover.item.name}</strong><span>{hover.item.sportType} · {hover.item.startTime?.slice(0, 10)}</span><span>{distance(hover.item.distanceM ?? 0)} · {elevation(hover.item.elevationGainM ?? 0)} gain</span></div>}
     </section>
