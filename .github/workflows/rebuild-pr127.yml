@@ -1,0 +1,32 @@
+name: rebuild-pr127
+on:
+  push:
+    branches: [chore/rebuild-pr127]
+permissions:
+  contents: write
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Rebuild PR 127 on current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main feat/issue-126-map-settings-polish
+          git diff eee31dfb9265da8f685d4e747a9ecb680861bd4b 633d09e8e1d0de5f8080a553de052578dbf7279b -- \
+            apps/web/src/App.test.tsx \
+            apps/web/src/App.tsx \
+            apps/web/src/contracts.ts \
+            apps/web/src/mapDisclosure.css \
+            apps/web/src/mapDisclosure.test.ts \
+            apps/web/src/styles.css > /tmp/pr127.patch
+          git checkout -B feat/issue-126-map-settings-polish origin/main
+          git apply -3 /tmp/pr127.patch
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/web/src/App.test.tsx apps/web/src/App.tsx apps/web/src/contracts.ts apps/web/src/mapDisclosure.css apps/web/src/mapDisclosure.test.ts apps/web/src/styles.css
+          git commit -m "feat(web): polish map settings and basemaps"
+          git push --force origin HEAD:feat/issue-126-map-settings-polish
