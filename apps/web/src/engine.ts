@@ -15,7 +15,7 @@ import type {
   ViewportSize,
 } from "./contracts";
 import { assertSupportedDatasetSchema } from "./datasetSchema";
-import { lodForView, lodForViewport, type Lod } from "./lod";
+import { lodForMetersPerPixel, lodForView, lodForViewport, type Lod } from "./lod";
 import { normalizeSelectionSql } from "./querySql";
 import {
   activateRenderTab,
@@ -184,6 +184,9 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     const map = viewportSize ? null : document.querySelector<HTMLElement>("section.map");
     const size = viewportSize ??
       (map ? { width: map.clientWidth, height: map.clientHeight } : undefined);
+    if (size?.effectiveMetersPerPixel != null && Number.isFinite(size.effectiveMetersPerPixel)) {
+      return lodForMetersPerPixel(size.effectiveMetersPerPixel);
+    }
     if (bounds && size?.width && size.height) {
       return lodForViewport(bounds, size.width, size.height);
     }
