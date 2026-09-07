@@ -60,6 +60,8 @@ export async function loadPublishedView(
       ...tab,
       style: {
         ...tab.style,
+        basemap: tab.style.basemap === "mapbox-satellite-clean" ? "mapbox-satellite" : tab.style.basemap,
+        basemapOptions: { labels: false, roads: false, trails: false, boundaries: false, objects3d: false, ...tab.style.basemapOptions },
         viewMode: tab.style.viewMode ?? ((tab.mapState.pitch ?? 0) > 0 ? "3d" : "2d"),
       },
       mapState: {
