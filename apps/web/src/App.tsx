@@ -35,6 +35,7 @@ type MapboxMapInstance = {
   getZoom(): number;
   getBearing(): number;
   getPitch(): number;
+  triggerRepaint(): void;
   addControl(control: unknown): void;
   removeControl(control: unknown): void;
   dragPan: { enable(): void; disable(): void };
@@ -289,6 +290,7 @@ function BaseMap({ view, basemap, options, viewMode, theme, layers, spatialDrawi
       overlay.current = new MapboxOverlay({ interleaved: true, layers: latestLayers.current, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });
       map.current.addControl(overlay.current);
       configureMapboxNavigation(map.current, currentViewMode.current, true);
+      map.current.triggerRepaint();
     };
     map.current.on("style.load", () => {
       if (!map.current) return;
@@ -309,7 +311,11 @@ function BaseMap({ view, basemap, options, viewMode, theme, layers, spatialDrawi
     const current = cameraState(map.current);
     if (Math.abs(current.longitude - view.longitude) > 1e-7 || Math.abs(current.latitude - view.latitude) > 1e-7 || Math.abs(current.zoom - view.zoom) > 1e-7 || Math.abs(current.bearing - view.bearing) > 1e-7 || Math.abs(current.pitch - view.pitch) > 1e-7) map.current.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: view.bearing, pitch: view.pitch });
   }, [view]);
-  useEffect(() => { latestLayers.current = layers; overlay.current?.setProps({ layers, onClick: (info: PickingInfo) => onDeckClickRef.current(info) }); }, [layers]);
+  useEffect(() => {
+    latestLayers.current = layers;
+    overlay.current?.setProps({ layers, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });
+    map.current?.triggerRepaint();
+  }, [layers]);
   useEffect(() => { if (map.current) { configureMapboxNavigation(map.current, viewMode, !spatialDrawing); if (map.current.isStyleLoaded()) applyTerrain(map.current, viewMode === "3d"); } }, [spatialDrawing, viewMode]);
   useEffect(() => { const key = `${basemap}:${theme}:${JSON.stringify(options)}`; if (appliedStyle.current !== key) { appliedStyle.current = key; map.current?.setStyle(mapStyle(basemap, theme, options)); } }, [basemap, options, theme]);
   return <div className="maplibre-base" ref={container} />;
