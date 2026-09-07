@@ -1,0 +1,26 @@
+name: Format PR 147
+on:
+  push:
+    branches: [fix/initial-mapbox-repaint]
+permissions:
+  contents: write
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/initial-mapbox-repaint
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: '3.13'
+      - run: uv sync --locked
+      - run: uv run --frozen ruff format scripts/check_hosted_browser.py
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/check_hosted_browser.py
+          git diff --cached --quiet && exit 0
+          git commit -m "style: format hosted browser smoke"
+          git push origin HEAD:fix/initial-mapbox-repaint
