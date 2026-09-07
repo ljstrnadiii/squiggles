@@ -487,6 +487,17 @@ button:disabled {
   color: var(--text);
   font-size: 10px;
 }
+.toolbar .basemap-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 6px;
+}
+.network-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
 .toolbar input[type="color"] {
   width: 28px;
   height: 25px;
@@ -516,6 +527,7 @@ button:disabled {
   border-color: var(--accent);
 }
 .toolbar .temperature {
+  grid-column: 1 / -1;
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: center;
@@ -1276,7 +1288,7 @@ button:disabled {
     animation-name: drawer-bottom;
   }
   .toolbar {
-    top: auto;
+    top: 0;
     left: 0;
     right: 0;
     bottom: 0;
@@ -1299,7 +1311,8 @@ button:disabled {
     display: none;
   }
   .temperature input {
-    width: 62px;
+    width: 100%;
+    min-width: 0;
   }
   .toolbar label[data-tooltip]::after {
     display: none;

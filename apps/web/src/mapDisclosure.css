@@ -23,23 +23,6 @@
 
 .mobile-menu section:first-child > button:not(:last-child) {
   position: relative;
-  padding-left: 24px;
-}
-
-.mobile-menu section:first-child > button:not(:last-child)::before {
-  content: "›";
-  position: absolute;
-  left: 8px;
-  top: 50%;
-  color: var(--muted);
-  font-size: 15px;
-  line-height: 1;
-  transform: translateY(-52%);
-}
-
-.mobile-menu section:first-child > button.active:not(:last-child)::before {
-  content: "⌄";
-  color: var(--accent);
 }
 
 .mobile-menu section:first-child > button.active:not(:last-child) {

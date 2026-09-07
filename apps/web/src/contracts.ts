@@ -1,5 +1,5 @@
 export type MapState = { longitude: number; latitude: number; zoom: number };
-export type Basemap = "streets" | "topo" | "imagery" | "blank";
+export type Basemap = "carto-light" | "carto-dark" | "streets" | "topo" | "imagery" | "blank";
 export type HeatPalette = "sunset" | "viridis" | "fire" | "ice";
 export type ThemeMode = "system" | "light" | "dark";
 export type UnitSystem = "metric" | "imperial";

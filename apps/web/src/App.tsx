@@ -22,6 +22,8 @@ import { loadSystemResolution, saveSystemResolution } from "./resolution";
 
 const blankStyle: maplibregl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
 const rasterStyles: Record<Exclude<Basemap, "blank">, { tiles: string[]; attribution: string; maxzoom: number }> = {
+  "carto-light": { tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
+  "carto-dark": { tiles: ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
   streets: { tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors", maxzoom: 19 },
   topo: { tiles: ["https://tile.opentopomap.org/{z}/{x}/{y}.png"], attribution: "Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)", maxzoom: 17 },
   imagery: { tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], attribution: "Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community", maxzoom: 19 },
@@ -34,7 +36,7 @@ const emptyHeat: CooperativeHeatResult = { scores: new Map(), sourceVertices: 0,
 const bytes = (value: number) => value < 1024 ? `${value} B` : value < 1024 ** 2 ? `${(value / 1024).toFixed(1)} KiB` : value < 1024 ** 3 ? `${(value / 1024 ** 2).toFixed(1)} MiB` : `${(value / 1024 ** 3).toFixed(2)} GiB`;
 const percent = (part: number, total: number) => total > 0 ? `${(part / total * 100).toFixed(1)}%` : "—";
 const SqlEditor = lazy(() => import("./SqlEditor").then(module => ({ default: module.SqlEditor })));
-const basemaps = new Set<Basemap>(["streets", "topo", "imagery", "blank"]);
+const basemaps = new Set<Basemap>(["carto-light", "carto-dark", "streets", "topo", "imagery", "blank"]);
 const heatPalettes = new Set<HeatPalette>(["sunset", "viridis", "fire", "ice"]);
 function finiteParameter(parameters: URLSearchParams, name: string, minimum: number, maximum: number) {
   const raw = parameters.get(name);
@@ -672,10 +674,10 @@ export function App() {
     {toolbarOpen && <section className="toolbar" aria-label="Query and map settings">
       <header className="toolbar-header"><div><span className="eyebrow">QUERY TAB</span><input aria-label="Tab title" className="rename" title="Name this saved query tab" value={tab.title} onChange={event => rename(event.target.value)} /></div><button aria-label="Close query settings" onClick={() => setToolbarOpen(false)}>×</button></header>
       <section className="toolbar-section"><h3>Map</h3><div className="settings-grid">
-        <label data-tooltip="Choose streets, topographic, imagery, or a fully offline map.">Basemap<select aria-label="Basemap" value={tab.style.basemap} onChange={event => changeStyle({ basemap: event.target.value as Basemap })}><option value="streets">Streets</option><option value="topo">Topographic</option><option value="imagery">Imagery</option><option value="blank">Blank / offline</option></select></label>
+        <label data-tooltip="Choose a subdued CARTO map for maximum route contrast, or switch to streets, topographic, imagery, or offline.">Basemap<select className="basemap-select" aria-label="Basemap" value={tab.style.basemap} onChange={event => changeStyle({ basemap: event.target.value as Basemap })}><option value="carto-light">CARTO Light</option><option value="carto-dark">CARTO Dark</option><option value="streets">Streets</option><option value="topo">Topographic</option><option value="imagery">Imagery</option><option value="blank">Blank / offline</option></select></label>
         <label data-tooltip="Choose the base route and hover-highlight color.">Route color<input aria-label="Route color" type="color" value={tab.style.color} onChange={event => changeStyle({ color: event.target.value })} /></label>
         <label className="temperature" data-tooltip="Multiply a route width equal to 0.15% of the map's shorter dimension. The width stays visually consistent at every zoom."><span>Thickness</span><input aria-label="Route thickness" type="range" min="0.25" max="4" step="0.05" value={tab.style.lineWidthScale} onChange={event => changeStyle({ lineWidthScale: Number(event.target.value) })} /><output>{tab.style.lineWidthScale.toFixed(2)}×</output></label>
-      </div></section>
+      </div><p className="network-note">Wi‑Fi recommended for the best experience with remote archives and basemaps.</p></section>
       <section className="toolbar-section"><h3>Heat</h3><div className="settings-grid">
         <label className="check" data-tooltip="Give each complete route one color based on nearby vertices from other routes in the current SQL selection."><input aria-label="Heat" type="checkbox" checked={tab.style.heatEnabled} onChange={event => changeStyle({ heatEnabled: event.target.checked })} /> Enabled</label>
         <label data-tooltip="Choose the color ramp for route proximity.">Colors<select aria-label="Heat colormap" value={tab.style.heatPalette} disabled={!tab.style.heatEnabled} onChange={event => changeStyle({ heatPalette: event.target.value as HeatPalette })}><option value="sunset">Sunset</option><option value="viridis">Viridis</option><option value="fire">Fire</option><option value="ice">Ice</option></select></label>
