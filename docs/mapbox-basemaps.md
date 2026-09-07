@@ -1,68 +1,58 @@
 # Mapbox basemaps and 3D view
 
-## Goal
+Squiggles uses one persistent Mapbox GL JS map underneath deck.gl. SQL changes, camera movement, and basemap changes must not recreate that map instance.
 
-Add Mapbox-hosted basemaps to Squiggles without changing the SQL/rendering model or creating surprise usage from map interaction.
+## Basemaps
 
-## Recommended basemaps
+The map menu intentionally stays small:
 
-Keep the menu intentionally small:
+- Mapbox Standard
+- Mapbox Standard Satellite
+- Mapbox Outdoors / Topographic
+- CARTO Light
+- CARTO Dark
+- Blank / offline
 
-- **Standard** — default general-purpose Mapbox vector basemap.
-- **Standard Satellite** — high-resolution satellite/aerial imagery with Mapbox labels and 3D features.
-- **Outdoors / Topographic** — terrain-first map emphasizing contours, trails, parks, ski runs, and land cover. Mapbox currently exposes this as the classic `outdoors-v12` style; it is useful for Squiggles even though Mapbox recommends Standard for new applications.
-- **CARTO Light** — existing low-contrast route-first option.
-- **CARTO Dark** — existing dark route-first option.
-- **Blank / offline** — existing no-network fallback.
+Legacy saved values migrate automatically:
 
-The existing OSM Streets, OpenTopoMap, and Esri imagery entries can be removed once their Mapbox equivalents are validated.
+- `streets` → `mapbox-standard`
+- `topo` → `mapbox-outdoors`
+- `imagery` → `mapbox-satellite`
 
-## Mapbox token
+When `VITE_MAPBOX_ACCESS_TOKEN` is not configured, Mapbox selections fall back to the current-theme CARTO map so local development remains usable.
 
-Use a dedicated public token supplied through `VITE_MAPBOX_ACCESS_TOKEN`.
+## Camera and 3D interaction
 
-Production tokens should be URL-restricted to the Squiggles production domain. Development should use a separate token restricted to localhost/preview hosts.
+2D/3D is separate from the basemap choice.
 
-Do not commit a token to the repository.
+The persisted camera is:
 
-## Billing guardrail
+- longitude
+- latitude
+- zoom
+- bearing
+- pitch
 
-Use **Mapbox GL JS with Mapbox styles**, rather than calling Mapbox raster/static tile APIs from MapLibre. The GL JS pricing model is based on map loads; pan/zoom/style interaction inside one live map instance does not create a new map load.
+In 3D mode deck.gl owns camera interaction and Mapbox follows the exact same camera before paint. Mouse/touch rotation is enabled, including multi-touch rotation and pitch gestures. Switching to 2D resets pitch and bearing to zero; entering 3D from a flat view starts at a useful pitch and then leaves the camera fully user-controlled.
 
-Keep a single map instance alive for the lifetime of the map view. SQL runs, route updates, style changes, and camera movement must update that instance rather than recreate it.
+Camera orientation is persisted in saved query tabs, copied URLs, and published views. Older local and published maps without `bearing`/`pitch` migrate to north-up 2D.
 
-## View modes
+Viewport pruning also uses the pitched/rotated camera footprint so route fetching remains aligned with what the basemap displays.
 
-Treat the camera separately from the basemap choice:
+## Token and billing guardrails
 
-- **2D** — north-up, pitch 0.
-- **3D** — pitched perspective with Mapbox 3D environment enabled.
+The browser reads a URL-restricted public token from `VITE_MAPBOX_ACCESS_TOKEN`. Production injects that value from the GitHub `production` environment during the Vite build.
 
-Do not add a separate “3D basemap” entry.
+The implementation uses Mapbox GL JS map loads rather than the Static Images / Static Tiles APIs and keeps one map instance alive across style and camera changes. This limits map-load accounting to map initialization rather than every interaction or SQL run.
 
-### Terrain caveat
+## Deferred
 
-Squiggles routes currently render in deck.gl as longitude/latitude geometry without per-vertex Z values. Mapbox terrain can therefore visually diverge from the route overlay if terrain is enabled naively.
+### Terrain
 
-True terrain mode should only ship after routes are draped onto the terrain surface (for example via a deck.gl terrain source/extension or another shared-terrain integration). Until then, the 3D mode should be limited to perspective/Mapbox 3D features that preserve correct route alignment.
+Perspective 3D does not currently enable DEM terrain. Squiggles route coordinates do not yet carry a terrain-draping integration, so naïvely enabling Mapbox terrain could visually separate routes from the ground surface.
 
-## Globe
+A terrain follow-up should add correct route draping before enabling DEM-backed terrain.
 
-Do **not** ship a Mapbox globe toggle in the first implementation. deck.gl's Mapbox overlay integration does not support Mapbox non-Mercator projections, so a Mapbox globe can cause the basemap and Squiggles route geometry to use different projections.
+### Globe
 
-If globe becomes important, evaluate either:
-
-1. MapLibre globe + deck.gl integration, which deck.gl explicitly supports; or
-2. deck.gl `GlobeView`, accepting its experimental/high-zoom limitations.
-
-Globe should remain a separate follow-up from Mapbox basemap adoption.
-
-## Implementation sequence
-
-1. Add `mapbox-gl` and switch the basemap renderer from MapLibre to Mapbox GL JS while preserving the single-instance lifecycle.
-2. Add `VITE_MAPBOX_ACCESS_TOKEN` configuration with a graceful fallback when unset.
-3. Replace the current basemap menu with Standard, Standard Satellite, Outdoors/Topo, CARTO Light, CARTO Dark, and Blank.
-4. Add a compact **2D / 3D** view-mode control beside the basemap selector.
-5. Preserve camera and map-instance identity across SQL runs and basemap changes.
-6. Add tests that verify style changes do not recreate the map instance.
-7. Follow up separately on terrain draping and globe support.
+Mapbox globe uses a non-Mercator projection. deck.gl's Mapbox overlay integration does not support Mapbox non-Mercator projections, so globe is deferred rather than shipping a basemap/route alignment bug.
