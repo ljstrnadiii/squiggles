@@ -1,6 +1,4 @@
 import { WebMercatorViewport, type Layer, type PickingInfo } from "@deck.gl/core";
-import { _TerrainExtension as TerrainExtension } from "@deck.gl/extensions";
-import { TerrainLayer } from "@deck.gl/geo-layers";
 import { PathLayer, ScatterplotLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -67,11 +65,6 @@ type MapboxMapConstructor = new (options: {
 const mapboxAccessToken = (import.meta.env.VITE_MAPBOX_ACCESS_TOKEN as string | undefined)?.trim();
 const fallbackTerrainTiles = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 const terrainAttribution = "Elevation: Mapzen/Tilezen · AWS Open Data";
-const mapboxTerrainRgbTiles = mapboxAccessToken ? `https://api.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}.pngraw?access_token=${mapboxAccessToken}` : null;
-const terrainTiles = mapboxTerrainRgbTiles ?? fallbackTerrainTiles;
-const terrainDecoder = mapboxTerrainRgbTiles
-  ? { rScaler: 6553.6, gScaler: 25.6, bScaler: 0.1, offset: -10000 }
-  : { rScaler: 256, gScaler: 1, bScaler: 1 / 256, offset: -32768 };
 const blankStyle: StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
 const rasterStyles: Record<"carto-light" | "carto-dark", { tiles: string[]; attribution: string; maxzoom: number }> = {
   "carto-light": { tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
@@ -535,11 +528,15 @@ export function App() {
   }
 
   async function openSource(source: DatasetSource, requestedView?: MapState, initialTab = tab) {
+    const openingView = viewRef.current;
     try {
       setBusy(true); setError(""); setStatus("Reading dataset manifest…");
       const dataset = await engine.openDataset(source, (completed, total) => setStatus(`Opening dataset · ${completed.toLocaleString()} / ${total.toLocaleString()} files`));
       ready.current = true; setDatasetName(dataset.name);
-      const initialView = requestedView ?? fitBounds(dataset.manifest.bbox);
+      const latestView = viewRef.current;
+      const moved = Math.abs(latestView.longitude-openingView.longitude)>1e-7 || Math.abs(latestView.latitude-openingView.latitude)>1e-7 || Math.abs(latestView.zoom-openingView.zoom)>1e-7 || Math.abs(latestView.bearing-openingView.bearing)>1e-7 || Math.abs(latestView.pitch-openingView.pitch)>1e-7;
+      const fitted = fitBounds(dataset.manifest.bbox);
+      const initialView = requestedView ?? (moved ? latestView : initialTab.style.viewMode === "3d" ? { ...fitted, bearing: openingView.bearing, pitch: openingView.pitch > 0 ? openingView.pitch : 50 } : fitted);
       setView(initialView);
       setStatus("Running initial query…"); await run(initialTab, initialView, initialTab.sql);
     } catch (reason) {
@@ -829,26 +826,22 @@ export function App() {
   const hoverPathData = useMemo(() => hover ? routeBatches.map((batch, index) => binaryPathData(batch, hoverColors[index])) : [], [hover, hoverColors, routeBatches]);
   const selectedSegments = useMemo(() => selected ? routeSegments([selected], true) : [], [selected]);
   const lineWidths = useMemo(() => lineWidthsForViewport(tab.style.lineWidthScale, mapSize.width, mapSize.height), [mapSize, tab.style.lineWidthScale]);
-  const terrainExtension = useMemo(() => new TerrainExtension(), []);
-  const terrainSource = useMemo(() => tab.style.viewMode === "3d" ? new TerrainLayer({ id: "terrain-source", elevationData: terrainTiles, elevationDecoder: terrainDecoder, minZoom: 0, maxZoom: 14, strategy: "no-overlap", operation: "terrain" }) : null, [tab.style.viewMode]);
-  const terrainExtensions = useMemo(() => terrainSource ? [terrainExtension] : [], [terrainExtension, terrainSource]);
   const layers = useMemo(() => [
-    ...(terrainSource ? [terrainSource] : []),
     ...spatialLayers(tab.spatialFilter, spatialDrawing, spatialDraft),
     ...overviewBatches.flatMap((batch, index) => [
-      new PathLayer({ id: `routes-${index}`, data: overviewPathData[index], _pathType: "open", positionFormat: "XY", getWidth: tab.style.heatEnabled ? lineWidths.heat : lineWidths.route, extensions: terrainExtensions, widthUnits: "pixels", widthMinPixels: 0.35, pickable: false }),
-      new PathLayer({ id: `route-hit-targets-${index}`, data: pickingPathData[index], _pathType: "open", positionFormat: "XY", getColor: [0, 0, 0, 0], getWidth: lineWidths.route + 10, extensions: terrainExtensions, widthUnits: "pixels", widthMinPixels: 10, pickable: !spatialDrawing, onHover: (info: PickingInfo) => { if (spatialDrawing) return; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item) { setHover(null); return; } const x = info.x, y = info.y, activityId = item.activityId; void engine.getRouteMetadata(activityId).then(metadata => { if (metadata) setHover({ x, y, item: metadata, origin: "map" }); }); }, onClick: (info: PickingInfo) => { if (spatialDrawing) return false; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item) return false; void openActivity(item); return true; } }),
+      new PathLayer({ id: `routes-${index}`, data: overviewPathData[index], _pathType: "open", positionFormat: "XY", getWidth: tab.style.heatEnabled ? lineWidths.heat : lineWidths.route, widthUnits: "pixels", widthMinPixels: 0.35, pickable: false }),
+      new PathLayer({ id: `route-hit-targets-${index}`, data: pickingPathData[index], _pathType: "open", positionFormat: "XY", getColor: [0, 0, 0, 0], getWidth: lineWidths.route + 10, widthUnits: "pixels", widthMinPixels: 10, pickable: !spatialDrawing, onHover: (info: PickingInfo) => { if (spatialDrawing) return; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item) { setHover(null); return; } const x = info.x, y = info.y, activityId = item.activityId; void engine.getRouteMetadata(activityId).then(metadata => { if (metadata) setHover({ x, y, item: metadata, origin: "map" }); }); }, onClick: (info: PickingInfo) => { if (spatialDrawing) return false; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item) return false; void openActivity(item); return true; } }),
     ]),
     ...(hover && !spatialDrawing ? routeBatches.map((batch, index) =>
-      new PathLayer({ id: `hover-route-${index}`, data: hoverPathData[index], _pathType: "open", positionFormat: "XY", getWidth: lineWidths.focus, extensions: terrainExtensions, widthUnits: "pixels", widthMinPixels: 0.8 }),
+      new PathLayer({ id: `hover-route-${index}`, data: hoverPathData[index], _pathType: "open", positionFormat: "XY", getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8 }),
     ) : []),
     ...(selected && isolateSelected ? [
-      new PathLayer<RouteSegment>({ id: "isolated-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.route, extensions: terrainExtensions, widthUnits: "pixels", widthMinPixels: 0.35, pickable: !spatialDrawing }),
+      new PathLayer<RouteSegment>({ id: "isolated-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.route, widthUnits: "pixels", widthMinPixels: 0.35, pickable: !spatialDrawing }),
     ] : selected ? [
-      new PathLayer<RouteSegment>({ id: "selected-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.focus, extensions: terrainExtensions, widthUnits: "pixels", widthMinPixels: 0.8, pickable: !spatialDrawing }),
+      new PathLayer<RouteSegment>({ id: "selected-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8, pickable: !spatialDrawing }),
     ] : []),
     ...(profileHover && !spatialDrawing ? [new ScatterplotLayer<ElevationSample>({ id: "profile-position", data: [profileHover], getPosition: item => item.position, getFillColor: [71, 107, 204, 255], getLineColor: [255, 255, 255, 255], getRadius: 8, radiusUnits: "pixels", stroked: true, lineWidthMinPixels: 3 })] : []),
-  ], [hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, spatialDraft, spatialDrawing, tab.spatialFilter, tab.style.color, tab.style.heatEnabled, terrainExtensions, terrainSource]);
+  ], [hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, spatialDraft, spatialDrawing, tab.spatialFilter, tab.style.color, tab.style.heatEnabled]);
 
   return <main className="app" onKeyDown={event => { if (spatialDrawing && event.key === "Escape") { setSpatialDrawing(false); setSpatialDraft([]); return; } if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void run(); }}>
     <header className="topbar">
