@@ -2,9 +2,9 @@ import { WebMercatorViewport, type PickingInfo } from "@deck.gl/core";
 import { PathLayer, ScatterplotLayer } from "@deck.gl/layers";
 import DeckGL from "@deck.gl/react";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import * as maplibregl from "maplibre-gl";
+import mapboxgl from "mapbox-gl";
 
-import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";
+import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, MapViewMode, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";
 import { binaryPathData, pickedActivity, routeColors } from "./binaryRoutes";
 import { BrowserDuckDBEngine } from "./engine";
 import { buildBinaryHeatDataCooperative, colorForWeight, type CooperativeHeatResult } from "./heat";
@@ -20,13 +20,16 @@ import { loadRuntimeConfig } from "./auth";
 import { loadPublishedView, publishView } from "./publishing";
 import { loadSystemResolution, saveSystemResolution } from "./resolution";
 
-const blankStyle: maplibregl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
-const rasterStyles: Record<Exclude<Basemap, "blank">, { tiles: string[]; attribution: string; maxzoom: number }> = {
+const mapboxAccessToken = (import.meta.env.VITE_MAPBOX_ACCESS_TOKEN as string | undefined)?.trim();
+const blankStyle: mapboxgl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
+const rasterStyles: Record<"carto-light" | "carto-dark", { tiles: string[]; attribution: string; maxzoom: number }> = {
   "carto-light": { tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
   "carto-dark": { tiles: ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
-  streets: { tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors", maxzoom: 19 },
-  topo: { tiles: ["https://tile.opentopomap.org/{z}/{x}/{y}.png"], attribution: "Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)", maxzoom: 17 },
-  imagery: { tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], attribution: "Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community", maxzoom: 19 },
+};
+const mapboxStyles: Record<"mapbox-standard" | "mapbox-satellite" | "mapbox-outdoors", string> = {
+  "mapbox-standard": "mapbox://styles/mapbox/standard",
+  "mapbox-satellite": "mapbox://styles/mapbox/standard-satellite",
+  "mapbox-outdoors": "mapbox://styles/mapbox/outdoors-v12",
 };
 const empty: SummaryStats = { activityCount: 0, distanceM: 0, elapsedSeconds: 0, movingSeconds: 0, elevationGainM: 0, elevationLossM: 0, minElevationM: null, maxElevationM: null, maxDistanceM: null, activeDays: 0, droppedJumpPoints: 0, droppedElevationPoints: 0, sportCounts: [], firstActivity: null, lastActivity: null };
 const integer = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
@@ -36,7 +39,8 @@ const emptyHeat: CooperativeHeatResult = { scores: new Map(), sourceVertices: 0,
 const bytes = (value: number) => value < 1024 ? `${value} B` : value < 1024 ** 2 ? `${(value / 1024).toFixed(1)} KiB` : value < 1024 ** 3 ? `${(value / 1024 ** 2).toFixed(1)} MiB` : `${(value / 1024 ** 3).toFixed(2)} GiB`;
 const percent = (part: number, total: number) => total > 0 ? `${(part / total * 100).toFixed(1)}%` : "—";
 const SqlEditor = lazy(() => import("./SqlEditor").then(module => ({ default: module.SqlEditor })));
-const basemaps = new Set<Basemap>(["carto-light", "carto-dark", "streets", "topo", "imagery", "blank"]);
+const basemaps = new Set<Basemap>(["mapbox-standard", "mapbox-satellite", "mapbox-outdoors", "carto-light", "carto-dark", "blank"]);
+const viewModes = new Set<MapViewMode>(["2d", "3d"]);
 const heatPalettes = new Set<HeatPalette>(["sunset", "viridis", "fire", "ice"]);
 function finiteParameter(parameters: URLSearchParams, name: string, minimum: number, maximum: number) {
   const raw = parameters.get(name);
@@ -53,6 +57,7 @@ function tabsWithUrlSettings(tabs: QueryTab[]) {
   const latitude = finiteParameter(parameters, "lat", -85, 85);
   const zoom = finiteParameter(parameters, "zoom", 0, 24);
   const basemap = parameters.get("basemap");
+  const viewMode = parameters.get("view");
   const palette = parameters.get("palette");
   const temperature = finiteParameter(parameters, "temperature", 0.5, 3);
   const thickness = finiteParameter(parameters, "thickness", 0.25, 4);
@@ -63,6 +68,7 @@ function tabsWithUrlSettings(tabs: QueryTab[]) {
     style: {
       ...target.style,
       ...(basemap && basemaps.has(basemap as Basemap) ? { basemap: basemap as Basemap } : {}),
+      ...(viewMode && viewModes.has(viewMode as MapViewMode) ? { viewMode: viewMode as MapViewMode } : {}),
       ...(palette && heatPalettes.has(palette as HeatPalette) ? { heatPalette: palette as HeatPalette } : {}),
       ...(temperature === undefined ? {} : { heatTemperature: temperature }),
       ...(thickness === undefined ? {} : { lineWidthScale: thickness }),
@@ -97,6 +103,7 @@ function replaceUrlSettings(tab: QueryTab, view: MapState, units: UnitSystem) {
   url.searchParams.set("lat", view.latitude.toFixed(5));
   url.searchParams.set("zoom", view.zoom.toFixed(2));
   url.searchParams.set("basemap", tab.style.basemap);
+  url.searchParams.set("view", tab.style.viewMode);
   url.searchParams.set("heat", tab.style.heatEnabled ? "1" : "0");
   url.searchParams.set("palette", tab.style.heatPalette);
   url.searchParams.set("temperature", tab.style.heatTemperature.toFixed(1));
@@ -141,34 +148,39 @@ function fitBounds([xmin, ymin, xmax, ymax]: [number, number, number, number], m
 
 type TableSort = "name" | "sport" | "date" | "distance" | "gain" | "maximum";
 
-function mapStyle(basemap: Basemap, theme: "light" | "dark"): maplibregl.StyleSpecification {
-  if (basemap === "blank") return { ...blankStyle, layers: [{ id: "background", type: "background", paint: { "background-color": theme === "dark" ? "#07100e" : "#edf2ef" } }] };
+function rasterStyle(basemap: "carto-light" | "carto-dark"): mapboxgl.StyleSpecification {
   const source = rasterStyles[basemap];
   return { version: 8, sources: { basemap: { type: "raster", tiles: source.tiles, tileSize: 256, maxzoom: source.maxzoom, attribution: source.attribution } }, layers: [{ id: "basemap", type: "raster", source: "basemap" }] };
 }
 
-function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; theme: "light" | "dark" }) {
+function mapStyle(basemap: Basemap, theme: "light" | "dark"): mapboxgl.StyleSpecification | string {
+  if (basemap === "blank") return { ...blankStyle, layers: [{ id: "background", type: "background", paint: { "background-color": theme === "dark" ? "#07100e" : "#edf2ef" } }] };
+  if (basemap === "carto-light" || basemap === "carto-dark") return rasterStyle(basemap);
+  return mapboxAccessToken ? mapboxStyles[basemap] : rasterStyle(theme === "dark" ? "carto-dark" : "carto-light");
+}
+
+function BaseMap({ view, basemap, theme, pitch }: { view: MapState; basemap: Basemap; theme: "light" | "dark"; pitch: number }) {
   const container = useRef<HTMLDivElement>(null);
-  const map = useRef<maplibregl.Map | null>(null);
+  const map = useRef<mapboxgl.Map | null>(null);
   const initialView = useRef(view);
   const initialBasemap = useRef(basemap);
   const initialTheme = useRef(theme);
+  const initialPitch = useRef(pitch);
   const appliedStyle = useRef(`${basemap}:${theme}`);
   useEffect(() => {
     if (!container.current) return;
     const initial = initialView.current;
-    map.current = new maplibregl.Map({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, interactive: false, attributionControl: { compact: true } });
-    const closeAttribution = () => container.current?.querySelector(".maplibregl-ctrl-attrib")?.classList.remove("maplibregl-compact-show");
+    map.current = new mapboxgl.Map({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: 0, pitch: initialPitch.current, interactive: false, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
+    const closeAttribution = () => container.current?.querySelector(".mapboxgl-ctrl-attrib")?.classList.remove("mapboxgl-compact-show");
     window.setTimeout(closeAttribution, 0);
     window.setTimeout(closeAttribution, 750);
     return () => { map.current?.remove(); map.current = null; };
   }, []);
   useLayoutEffect(() => {
-    // Deck and MapLibre are separate canvases. Apply the exact same camera
-    // before paint so the basemap never displays one interaction frame behind
-    // the route overlay (and wheel zoom retains deck.gl's cursor anchor).
-    map.current?.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom });
-  }, [view]);
+    // Deck and Mapbox are separate canvases. Apply the exact same camera before
+    // paint so neither layer flashes an older camera during pan/zoom/view changes.
+    map.current?.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: 0, pitch });
+  }, [pitch, view]);
   useEffect(() => {
     const key = `${basemap}:${theme}`;
     if (appliedStyle.current === key) return;
@@ -178,9 +190,9 @@ function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; t
   return <div className="maplibre-base" ref={container} />;
 }
 
-function viewportBounds(view: MapState, element: HTMLElement | null, respectDrawer = false): ViewportBounds | undefined {
+function viewportBounds(view: MapState, element: HTMLElement | null, respectDrawer = false, pitch = 0): ViewportBounds | undefined {
   if (!element) return undefined;
-  const viewport = new WebMercatorViewport({ ...view, width: element.clientWidth, height: element.clientHeight });
+  const viewport = new WebMercatorViewport({ ...view, bearing: 0, pitch, width: element.clientWidth, height: element.clientHeight });
   if (respectDrawer) {
     const inset = viewportInsets(element);
     const southwest = viewport.unproject([inset.left, element.clientHeight - inset.bottom]);
@@ -257,6 +269,7 @@ export function App() {
   const autoOpened = useRef(false);
   const initialUrlCamera = useRef(hasUrlCamera());
   const effectiveTheme = themeMode === "system" ? (systemDark ? "dark" : "light") : themeMode;
+  const mapPitch = tab.style.viewMode === "3d" ? 50 : 0;
   const logoUrl = effectiveTheme === "dark" ? "/logo-dark.png" : "/logo-light.png";
   const refreshIdentity = useCallback(() => setSessionIdentity(identityFromSession(loadSession())), []);
   const distance = (meters: number) => `${integer.format(distanceValue(meters, units))} ${distanceUnit(units)}`;
@@ -311,8 +324,6 @@ export function App() {
   async function run(queryTab = tab, mapState = view, sql = queryTab.id === tab.id ? draft : queryTab.sql) {
     try {
       if (!ready.current) throw new Error("Open a dataset first");
-      // A selection change invalidates every viewport result that was started
-      // against the previous selection, even if its worker query is still running.
       viewportRequest.current += 1;
       selectionReady.current = false;
       setRouteBatches([]);
@@ -321,7 +332,8 @@ export function App() {
       setBusy(true); setStatus("Running DuckDB SQL…"); setError("");
       const current = { ...queryTab, sql, mapState };
       const renderStarted = performance.now();
-      const result = await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current));
+      const queryPitch = queryTab.style.viewMode === "3d" ? 50 : 0;
+      const result = await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current, false, queryPitch));
       setRouteBatches(result.batches); setRenderedView(mapState);
       selectionReady.current = true;
       setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
@@ -399,13 +411,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    // Invalidate the previous request before checking interaction state. During
-    // a drag/wheel gesture we intentionally defer the next query, but a result
-    // for the camera we just left must never be allowed to repaint the map.
     const request = ++viewportRequest.current;
     if (!ready.current || !selectionReady.current || mapInteracting) return;
     const timer = window.setTimeout(async () => {
-      const bounds = viewportBounds(view, mapElement.current);
+      const bounds = viewportBounds(view, mapElement.current, false, mapPitch);
       if (!bounds) return;
       try {
         const renderStarted = performance.now();
@@ -418,13 +427,13 @@ export function App() {
       }
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [engine, mapInteracting, systemResolution, view]);
+  }, [engine, mapInteracting, mapPitch, systemResolution, view]);
 
   useEffect(() => {
     if (!viewportScope || (!statsOpen && !tableOpen) || !selectionReady.current) return;
     const request = ++panelRequest.current;
     const timer = window.setTimeout(async () => {
-      const bounds = viewportBounds(renderedView, mapElement.current, true);
+      const bounds = viewportBounds(renderedView, mapElement.current, true, mapPitch);
       if (!bounds) return;
       try {
         setScopeLoading(true); setError("");
@@ -442,7 +451,7 @@ export function App() {
       }
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [engine, renderedView, statsOpen, tableOpen, viewportScope]);
+  }, [engine, mapPitch, renderedView, statsOpen, tableOpen, viewportScope]);
 
   function choose(next: QueryTab, openQuery = false) {
     const isCurrent = next.id === active;
@@ -460,8 +469,6 @@ export function App() {
     if (ready.current && !isCurrent) void run(next, next.mapState, next.sql);
   }
   function add() {
-    // A query changes the selected routes, not the place the user is looking
-    // at. New tabs therefore inherit the live camera and visual settings.
     const next = { ...defaultTab, mapState: { ...view }, style: { ...tab.style }, id: crypto.randomUUID(), title: "New Query" };
     const updated = [...tabs, next]; setTabs(updated); saveTabs(updated); choose(next, true);
   }
@@ -478,8 +485,6 @@ export function App() {
     const nextTab = { ...tab, style: { ...tab.style, ...style } };
     const updated = tabs.map(item => item.id === tab.id ? nextTab : item);
     setTabs(updated); saveTabs(updated);
-    // Clean changes the logical activities view, so refresh the last
-    // successfully executed SQL automatically. Unsaved SQL remains a draft.
     if (style.cleanEnabled !== undefined && style.cleanEnabled !== tab.style.cleanEnabled && ready.current) void run(nextTab, view, tab.sql);
   }
   function saveSpatialFilter(spatialFilter: QueryTab["spatialFilter"], rerun: boolean) {
@@ -674,10 +679,11 @@ export function App() {
     {toolbarOpen && <section className="toolbar" aria-label="Query and map settings">
       <header className="toolbar-header"><div><span className="eyebrow">QUERY TAB</span><input aria-label="Tab title" className="rename" title="Name this saved query tab" value={tab.title} onChange={event => rename(event.target.value)} /></div><button aria-label="Close query settings" onClick={() => setToolbarOpen(false)}>×</button></header>
       <section className="toolbar-section"><h3>Map</h3><div className="settings-grid">
-        <label data-tooltip="Choose a subdued CARTO map for maximum route contrast, or switch to streets, topographic, imagery, or offline.">Basemap<select className="basemap-select" aria-label="Basemap" value={tab.style.basemap} onChange={event => changeStyle({ basemap: event.target.value as Basemap })}><option value="carto-light">CARTO Light</option><option value="carto-dark">CARTO Dark</option><option value="streets">Streets</option><option value="topo">Topographic</option><option value="imagery">Imagery</option><option value="blank">Blank / offline</option></select></label>
+        <label data-tooltip="Use Mapbox Standard for general context, Satellite for imagery, Outdoors for contours and trails, or CARTO for maximum route contrast.">Basemap<select className="basemap-select" aria-label="Basemap" value={tab.style.basemap} onChange={event => changeStyle({ basemap: event.target.value as Basemap })}><option value="mapbox-standard">Mapbox Standard</option><option value="mapbox-satellite">Mapbox Satellite</option><option value="mapbox-outdoors">Mapbox Outdoors / Topo</option><option value="carto-light">CARTO Light</option><option value="carto-dark">CARTO Dark</option><option value="blank">Blank / offline</option></select></label>
+        <label data-tooltip="Tilt the Web Mercator camera without enabling terrain, keeping routes and the basemap on the same projection.">View<div className="view-mode-control" role="group" aria-label="Map view"><button type="button" aria-label="Use 2D map view" aria-pressed={tab.style.viewMode === "2d"} onClick={() => changeStyle({ viewMode: "2d" })}>2D</button><button type="button" aria-label="Use 3D map view" aria-pressed={tab.style.viewMode === "3d"} onClick={() => changeStyle({ viewMode: "3d" })}>3D</button></div></label>
         <label data-tooltip="Choose the base route and hover-highlight color.">Route color<input aria-label="Route color" type="color" value={tab.style.color} onChange={event => changeStyle({ color: event.target.value })} /></label>
         <label className="temperature" data-tooltip="Multiply a route width equal to 0.15% of the map's shorter dimension. The width stays visually consistent at every zoom."><span>Thickness</span><input aria-label="Route thickness" type="range" min="0.25" max="4" step="0.05" value={tab.style.lineWidthScale} onChange={event => changeStyle({ lineWidthScale: Number(event.target.value) })} /><output>{tab.style.lineWidthScale.toFixed(2)}×</output></label>
-      </div><p className="network-note">Wi‑Fi recommended for the best experience with remote archives and basemaps.</p></section>
+      </div><p className="network-note">{mapboxAccessToken ? "Wi‑Fi recommended for the best experience with remote archives and basemaps." : "Mapbox token not configured; Mapbox choices use a CARTO fallback locally."}</p></section>
       <section className="toolbar-section"><h3>Heat</h3><div className="settings-grid">
         <label className="check" data-tooltip="Give each complete route one color based on nearby vertices from other routes in the current SQL selection."><input aria-label="Heat" type="checkbox" checked={tab.style.heatEnabled} onChange={event => changeStyle({ heatEnabled: event.target.checked })} /> Enabled</label>
         <label data-tooltip="Choose the color ramp for route proximity.">Colors<select aria-label="Heat colormap" value={tab.style.heatPalette} disabled={!tab.style.heatEnabled} onChange={event => changeStyle({ heatPalette: event.target.value as HeatPalette })}><option value="sunset">Sunset</option><option value="viridis">Viridis</option><option value="fire">Fire</option><option value="ice">Ice</option></select></label>
@@ -691,10 +697,8 @@ export function App() {
     {error && <div className="error global-error" role="alert"><strong>Something needs attention</strong><span>{error}</span><button className="error-close" aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
 
     <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
-      <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />
-      <DeckGL controller={spatialDrawing ? false : { dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: 0 }} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
-        // Ignore camera callbacks produced while an asynchronously loaded published
-        // view is being applied. Only a real pointer/wheel gesture may own the camera.
+      <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} pitch={mapPitch} />
+      <DeckGL controller={spatialDrawing ? false : { dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: mapPitch }} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
         if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isZooming) return;
         const next = viewState as MapState;
         setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });
@@ -706,7 +710,7 @@ export function App() {
     {selected && <aside className="detail" aria-label="Activity detail"><button className="close" aria-label="Close detail" onClick={() => { setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>×</button><span className="eyebrow">{selected.sportType}</span><h2>{selected.name}</h2><p className="detail-date">{selected.startTime?.slice(0, 10)}</p><div className="detail-stats"><Stat value={distance(selected.distanceM ?? 0)} label="distance" /><Stat value={elevation(selected.elevationGainM ?? 0)} label="gain" /><Stat value={selected.maxElevationM == null ? "—" : elevation(selected.maxElevationM)} label="maximum" /></div><div className="detail-actions"><button onClick={zoomToSelected}>Zoom to route</button><button className={`isolate ${isolateSelected ? "active" : ""}`} aria-pressed={isolateSelected} onClick={() => setIsolateSelected(value => !value)}>{isolateSelected ? "Show all routes" : "Show only this route"}</button></div><ElevationProfile samples={selected.elevationProfile} active={profileHover} units={units} onHover={setProfileHover} />{selected.sourceUrl && <a href={selected.sourceUrl} target="_blank" rel="noreferrer">Open original activity ↗</a>}</aside>}
     {statsOpen && <section className="rich-stats" aria-label="Detailed selection statistics"><header><img src={logoUrl} alt="" /><div><span className="eyebrow">{viewportScope ? "CONTAINED IN VIEWPORT" : "CURRENT SELECTION"}</span><h2>{scopeLoading && viewportScope ? "Updating…" : `${integer.format((viewportScope ? scopedSummary : summary).activityCount)} activities`}</h2></div><button aria-label="Close statistics" onClick={() => setStatsOpen(false)}>×</button></header><ScopeToggle checked={viewportScope} onChange={changeViewportScope} /><Stats summary={viewportScope ? scopedSummary : summary} distance={distance} elevation={elevation} /></section>}
     {tableOpen && <section className="activity-table" aria-label="Activity table"><header><div><span className="eyebrow">{viewportScope ? "CONTAINED IN VIEWPORT" : "CURRENT SELECTION"}</span><h2>{tableLoading || (scopeLoading && viewportScope) ? "Loading activities…" : `${integer.format(tableActivities.length)} activities`}</h2></div><ScopeToggle checked={viewportScope} onChange={changeViewportScope} /><span>Hover to highlight · click to zoom</span><button aria-label="Close activity table" onClick={() => { setTableOpen(false); setHover(null); }}>×</button></header><div className="table-scroll"><table><thead><tr><SortableHeader label="Activity" field="name" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Sport" field="sport" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Date" field="date" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Distance" field="distance" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Gain" field="gain" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Maximum" field="maximum" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /></tr></thead><tbody>{tableRows.map(item => <tr key={item.activityId} className={selected?.activityId === item.activityId || hover?.origin === "table" && hover.item.activityId === item.activityId ? "selected" : ""} onMouseEnter={() => setHover({ x: 0, y: 0, item, origin: "table" })} onMouseLeave={() => setHover(current => current?.origin === "table" && current.item.activityId === item.activityId ? null : current)} onClick={() => void openTableActivity(item)}><td><strong>{item.name}</strong></td><td>{item.sportType}</td><td>{item.startTime?.slice(0, 10) ?? "—"}</td><td>{item.distanceM == null ? "—" : `${distanceValue(item.distanceM, units).toFixed(1)} ${distanceUnit(units)}`}</td><td>{item.elevationGainM == null ? "—" : elevation(item.elevationGainM)}</td><td>{item.maxElevationM == null ? "—" : elevation(item.maxElevationM)}</td></tr>)}</tbody></table>{!tableLoading && tableRows.length === 0 && <div className="table-empty">No selected activities are fully contained in the visible viewport.</div>}</div></section>}
-    {renderingOpen && <section className="rich-stats diagnostics-drawer" aria-label="Rendering diagnostics"><header><div><span className="eyebrow">BROWSER RENDER PLAN</span><h2>{renderMetrics.lod === 4 ? "Raw geometry" : renderMetrics.lod == null ? "Waiting for geometry" : `LOD ${renderMetrics.lod}`}</h2></div><button aria-label="Close rendering diagnostics" onClick={() => setRenderingOpen(false)}>×</button></header><table><tbody><Diagnostic label="Representation" value={renderMetrics.lod === 4 ? "LOD 4 · raw coordinates" : renderMetrics.lod == null ? "—" : `LOD ${renderMetrics.lod} · simplified overview`} /><Diagnostic label="Map zoom" value={renderedView.zoom.toFixed(2)} /><Diagnostic label="Fragments read" value={`${integer.format(renderMetrics.scan.candidateFragmentCount)} / ${integer.format(renderMetrics.scan.totalFragmentCount)}`} /><Diagnostic label="Candidate Parquet bytes" value={`${bytes(renderMetrics.scan.candidateBytes)} / ${bytes(renderMetrics.scan.totalBytes)}`} /><Diagnostic label="Fragment bytes avoided" value={percent(renderMetrics.scan.totalBytes - renderMetrics.scan.candidateBytes, renderMetrics.scan.totalBytes)} /><Diagnostic label="Row groups expected read" value={`${integer.format(renderMetrics.scan.expectedRowGroupCount)} / ${integer.format(renderMetrics.scan.candidateRowGroupCount)} candidate · ${integer.format(renderMetrics.scan.totalRowGroupCount)} total`} /><Diagnostic label="Row groups filtered" value={integer.format(renderMetrics.scan.totalRowGroupCount - renderMetrics.scan.expectedRowGroupCount)} /><Diagnostic label="Activity rows kept" value={`${integer.format(renderMetrics.scan.keptRowCount)} / ${integer.format(renderMetrics.scan.expectedRowCount)} expected-read rows`} /><Diagnostic label="Read-to-kept efficiency" value={percent(renderMetrics.scan.keptRowCount, renderMetrics.scan.expectedRowCount)} /><Diagnostic label="Visible routes" value={integer.format(renderMetrics.visibleCount)} /><Diagnostic label="Selected routes" value={integer.format(summary.activityCount)} /><Diagnostic label="Planned vertex estimate" value={`${integer.format(renderMetrics.plannedVertexEstimate)} / ${integer.format(renderMetrics.vertexBudget)} budget`} /><Diagnostic label="Raw vertex estimate" value={integer.format(renderMetrics.rawVertexEstimate)} /><Diagnostic label="Rendered vertices" value={integer.format(renderMetrics.vertexCount)} /><Diagnostic label="GeoArrow buffers" value={bytes(renderMetrics.geometryBufferBytes)} /><Diagnostic label="Coordinate objects created" value="0" /><Diagnostic label="Geometry query + transfer" value={`${renderMetrics.durationMs.toFixed(1)} ms`} /><Diagnostic label="Render cache" value={`${renderMetrics.cache.hit ? "hit" : "miss"} · ${bytes(renderMetrics.cache.bytes)} / ${bytes(renderMetrics.cache.budgetBytes)}`} /><Diagnostic label="Cached viewport batches" value={`${integer.format(renderMetrics.cache.entries)} · ${integer.format(renderMetrics.cache.evictions)} evicted`} /><Diagnostic label="Thickness control" value={`${tab.style.lineWidthScale.toFixed(2)}× · 0.15% viewport`} /><Diagnostic label="Route width" value={`${lineWidths.route.toFixed(2)} px`} /><Diagnostic label="Selected width" value={`${lineWidths.focus.toFixed(2)} px`} /><Diagnostic label="Heat vertices scored" value={integer.format(heat.sourceVertices)} /><Diagnostic label="Heat-colored routes" value={integer.format(heat.scores.size)} /><Diagnostic label="Heat proximity cells" value={integer.format(heat.cellCount)} /><Diagnostic label="Heat preparation" value={`${heat.durationMs.toFixed(1)} ms`} /><Diagnostic label="Heat UI slices" value={`${integer.format(heat.yieldCount + 1)} · ${heat.maxSliceMs.toFixed(1)} ms max`} /><Diagnostic label="Data view" value={tab.style.cleanEnabled ? "Clean derived view" : "Canonical raw view"} /><Diagnostic label="Basemap" value={tab.style.basemap} /></tbody></table><p>DuckDB transfers interleaved GeoArrow coordinate buffers to deck.gl without creating per-point JavaScript objects. Revisited and contained viewport batches remain in a bounded LRU cache (512 MiB desktop, 128 MiB mobile). Geometry layer inputs stay referentially stable while the camera moves, and heat scoring is recomputed between bounded main-thread slices. Fragment counts are exact for the worker query; row-group reads remain conservative estimates from compiler-recorded covering boxes.</p></section>}
+    {renderingOpen && <section className="rich-stats diagnostics-drawer" aria-label="Rendering diagnostics"><header><div><span className="eyebrow">BROWSER RENDER PLAN</span><h2>{renderMetrics.lod === 4 ? "Raw geometry" : renderMetrics.lod == null ? "Waiting for geometry" : `LOD ${renderMetrics.lod}`}</h2></div><button aria-label="Close rendering diagnostics" onClick={() => setRenderingOpen(false)}>×</button></header><table><tbody><Diagnostic label="Representation" value={renderMetrics.lod === 4 ? "LOD 4 · raw coordinates" : renderMetrics.lod == null ? "—" : `LOD ${renderMetrics.lod} · simplified overview`} /><Diagnostic label="Map zoom" value={renderedView.zoom.toFixed(2)} /><Diagnostic label="Map view" value={tab.style.viewMode.toUpperCase()} /><Diagnostic label="Fragments read" value={`${integer.format(renderMetrics.scan.candidateFragmentCount)} / ${integer.format(renderMetrics.scan.totalFragmentCount)}`} /><Diagnostic label="Candidate Parquet bytes" value={`${bytes(renderMetrics.scan.candidateBytes)} / ${bytes(renderMetrics.scan.totalBytes)}`} /><Diagnostic label="Fragment bytes avoided" value={percent(renderMetrics.scan.totalBytes - renderMetrics.scan.candidateBytes, renderMetrics.scan.totalBytes)} /><Diagnostic label="Row groups expected read" value={`${integer.format(renderMetrics.scan.expectedRowGroupCount)} / ${integer.format(renderMetrics.scan.candidateRowGroupCount)} candidate · ${integer.format(renderMetrics.scan.totalRowGroupCount)} total`} /><Diagnostic label="Row groups filtered" value={integer.format(renderMetrics.scan.totalRowGroupCount - renderMetrics.scan.expectedRowGroupCount)} /><Diagnostic label="Activity rows kept" value={`${integer.format(renderMetrics.scan.keptRowCount)} / ${integer.format(renderMetrics.scan.expectedRowCount)} expected-read rows`} /><Diagnostic label="Read-to-kept efficiency" value={percent(renderMetrics.scan.keptRowCount, renderMetrics.scan.expectedRowCount)} /><Diagnostic label="Visible routes" value={integer.format(renderMetrics.visibleCount)} /><Diagnostic label="Selected routes" value={integer.format(summary.activityCount)} /><Diagnostic label="Planned vertex estimate" value={`${integer.format(renderMetrics.plannedVertexEstimate)} / ${integer.format(renderMetrics.vertexBudget)} budget`} /><Diagnostic label="Raw vertex estimate" value={integer.format(renderMetrics.rawVertexEstimate)} /><Diagnostic label="Rendered vertices" value={integer.format(renderMetrics.vertexCount)} /><Diagnostic label="GeoArrow buffers" value={bytes(renderMetrics.geometryBufferBytes)} /><Diagnostic label="Coordinate objects created" value="0" /><Diagnostic label="Geometry query + transfer" value={`${renderMetrics.durationMs.toFixed(1)} ms`} /><Diagnostic label="Render cache" value={`${renderMetrics.cache.hit ? "hit" : "miss"} · ${bytes(renderMetrics.cache.bytes)} / ${bytes(renderMetrics.cache.budgetBytes)}`} /><Diagnostic label="Cached viewport batches" value={`${integer.format(renderMetrics.cache.entries)} · ${integer.format(renderMetrics.cache.evictions)} evicted`} /><Diagnostic label="Thickness control" value={`${tab.style.lineWidthScale.toFixed(2)}× · 0.15% viewport`} /><Diagnostic label="Route width" value={`${lineWidths.route.toFixed(2)} px`} /><Diagnostic label="Selected width" value={`${lineWidths.focus.toFixed(2)} px`} /><Diagnostic label="Heat vertices scored" value={integer.format(heat.sourceVertices)} /><Diagnostic label="Heat-colored routes" value={integer.format(heat.scores.size)} /><Diagnostic label="Heat proximity cells" value={integer.format(heat.cellCount)} /><Diagnostic label="Heat preparation" value={`${heat.durationMs.toFixed(1)} ms`} /><Diagnostic label="Heat UI slices" value={`${integer.format(heat.yieldCount + 1)} · ${heat.maxSliceMs.toFixed(1)} ms max`} /><Diagnostic label="Data view" value={tab.style.cleanEnabled ? "Clean derived view" : "Canonical raw view"} /><Diagnostic label="Basemap" value={tab.style.basemap} /></tbody></table><p>DuckDB transfers interleaved GeoArrow coordinate buffers to deck.gl without creating per-point JavaScript objects. Revisited and contained viewport batches remain in a bounded LRU cache (512 MiB desktop, 128 MiB mobile). Geometry layer inputs stay referentially stable while the camera moves, and heat scoring is recomputed between bounded main-thread slices. Fragment counts are exact for the worker query; row-group reads remain conservative estimates from compiler-recorded covering boxes.</p></section>}
     {aboutOpen && <section className="rich-stats about-drawer" aria-label="About this project"><header><img src={logoUrl} alt="" /><div><span className="eyebrow">ABOUT THIS PROJECT</span><h2>Your archive, at browser scale</h2></div><button aria-label="Close about this project" onClick={() => setAboutOpen(false)}>×</button></header><p className="about-lead">Squiggles is built for the larger GPX archive that becomes awkward to understand in experiences centered on individual activities or route planning.</p><div className="technology-flow" aria-label="Technology pipeline"><strong>Parquet</strong><span>→</span><strong>GeoArrow</strong><span>→</span><strong>DuckDB-Wasm</strong><span>→</span><strong>deck.gl</strong></div><h3>Millions of points, locally</h3><p>Columnar GeoParquet keeps the compiled archive compact. GeoArrow carries coordinates without a giant GeoJSON conversion. DuckDB runs SQL, summaries, viewport pruning, and detail lookup inside a browser worker, while deck.gl sends the chosen geometry to WebGL.</p><p>Together, those pieces let a user's own browser query and view many millions of recorded points. Dropping the same archive as thousands of individual GPX files into a route-planning import flow—Caltopo included—can overwhelm a workflow that was designed for a different job.</p><h3>What it is—and is not</h3><p>This is not a route planner, navigation system, training coach, or social feed. It is a storytelling tool: find the patterns across years of movement, revisit the places that shaped you, and share the resulting map.</p><a className="github-link" href="https://github.com/ljstrnadiii/squiggles" target="_blank" rel="noreferrer" aria-label="Squiggles on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.02c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.74-1.55-2.57-.3-5.27-1.29-5.27-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.16 1.18a10.97 10.97 0 0 1 5.75 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.75.11 3.04.74.8 1.83 1.19 3.09 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.06.79 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" /></svg>View the project on GitHub</a><p className="privacy-note">Your activity SQL and rendering stay in the browser. Optional basemap tiles are the only runtime third-party requests.</p></section>}
   </main>;
 }
