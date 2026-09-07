@@ -4,10 +4,28 @@ import { createReadStream, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 const localDataRoot = resolve(import.meta.dirname, "../../data/local");
+const cartoApiKey = process.env.VITE_CARTO_API_KEY?.trim();
+const cartoTileUrls = [
+  "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+  "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+];
+
 export default defineConfig({
   optimizeDeps: { exclude: ["maplibre-gl"] },
   plugins: [
     react(),
+    {
+      name: "carto-basemap-key",
+      transform(code, id) {
+        if (!cartoApiKey || !id.endsWith("/src/App.tsx")) return null;
+        const key = encodeURIComponent(cartoApiKey);
+        const transformed = cartoTileUrls.reduce(
+          (source, url) => source.replaceAll(url, `${url}?key=${key}`),
+          code,
+        );
+        return transformed === code ? null : { code: transformed, map: null };
+      },
+    },
     {
       name: "local-dataset",
       configureServer(server) {

@@ -105,6 +105,7 @@ jobs:
       - run: pnpm build
         env:
           VITE_MAPBOX_ACCESS_TOKEN: ${{ vars.VITE_MAPBOX_ACCESS_TOKEN }}
+          VITE_CARTO_API_KEY: ${{ secrets.VITE_CARTO_API_KEY }}
       - run: pnpm --filter @squiggles/aws build
       - uses: aws-actions/configure-aws-credentials@v6
         with:
