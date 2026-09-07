@@ -6,7 +6,7 @@ import { MapboxOverlay } from "@deck.gl/mapbox";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { StyleSpecification } from "maplibre-gl";
 
-import type { ActivityListItem, Basemap, BasemapOptions, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, MapViewMode, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";
+import type { ActivityListItem, Basemap, BasemapOptions, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, MapViewMode, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds, ViewportSize } from "./contracts";
 import { binaryPathData, pickedActivity, routeColors } from "./binaryRoutes";
 import { BrowserDuckDBEngine } from "./engine";
 import { buildBinaryHeatDataCooperative, colorForWeight, type CooperativeHeatResult } from "./heat";
@@ -29,7 +29,7 @@ type MapboxMapInstance = {
   setConfigProperty(importId: string, name: string, value: boolean): void;
   getStyle(): { layers?: Array<{ id: string; type: string; layout?: { visibility?: string } }> };
   setLayoutProperty(layerId: string, name: "visibility", value: "visible" | "none"): void;
-  addSource(id: string, source: { type: "raster-dem"; tiles: string[]; tileSize: number; maxzoom: number; encoding: "terrarium"; attribution: string }): void;
+  addSource(id: string, source: { type: "raster-dem"; url: string; tileSize: number; maxzoom: number } | { type: "raster-dem"; tiles: string[]; tileSize: number; maxzoom: number; encoding: "terrarium"; attribution: string }): void;
   getSource(id: string): unknown;
   setTerrain(terrain: { source: string; exaggeration: number } | null): void;
   isStyleLoaded(): boolean;
@@ -65,8 +65,13 @@ type MapboxMapConstructor = new (options: {
 }) => MapboxMapInstance;
 
 const mapboxAccessToken = (import.meta.env.VITE_MAPBOX_ACCESS_TOKEN as string | undefined)?.trim();
-const terrainTiles = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+const fallbackTerrainTiles = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 const terrainAttribution = "Elevation: Mapzen/Tilezen · AWS Open Data";
+const mapboxTerrainRgbTiles = mapboxAccessToken ? `https://api.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}.pngraw?access_token=${mapboxAccessToken}` : null;
+const terrainTiles = mapboxTerrainRgbTiles ?? fallbackTerrainTiles;
+const terrainDecoder = mapboxTerrainRgbTiles
+  ? { rScaler: 6553.6, gScaler: 25.6, bScaler: 0.1, offset: -10000 }
+  : { rScaler: 256, gScaler: 1, bScaler: 1 / 256, offset: -32768 };
 const blankStyle: StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
 const rasterStyles: Record<"carto-light" | "carto-dark", { tiles: string[]; attribution: string; maxzoom: number }> = {
   "carto-light": { tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
@@ -244,7 +249,10 @@ function applyBasemapOptions(map: MapboxMapInstance, basemap: Basemap, options: 
 
 function applyTerrain(map: MapboxMapInstance, enabled: boolean) {
   if (!enabled) { map.setTerrain(null); return; }
-  if (!map.getSource("squiggles-terrain")) map.addSource("squiggles-terrain", { type: "raster-dem", tiles: [terrainTiles], tileSize: 256, maxzoom: 15, encoding: "terrarium", attribution: terrainAttribution });
+  if (!map.getSource("squiggles-terrain")) {
+    if (mapboxAccessToken) map.addSource("squiggles-terrain", { type: "raster-dem", url: "mapbox://mapbox.mapbox-terrain-dem-v1", tileSize: 512, maxzoom: 14 });
+    else map.addSource("squiggles-terrain", { type: "raster-dem", tiles: [fallbackTerrainTiles], tileSize: 256, maxzoom: 15, encoding: "terrarium", attribution: terrainAttribution });
+  }
   map.setTerrain({ source: "squiggles-terrain", exaggeration: 1 });
 }
 
@@ -267,7 +275,7 @@ function BaseMap({ view, basemap, options, viewMode, theme, layers, spatialDrawi
   const initialBasemap = useRef(basemap);
   const initialTheme = useRef(theme);
   const initialOptions = useRef(options);
-  const initialLayers = useRef(layers);
+  const latestLayers = useRef(layers);
   const appliedStyle = useRef(`${basemap}:${theme}:${JSON.stringify(options)}`);
   const currentBasemap = useRef(basemap);
   const currentOptions = useRef(options);
@@ -275,16 +283,26 @@ function BaseMap({ view, basemap, options, viewMode, theme, layers, spatialDrawi
   const onViewChangeRef = useRef(onViewChange);
   const onInteractionChangeRef = useRef(onInteractionChange);
   const onDeckClickRef = useRef(onDeckClick);
-  currentBasemap.current = basemap; currentOptions.current = options; currentViewMode.current = viewMode;
+  currentBasemap.current = basemap; currentOptions.current = options; currentViewMode.current = viewMode; latestLayers.current = layers;
   onViewChangeRef.current = onViewChange; onInteractionChangeRef.current = onInteractionChange; onDeckClickRef.current = onDeckClick;
   useEffect(() => {
     if (!container.current || !window.mapboxgl) return;
     const initial = initialView.current;
     const MapboxMap = window.mapboxgl.Map;
     map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current, initialOptions.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: true, touchPitch: true, touchZoomRotate: true, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
-    overlay.current = new MapboxOverlay({ interleaved: true, layers: initialLayers.current, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });
-    map.current.addControl(overlay.current);
-    map.current.on("style.load", () => { if (map.current) { applyBasemapOptions(map.current, currentBasemap.current, currentOptions.current); applyTerrain(map.current, currentViewMode.current === "3d"); } });
+    const installOverlay = () => {
+      if (!map.current) return;
+      if (overlay.current) { map.current.removeControl(overlay.current); overlay.current = null; }
+      overlay.current = new MapboxOverlay({ interleaved: true, layers: latestLayers.current, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });
+      map.current.addControl(overlay.current);
+      configureMapboxNavigation(map.current, currentViewMode.current, true);
+    };
+    map.current.on("style.load", () => {
+      if (!map.current) return;
+      applyBasemapOptions(map.current, currentBasemap.current, currentOptions.current);
+      applyTerrain(map.current, currentViewMode.current === "3d");
+      installOverlay();
+    });
     map.current.on("move", () => { if (map.current) onViewChangeRef.current(cameraState(map.current)); });
     map.current.on("movestart", () => onInteractionChangeRef.current(true));
     map.current.on("moveend", () => onInteractionChangeRef.current(false));
@@ -298,10 +316,37 @@ function BaseMap({ view, basemap, options, viewMode, theme, layers, spatialDrawi
     const current = cameraState(map.current);
     if (Math.abs(current.longitude - view.longitude) > 1e-7 || Math.abs(current.latitude - view.latitude) > 1e-7 || Math.abs(current.zoom - view.zoom) > 1e-7 || Math.abs(current.bearing - view.bearing) > 1e-7 || Math.abs(current.pitch - view.pitch) > 1e-7) map.current.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: view.bearing, pitch: view.pitch });
   }, [view]);
-  useEffect(() => { overlay.current?.setProps({ layers, onClick: (info: PickingInfo) => onDeckClickRef.current(info) }); }, [layers]);
+  useEffect(() => { latestLayers.current = layers; overlay.current?.setProps({ layers, onClick: (info: PickingInfo) => onDeckClickRef.current(info) }); }, [layers]);
   useEffect(() => { if (map.current) { configureMapboxNavigation(map.current, viewMode, !spatialDrawing); if (map.current.isStyleLoaded()) applyTerrain(map.current, viewMode === "3d"); } }, [spatialDrawing, viewMode]);
   useEffect(() => { const key = `${basemap}:${theme}:${JSON.stringify(options)}`; if (appliedStyle.current !== key) { appliedStyle.current = key; map.current?.setStyle(mapStyle(basemap, theme, options)); } }, [basemap, options, theme]);
   return <div className="maplibre-base" ref={container} />;
+}
+
+function mercatorMeters([longitude, latitude]: number[]): [number, number] {
+  const radius = 6_378_137;
+  const clamped = Math.max(-85.05112878, Math.min(85.05112878, latitude));
+  return [radius * longitude * Math.PI / 180, radius * Math.log(Math.tan(Math.PI / 4 + clamped * Math.PI / 360))];
+}
+
+function perspectiveViewportSize(view: MapState, element: HTMLElement | null): ViewportSize | undefined {
+  if (!element?.clientWidth || !element.clientHeight) return undefined;
+  const width = element.clientWidth;
+  const height = element.clientHeight;
+  if (view.pitch <= 0) return { width, height };
+  const viewport = new WebMercatorViewport({ ...view, width, height });
+  let finest = Number.POSITIVE_INFINITY;
+  for (const fraction of [0.55, 0.75, 0.9]) {
+    const x = width / 2;
+    const y = height * fraction;
+    const origin = mercatorMeters(viewport.unproject([x, y]));
+    const right = mercatorMeters(viewport.unproject([x + 1, y]));
+    const down = mercatorMeters(viewport.unproject([x, Math.min(height - 1, y + 1)]));
+    const horizontal = Math.hypot(right[0] - origin[0], right[1] - origin[1]);
+    const vertical = Math.hypot(down[0] - origin[0], down[1] - origin[1]);
+    const local = Math.max(horizontal, vertical);
+    if (Number.isFinite(local) && local > 0) finest = Math.min(finest, local);
+  }
+  return Number.isFinite(finest) ? { width, height, effectiveMetersPerPixel: finest } : { width, height };
 }
 
 function viewportBounds(view: MapState, element: HTMLElement | null, respectDrawer = false): ViewportBounds | undefined {
@@ -449,7 +494,7 @@ export function App() {
       setBusy(true); setStatus("Running DuckDB SQL…"); setError("");
       const current = { ...queryTab, sql, mapState };
       const renderStarted = performance.now();
-      const result = await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current));
+      const result = await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current), perspectiveViewportSize(mapState, mapElement.current));
       if (selection !== selectionRequest.current) return;
 
       selectionReady.current = true;
@@ -467,7 +512,7 @@ export function App() {
         if (bounds) {
           const request = ++viewportRequest.current;
           const viewportStarted = performance.now();
-          const latestResult = await engine.renderViewport(latestView.zoom, bounds);
+          const latestResult = await engine.renderViewport(latestView.zoom, bounds, perspectiveViewportSize(latestView, mapElement.current));
           if (selection === selectionRequest.current && request === viewportRequest.current) {
             setRouteBatches(latestResult.batches); setRenderedView(latestView);
             setRenderMetrics({ lod: latestResult.lod, vertexCount: latestResult.vertexCount, geometryBufferBytes: latestResult.geometryBufferBytes, plannedVertexEstimate: latestResult.plannedVertexEstimate, rawVertexEstimate: latestResult.rawVertexEstimate, vertexBudget: latestResult.vertexBudget, visibleCount: latestResult.activityCount, durationMs: performance.now() - viewportStarted, scan: latestResult.scan, cache: latestResult.cache });
@@ -559,7 +604,7 @@ export function App() {
       if (!bounds) return;
       try {
         const renderStarted = performance.now();
-        const result = await engine.renderViewport(view.zoom, bounds);
+        const result = await engine.renderViewport(view.zoom, bounds, perspectiveViewportSize(view, mapElement.current));
         if (request !== viewportRequest.current) return;
         setRouteBatches(result.batches); setRenderedView(view);
         setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
@@ -785,7 +830,7 @@ export function App() {
   const selectedSegments = useMemo(() => selected ? routeSegments([selected], true) : [], [selected]);
   const lineWidths = useMemo(() => lineWidthsForViewport(tab.style.lineWidthScale, mapSize.width, mapSize.height), [mapSize, tab.style.lineWidthScale]);
   const terrainExtension = useMemo(() => new TerrainExtension(), []);
-  const terrainSource = useMemo(() => tab.style.viewMode === "3d" ? new TerrainLayer({ id: "terrain-source", elevationData: terrainTiles, elevationDecoder: { rScaler: 256, gScaler: 1, bScaler: 1 / 256, offset: -32768 }, minZoom: 0, maxZoom: 15, strategy: "no-overlap", operation: "terrain" }) : null, [tab.style.viewMode]);
+  const terrainSource = useMemo(() => tab.style.viewMode === "3d" ? new TerrainLayer({ id: "terrain-source", elevationData: terrainTiles, elevationDecoder: terrainDecoder, minZoom: 0, maxZoom: 14, strategy: "no-overlap", operation: "terrain" }) : null, [tab.style.viewMode]);
   const terrainExtensions = useMemo(() => terrainSource ? [terrainExtension] : [], [terrainExtension, terrainSource]);
   const layers = useMemo(() => [
     ...(terrainSource ? [terrainSource] : []),
