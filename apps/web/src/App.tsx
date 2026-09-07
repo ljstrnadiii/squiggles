@@ -2,7 +2,7 @@ import { WebMercatorViewport, type PickingInfo } from "@deck.gl/core";
 import { PathLayer, ScatterplotLayer } from "@deck.gl/layers";
 import DeckGL from "@deck.gl/react";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import mapboxgl from "mapbox-gl";
+import type { StyleSpecification } from "maplibre-gl";
 
 import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, MapViewMode, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";
 import { binaryPathData, pickedActivity, routeColors } from "./binaryRoutes";
@@ -20,8 +20,26 @@ import { loadRuntimeConfig } from "./auth";
 import { loadPublishedView, publishView } from "./publishing";
 import { loadSystemResolution, saveSystemResolution } from "./resolution";
 
+type MapboxCamera = { center: [number, number]; zoom: number; bearing?: number; pitch?: number };
+type MapboxMapInstance = {
+  jumpTo(options: MapboxCamera): void;
+  setStyle(style: StyleSpecification | string): void;
+  remove(): void;
+};
+type MapboxMapConstructor = new (options: {
+  container: HTMLElement;
+  style: StyleSpecification | string;
+  center: [number, number];
+  zoom: number;
+  bearing: number;
+  pitch: number;
+  interactive: boolean;
+  attributionControl: boolean;
+  accessToken?: string;
+}) => MapboxMapInstance;
+
 const mapboxAccessToken = (import.meta.env.VITE_MAPBOX_ACCESS_TOKEN as string | undefined)?.trim();
-const blankStyle: mapboxgl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
+const blankStyle: StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
 const rasterStyles: Record<"carto-light" | "carto-dark", { tiles: string[]; attribution: string; maxzoom: number }> = {
   "carto-light": { tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
   "carto-dark": { tiles: ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
@@ -148,12 +166,12 @@ function fitBounds([xmin, ymin, xmax, ymax]: [number, number, number, number], m
 
 type TableSort = "name" | "sport" | "date" | "distance" | "gain" | "maximum";
 
-function rasterStyle(basemap: "carto-light" | "carto-dark"): mapboxgl.StyleSpecification {
+function rasterStyle(basemap: "carto-light" | "carto-dark"): StyleSpecification {
   const source = rasterStyles[basemap];
   return { version: 8, sources: { basemap: { type: "raster", tiles: source.tiles, tileSize: 256, maxzoom: source.maxzoom, attribution: source.attribution } }, layers: [{ id: "basemap", type: "raster", source: "basemap" }] };
 }
 
-function mapStyle(basemap: Basemap, theme: "light" | "dark"): mapboxgl.StyleSpecification | string {
+function mapStyle(basemap: Basemap, theme: "light" | "dark"): StyleSpecification | string {
   if (basemap === "blank") return { ...blankStyle, layers: [{ id: "background", type: "background", paint: { "background-color": theme === "dark" ? "#07100e" : "#edf2ef" } }] };
   if (basemap === "carto-light" || basemap === "carto-dark") return rasterStyle(basemap);
   return mapboxAccessToken ? mapboxStyles[basemap] : rasterStyle(theme === "dark" ? "carto-dark" : "carto-light");
@@ -161,24 +179,23 @@ function mapStyle(basemap: Basemap, theme: "light" | "dark"): mapboxgl.StyleSpec
 
 function BaseMap({ view, basemap, theme, pitch }: { view: MapState; basemap: Basemap; theme: "light" | "dark"; pitch: number }) {
   const container = useRef<HTMLDivElement>(null);
-  const map = useRef<mapboxgl.Map | null>(null);
+  const map = useRef<MapboxMapInstance | null>(null);
   const initialView = useRef(view);
   const initialBasemap = useRef(basemap);
   const initialTheme = useRef(theme);
   const initialPitch = useRef(pitch);
   const appliedStyle = useRef(`${basemap}:${theme}`);
   useEffect(() => {
-    if (!container.current) return;
+    if (!container.current || !window.mapboxgl) return;
     const initial = initialView.current;
-    map.current = new mapboxgl.Map({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: 0, pitch: initialPitch.current, interactive: false, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
+    const MapboxMap = window.mapboxgl.Map;
+    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: 0, pitch: initialPitch.current, interactive: false, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
     const closeAttribution = () => container.current?.querySelector(".mapboxgl-ctrl-attrib")?.classList.remove("mapboxgl-compact-show");
     window.setTimeout(closeAttribution, 0);
     window.setTimeout(closeAttribution, 750);
     return () => { map.current?.remove(); map.current = null; };
   }, []);
   useLayoutEffect(() => {
-    // Deck and Mapbox are separate canvases. Apply the exact same camera before
-    // paint so neither layer flashes an older camera during pan/zoom/view changes.
     map.current?.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: 0, pitch });
   }, [pitch, view]);
   useEffect(() => {
@@ -743,4 +760,9 @@ function ScopeToggle({ checked, onChange }: { checked: boolean; onChange: (check
 function Stats({ summary, distance, elevation }: { summary: SummaryStats; distance: (meters: number) => string; elevation: (meters: number) => string }) { return <><div className="stats-grid"><Stat value={distance(summary.distanceM)} label="total distance" /><Stat value={distance(summary.maxDistanceM ?? 0)} label="longest" /><Stat value={distance(summary.activityCount ? summary.distanceM / summary.activityCount : 0)} label="average distance" /><Stat value={`${integer.format(summary.movingSeconds / 3600)} hr`} label="moving time" /><Stat value={`${integer.format(summary.elapsedSeconds / 3600)} hr`} label="elapsed time" /><Stat value={`${integer.format(summary.activityCount ? summary.movingSeconds / summary.activityCount / 60 : 0)} min`} label="average moving" /><Stat value={elevation(summary.elevationGainM)} label="elevation gain" /><Stat value={elevation(summary.elevationLossM)} label="elevation loss" /><Stat value={`${integer.format(summary.activeDays)} days`} label="active days" /><Stat value={integer.format(summary.droppedJumpPoints)} label="GPS spikes cleaned" /><Stat value={integer.format(summary.droppedElevationPoints)} label="elevation spikes cleaned" /></div><div className="sport-counts">{summary.sportCounts.map(item => <span key={item.sport}><strong>{integer.format(item.count)}</strong> {item.sport}</span>)}</div></>; }
 function Diagnostic({ label, value }: { label: string; value: string }) { return <tr><th>{label}</th><td>{value}</td></tr>; }
 function SortableHeader({ label, field, active, descending, onSort }: { label: string; field: TableSort; active: TableSort; descending: boolean; onSort: (field: TableSort) => void }) { return <th aria-sort={active === field ? (descending ? "descending" : "ascending") : "none"}><button aria-label={`Sort by ${label}`} onClick={() => onSort(field)}>{label}{active === field ? <span aria-hidden="true"> {descending ? "↓" : "↑"}</span> : null}</button></th>; }
-declare global { interface Window { showDirectoryPicker(options?: { mode?: "read" | "readwrite" }): Promise<FileSystemDirectoryHandle> } }
+declare global {
+  interface Window {
+    showDirectoryPicker(options?: { mode?: "read" | "readwrite" }): Promise<FileSystemDirectoryHandle>;
+    mapboxgl?: { Map: MapboxMapConstructor };
+  }
+}
