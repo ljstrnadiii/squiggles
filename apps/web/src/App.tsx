@@ -74,6 +74,8 @@ function tabsWithUrlSettings(tabs: QueryTab[]) {
   const longitude = finiteParameter(parameters, "lng", -180, 180);
   const latitude = finiteParameter(parameters, "lat", -85, 85);
   const zoom = finiteParameter(parameters, "zoom", 0, 24);
+  const bearing = finiteParameter(parameters, "bearing", -180, 180);
+  const pitch = finiteParameter(parameters, "pitch", 0, 60);
   const basemap = parameters.get("basemap");
   const viewMode = parameters.get("view");
   const palette = parameters.get("palette");
@@ -82,11 +84,11 @@ function tabsWithUrlSettings(tabs: QueryTab[]) {
   const color = parameters.get("color");
   const next: QueryTab = {
     ...target,
-    mapState: longitude === undefined || latitude === undefined || zoom === undefined ? target.mapState : { longitude, latitude, zoom },
+    mapState: longitude === undefined || latitude === undefined || zoom === undefined ? target.mapState : { longitude, latitude, zoom, bearing: bearing ?? target.mapState.bearing ?? 0, pitch: pitch ?? target.mapState.pitch ?? 0 },
     style: {
       ...target.style,
       ...(basemap && basemaps.has(basemap as Basemap) ? { basemap: basemap as Basemap } : {}),
-      ...(viewMode && viewModes.has(viewMode as MapViewMode) ? { viewMode: viewMode as MapViewMode } : {}),
+      ...(viewMode && viewModes.has(viewMode as MapViewMode) ? { viewMode: viewMode as MapViewMode } : pitch !== undefined && pitch > 0 ? { viewMode: "3d" as const } : {}),
       ...(palette && heatPalettes.has(palette as HeatPalette) ? { heatPalette: palette as HeatPalette } : {}),
       ...(temperature === undefined ? {} : { heatTemperature: temperature }),
       ...(thickness === undefined ? {} : { lineWidthScale: thickness }),
@@ -120,6 +122,8 @@ function replaceUrlSettings(tab: QueryTab, view: MapState, units: UnitSystem) {
   url.searchParams.set("lng", view.longitude.toFixed(5));
   url.searchParams.set("lat", view.latitude.toFixed(5));
   url.searchParams.set("zoom", view.zoom.toFixed(2));
+  url.searchParams.set("bearing", view.bearing.toFixed(1));
+  url.searchParams.set("pitch", view.pitch.toFixed(1));
   url.searchParams.set("basemap", tab.style.basemap);
   url.searchParams.set("view", tab.style.viewMode);
   url.searchParams.set("heat", tab.style.heatEnabled ? "1" : "0");
@@ -153,7 +157,7 @@ function viewportInsets(element: HTMLElement | null): ViewportInsets {
 function fitBounds([xmin, ymin, xmax, ymax]: [number, number, number, number], maximumZoom = 12, element: HTMLElement | null = null): MapState {
   if (!element?.clientWidth || !element.clientHeight) {
     const span = Math.max(xmax - xmin, (ymax - ymin) * 1.6, 0.001);
-    return { longitude: (xmin + xmax) / 2, latitude: (ymin + ymax) / 2, zoom: Math.max(1, Math.min(maximumZoom, Math.log2(360 / span) - 0.8)) };
+    return { longitude: (xmin + xmax) / 2, latitude: (ymin + ymax) / 2, zoom: Math.max(1, Math.min(maximumZoom, Math.log2(360 / span) - 0.8)), bearing: 0, pitch: 0 };
   }
   const occupied = viewportInsets(element);
   const viewport = new WebMercatorViewport({ width: element.clientWidth, height: element.clientHeight });
@@ -161,7 +165,7 @@ function fitBounds([xmin, ymin, xmax, ymax]: [number, number, number, number], m
     maxZoom: maximumZoom,
     padding: { top: 24 + occupied.top, right: 24 + occupied.right, bottom: 24 + occupied.bottom, left: 24 + occupied.left },
   });
-  return { longitude: fitted.longitude, latitude: fitted.latitude, zoom: fitted.zoom };
+  return { longitude: fitted.longitude, latitude: fitted.latitude, zoom: fitted.zoom, bearing: 0, pitch: 0 };
 }
 
 type TableSort = "name" | "sport" | "date" | "distance" | "gain" | "maximum";
@@ -177,27 +181,26 @@ function mapStyle(basemap: Basemap, theme: "light" | "dark"): StyleSpecification
   return mapboxAccessToken ? mapboxStyles[basemap] : rasterStyle(theme === "dark" ? "carto-dark" : "carto-light");
 }
 
-function BaseMap({ view, basemap, theme, pitch }: { view: MapState; basemap: Basemap; theme: "light" | "dark"; pitch: number }) {
+function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; theme: "light" | "dark" }) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapboxMapInstance | null>(null);
   const initialView = useRef(view);
   const initialBasemap = useRef(basemap);
   const initialTheme = useRef(theme);
-  const initialPitch = useRef(pitch);
   const appliedStyle = useRef(`${basemap}:${theme}`);
   useEffect(() => {
     if (!container.current || !window.mapboxgl) return;
     const initial = initialView.current;
     const MapboxMap = window.mapboxgl.Map;
-    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: 0, pitch: initialPitch.current, interactive: false, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
+    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: false, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
     const closeAttribution = () => container.current?.querySelector(".mapboxgl-ctrl-attrib")?.classList.remove("mapboxgl-compact-show");
     window.setTimeout(closeAttribution, 0);
     window.setTimeout(closeAttribution, 750);
     return () => { map.current?.remove(); map.current = null; };
   }, []);
   useLayoutEffect(() => {
-    map.current?.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: 0, pitch });
-  }, [pitch, view]);
+    map.current?.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: view.bearing ?? 0, pitch: view.pitch ?? 0 });
+  }, [view]);
   useEffect(() => {
     const key = `${basemap}:${theme}`;
     if (appliedStyle.current === key) return;
@@ -207,9 +210,9 @@ function BaseMap({ view, basemap, theme, pitch }: { view: MapState; basemap: Bas
   return <div className="maplibre-base" ref={container} />;
 }
 
-function viewportBounds(view: MapState, element: HTMLElement | null, respectDrawer = false, pitch = 0): ViewportBounds | undefined {
+function viewportBounds(view: MapState, element: HTMLElement | null, respectDrawer = false): ViewportBounds | undefined {
   if (!element) return undefined;
-  const viewport = new WebMercatorViewport({ ...view, bearing: 0, pitch, width: element.clientWidth, height: element.clientHeight });
+  const viewport = new WebMercatorViewport({ ...view, bearing: view.bearing ?? 0, pitch: view.pitch ?? 0, width: element.clientWidth, height: element.clientHeight });
   if (respectDrawer) {
     const inset = viewportInsets(element);
     const southwest = viewport.unproject([inset.left, element.clientHeight - inset.bottom]);
@@ -286,7 +289,6 @@ export function App() {
   const autoOpened = useRef(false);
   const initialUrlCamera = useRef(hasUrlCamera());
   const effectiveTheme = themeMode === "system" ? (systemDark ? "dark" : "light") : themeMode;
-  const mapPitch = tab.style.viewMode === "3d" ? 50 : 0;
   const logoUrl = effectiveTheme === "dark" ? "/logo-dark.png" : "/logo-light.png";
   const refreshIdentity = useCallback(() => setSessionIdentity(identityFromSession(loadSession())), []);
   const distance = (meters: number) => `${integer.format(distanceValue(meters, units))} ${distanceUnit(units)}`;
@@ -349,8 +351,7 @@ export function App() {
       setBusy(true); setStatus("Running DuckDB SQL…"); setError("");
       const current = { ...queryTab, sql, mapState };
       const renderStarted = performance.now();
-      const queryPitch = queryTab.style.viewMode === "3d" ? 50 : 0;
-      const result = await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current, false, queryPitch));
+      const result = await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current));
       setRouteBatches(result.batches); setRenderedView(mapState);
       selectionReady.current = true;
       setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
@@ -431,7 +432,7 @@ export function App() {
     const request = ++viewportRequest.current;
     if (!ready.current || !selectionReady.current || mapInteracting) return;
     const timer = window.setTimeout(async () => {
-      const bounds = viewportBounds(view, mapElement.current, false, mapPitch);
+      const bounds = viewportBounds(view, mapElement.current);
       if (!bounds) return;
       try {
         const renderStarted = performance.now();
@@ -444,13 +445,13 @@ export function App() {
       }
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [engine, mapInteracting, mapPitch, systemResolution, view]);
+  }, [engine, mapInteracting, systemResolution, view]);
 
   useEffect(() => {
     if (!viewportScope || (!statsOpen && !tableOpen) || !selectionReady.current) return;
     const request = ++panelRequest.current;
     const timer = window.setTimeout(async () => {
-      const bounds = viewportBounds(renderedView, mapElement.current, true, mapPitch);
+      const bounds = viewportBounds(renderedView, mapElement.current, true);
       if (!bounds) return;
       try {
         setScopeLoading(true); setError("");
@@ -468,7 +469,7 @@ export function App() {
       }
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [engine, mapPitch, renderedView, statsOpen, tableOpen, viewportScope]);
+  }, [engine, renderedView, statsOpen, tableOpen, viewportScope]);
 
   function choose(next: QueryTab, openQuery = false) {
     const isCurrent = next.id === active;
@@ -503,6 +504,12 @@ export function App() {
     const updated = tabs.map(item => item.id === tab.id ? nextTab : item);
     setTabs(updated); saveTabs(updated);
     if (style.cleanEnabled !== undefined && style.cleanEnabled !== tab.style.cleanEnabled && ready.current) void run(nextTab, view, tab.sql);
+  }
+  function changeViewMode(viewMode: MapViewMode) {
+    changeStyle({ viewMode });
+    setView(current => viewMode === "2d"
+      ? { ...current, bearing: 0, pitch: 0 }
+      : { ...current, pitch: current.pitch > 0 ? current.pitch : 50 });
   }
   function saveSpatialFilter(spatialFilter: QueryTab["spatialFilter"], rerun: boolean) {
     const nextTab = { ...tab, spatialFilter };
@@ -697,7 +704,7 @@ export function App() {
       <header className="toolbar-header"><div><span className="eyebrow">QUERY TAB</span><input aria-label="Tab title" className="rename" title="Name this saved query tab" value={tab.title} onChange={event => rename(event.target.value)} /></div><button aria-label="Close query settings" onClick={() => setToolbarOpen(false)}>×</button></header>
       <section className="toolbar-section"><h3>Map</h3><div className="settings-grid">
         <label data-tooltip="Use Mapbox Standard for general context, Satellite for imagery, Outdoors for contours and trails, or CARTO for maximum route contrast.">Basemap<select className="basemap-select" aria-label="Basemap" value={tab.style.basemap} onChange={event => changeStyle({ basemap: event.target.value as Basemap })}><option value="mapbox-standard">Mapbox Standard</option><option value="mapbox-satellite">Mapbox Satellite</option><option value="mapbox-outdoors">Mapbox Outdoors / Topo</option><option value="carto-light">CARTO Light</option><option value="carto-dark">CARTO Dark</option><option value="blank">Blank / offline</option></select></label>
-        <label data-tooltip="Tilt the Web Mercator camera without enabling terrain, keeping routes and the basemap on the same projection.">View<div className="view-mode-control" role="group" aria-label="Map view"><button type="button" aria-label="Use 2D map view" aria-pressed={tab.style.viewMode === "2d"} onClick={() => changeStyle({ viewMode: "2d" })}>2D</button><button type="button" aria-label="Use 3D map view" aria-pressed={tab.style.viewMode === "3d"} onClick={() => changeStyle({ viewMode: "3d" })}>3D</button></div></label>
+        <label data-tooltip="Tilt the Web Mercator camera without enabling terrain, keeping routes and the basemap on the same projection.">View<div className="view-mode-control" role="group" aria-label="Map view"><button type="button" aria-label="Use 2D map view" aria-pressed={tab.style.viewMode === "2d"} onClick={() => changeViewMode("2d")}>2D</button><button type="button" aria-label="Use 3D map view" aria-pressed={tab.style.viewMode === "3d"} onClick={() => changeViewMode("3d")}>3D</button></div></label>
         <label data-tooltip="Choose the base route and hover-highlight color.">Route color<input aria-label="Route color" type="color" value={tab.style.color} onChange={event => changeStyle({ color: event.target.value })} /></label>
         <label className="temperature" data-tooltip="Multiply a route width equal to 0.15% of the map's shorter dimension. The width stays visually consistent at every zoom."><span>Thickness</span><input aria-label="Route thickness" type="range" min="0.25" max="4" step="0.05" value={tab.style.lineWidthScale} onChange={event => changeStyle({ lineWidthScale: Number(event.target.value) })} /><output>{tab.style.lineWidthScale.toFixed(2)}×</output></label>
       </div><p className="network-note">{mapboxAccessToken ? "Wi‑Fi recommended for the best experience with remote archives and basemaps." : "Mapbox token not configured; Mapbox choices use a CARTO fallback locally."}</p></section>
@@ -714,11 +721,11 @@ export function App() {
     {error && <div className="error global-error" role="alert"><strong>Something needs attention</strong><span>{error}</span><button className="error-close" aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
 
     <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
-      <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} pitch={mapPitch} />
-      <DeckGL controller={spatialDrawing ? false : { dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: mapPitch }} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
+      <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />
+      <DeckGL controller={spatialDrawing ? false : tab.style.viewMode === "3d" ? { dragRotate: true, touchRotate: true } : { dragRotate: false, touchRotate: false }} layers={layers} viewState={view} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
         if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isZooming) return;
         const next = viewState as MapState;
-        setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });
+        setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom, bearing: next.bearing ?? 0, pitch: next.pitch ?? 0 });
       }} onClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) { const longitude = coordinate[0], latitude = coordinate[1]; if (longitude !== undefined && latitude !== undefined) setSpatialDraft(previous => [...previous, [longitude, latitude]]); } return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />
       {spatialDrawing && <><div className="spatial-draw-tools" role="group" aria-label="Polygon drawing controls"><button aria-label="Undo last polygon vertex" title="Undo last point" disabled={spatialDraft.length === 0} onClick={() => setSpatialDraft(previous => previous.slice(0, -1))}>↶</button><button className="accept" aria-label="Accept polygon" title="Accept polygon" disabled={spatialDraft.length < 3} onClick={acceptSpatialDraw}>✓</button></div><div className="spatial-draw-hint">Tap the map to add polygon vertices · ↶ undo · ✓ apply</div></>}
       {!spatialDrawing && hover?.origin === "map" && <div className="tooltip" style={{ left: hover.x + 12, top: hover.y + 12 }}><strong>{hover.item.name}</strong><span>{hover.item.sportType} · {hover.item.startTime?.slice(0, 10)}</span><span>{distance(hover.item.distanceM ?? 0)} · {elevation(hover.item.elevationGainM ?? 0)} gain</span></div>}
