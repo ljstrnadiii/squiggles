@@ -24,6 +24,7 @@ type MapboxCamera = { center: [number, number]; zoom: number; bearing?: number; 
 type MapboxMapInstance = {
   jumpTo(options: MapboxCamera): void;
   setStyle(style: StyleSpecification | string): void;
+  addControl(control: object): void;
   remove(): void;
 };
 type MapboxMapConstructor = new (options: {
@@ -35,8 +36,16 @@ type MapboxMapConstructor = new (options: {
   pitch: number;
   interactive: boolean;
   attributionControl: boolean;
+  antialias?: boolean;
   accessToken?: string;
 }) => MapboxMapInstance;
+type DeckLayerLike = { props: object; constructor: { name: string; layerName?: string } };
+type StandaloneLayerConstructor = new (props: object) => object;
+type StandaloneMapboxOverlay = { setProps(props: { layers: object[] }): void };
+type StandaloneDeckNamespace = {
+  MapboxOverlay: new (props: { interleaved: boolean; layers: object[] }) => StandaloneMapboxOverlay;
+  [name: string]: unknown;
+};
 
 const mapboxAccessToken = (import.meta.env.VITE_MAPBOX_ACCESS_TOKEN as string | undefined)?.trim();
 const blankStyle: StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
@@ -181,26 +190,50 @@ function mapStyle(basemap: Basemap, theme: "light" | "dark"): StyleSpecification
   return mapboxAccessToken ? mapboxStyles[basemap] : rasterStyle(theme === "dark" ? "carto-dark" : "carto-light");
 }
 
-function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; theme: "light" | "dark" }) {
+function standaloneLayers(layers: readonly object[]) {
+  const namespace = window.deck;
+  if (!namespace) return [];
+  return layers.flatMap(layer => {
+    const source = layer as DeckLayerLike;
+    const name = source.constructor.layerName ?? source.constructor.name;
+    const candidate = namespace[name];
+    if (typeof candidate !== "function") return [];
+    const Constructor = candidate as StandaloneLayerConstructor;
+    return [new Constructor({ ...source.props, pickable: false })];
+  });
+}
+
+function BaseMap({ view, basemap, theme, layers }: { view: MapState; basemap: Basemap; theme: "light" | "dark"; layers: readonly object[] }) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapboxMapInstance | null>(null);
+  const overlay = useRef<StandaloneMapboxOverlay | null>(null);
   const initialView = useRef(view);
   const initialBasemap = useRef(basemap);
   const initialTheme = useRef(theme);
+  const initialLayers = useRef(layers);
   const appliedStyle = useRef(`${basemap}:${theme}`);
   useEffect(() => {
     if (!container.current || !window.mapboxgl) return;
     const initial = initialView.current;
     const MapboxMap = window.mapboxgl.Map;
-    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: false, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
+    const mapInstance = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: false, attributionControl: true, antialias: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
+    map.current = mapInstance;
+    if (window.deck) {
+      const deckOverlay = new window.deck.MapboxOverlay({ interleaved: true, layers: standaloneLayers(initialLayers.current) });
+      overlay.current = deckOverlay;
+      mapInstance.addControl(deckOverlay);
+    }
     const closeAttribution = () => container.current?.querySelector(".mapboxgl-ctrl-attrib")?.classList.remove("mapboxgl-compact-show");
     window.setTimeout(closeAttribution, 0);
     window.setTimeout(closeAttribution, 750);
-    return () => { map.current?.remove(); map.current = null; };
+    return () => { mapInstance.remove(); overlay.current = null; map.current = null; };
   }, []);
   useLayoutEffect(() => {
     map.current?.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: view.bearing ?? 0, pitch: view.pitch ?? 0 });
   }, [view]);
+  useEffect(() => {
+    overlay.current?.setProps({ layers: standaloneLayers(layers) });
+  }, [layers]);
   useEffect(() => {
     const key = `${basemap}:${theme}`;
     if (appliedStyle.current === key) return;
@@ -365,10 +398,6 @@ export function App() {
         setRouteBatches(result.batches); setRenderedView(mapState);
         setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
       } else {
-        // SQL establishes the new selection, but its geometry belongs to the
-        // camera from query start. Never flash those stale batches back onto a
-        // camera the user has already moved; render the selection at the latest
-        // viewport instead.
         const bounds = viewportBounds(latestView, mapElement.current);
         if (bounds) {
           const request = ++viewportRequest.current;
@@ -750,8 +779,8 @@ export function App() {
     {error && <div className="error global-error" role="alert"><strong>Something needs attention</strong><span>{error}</span><button className="error-close" aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
 
     <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
-      <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />
-      <DeckGL controller={spatialDrawing ? false : tab.style.viewMode === "3d" ? { dragRotate: true, touchRotate: true } : { dragRotate: false, touchRotate: false }} layers={layers} viewState={view} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isRotating || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
+      <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} layers={layers} />
+      <DeckGL style={{ opacity: 0 }} controller={spatialDrawing ? false : tab.style.viewMode === "3d" ? { dragRotate: true, touchRotate: true } : { dragRotate: false, touchRotate: false }} layers={layers} viewState={view} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isRotating || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
         if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isRotating && !interactionState.isZooming) return;
         const next = viewState as MapState;
         setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom, bearing: next.bearing ?? 0, pitch: next.pitch ?? 0 });
@@ -800,5 +829,6 @@ declare global {
   interface Window {
     showDirectoryPicker(options?: { mode?: "read" | "readwrite" }): Promise<FileSystemDirectoryHandle>;
     mapboxgl?: { Map: MapboxMapConstructor };
+    deck?: StandaloneDeckNamespace;
   }
 }
