@@ -1,9 +1,14 @@
-import type { QueryTab } from "./contracts";
+import type { Basemap, QueryTab } from "./contracts";
 
 const KEY = "activity-map.tabs.v1";
 export const ELECTRIC_BLUE = "#476bcc";
 const legacyDefaultColors = new Set(["#dcff4e", "#ff8a4c", "#315fd5", "#0000ff"]);
-const defaultStyle = { color: ELECTRIC_BLUE, lineWidthScale: 1, basemap: "streets" as const, heatEnabled: true, heatPalette: "sunset" as const, heatTemperature: 1.7, cleanEnabled: false };
+const defaultStyle = { color: ELECTRIC_BLUE, lineWidthScale: 1, basemap: "mapbox-standard" as const, viewMode: "2d" as const, heatEnabled: true, heatPalette: "sunset" as const, heatTemperature: 1.7, cleanEnabled: false };
+const legacyBasemaps: Record<string, Basemap> = {
+  streets: "mapbox-standard",
+  topo: "mapbox-outdoors",
+  imagery: "mapbox-satellite",
+};
 
 export const defaultTab: QueryTab = {
   id: "all",
@@ -35,7 +40,8 @@ export function loadTabs(): QueryTab[] {
       const legacyScale = tab.style.lineWidth === undefined ? undefined : tab.style.lineWidth / 2;
       const currentStyle = { ...tab.style };
       delete currentStyle.lineWidth;
-      const merged = { ...defaultStyle, ...currentStyle, ...(legacyScale === undefined ? {} : { lineWidthScale: legacyScale }) };
+      const migratedBasemap = legacyBasemaps[currentStyle.basemap] ?? currentStyle.basemap;
+      const merged = { ...defaultStyle, ...currentStyle, basemap: migratedBasemap, ...(legacyScale === undefined ? {} : { lineWidthScale: legacyScale }) };
       const style = { ...merged, lineWidthScale: Math.max(0.25, Math.min(4, merged.lineWidthScale)) };
       return { ...tab, style: { ...style, color: normalizeRouteColor(style.color) } };
     }) : [defaultTab];
