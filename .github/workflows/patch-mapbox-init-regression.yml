@@ -1,12 +1,12 @@
 name: Patch Mapbox init regression
 on:
   push:
-    branches: [fix/mapbox-init-regression]
+    branches:
+      - fix/mapbox-init-regression
 permissions:
   contents: write
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -46,8 +46,8 @@ jobs:
     };
     attachOverlay();
     map.current.on("load", attachOverlay);'''
-          if s.count(old) != 1:
-              raise SystemExit(f'overlay block matches: {s.count(old)}')
+          if old not in s:
+              raise SystemExit('expected overlay block not found')
           s = s.replace(old, new)
           p.write_text(s)
           PY
@@ -62,5 +62,6 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add apps/web/src/App.tsx
+          git diff --cached --quiet && exit 0
           git commit -m "fix: restore Mapbox overlay initialization"
           git push origin HEAD:fix/mapbox-init-regression
