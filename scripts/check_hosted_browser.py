@@ -56,6 +56,9 @@ def exercise_pitched_routes(browser: Browser, dataset_id: str) -> None:
             has_touch=True,
         )
         page = context.new_page()
+        cdp = context.new_cdp_session(page)
+        cdp.send("Network.enable")
+        cdp.send("Network.setCacheDisabled", {"cacheDisabled": True})
         page_errors: list[str] = []
         page.on(
             "pageerror",
@@ -63,8 +66,9 @@ def exercise_pitched_routes(browser: Browser, dataset_id: str) -> None:
         )
         page.goto(
             (
-                f"{base}?lng=-105.2705&lat=40.0150&zoom=11&bearing=0&pitch={pitch}"
-                f"&basemap=carto-light&view={mode}&heat=0&color=%23ff0000"
+                f"{base}?cachebust={time.time_ns()}&lng=-105.2705&lat=40.0150&zoom=11"
+                f"&bearing=0&pitch={pitch}&basemap=mapbox-standard&view={mode}"
+                "&heat=0&color=%23ff0000"
             ),
             wait_until="domcontentloaded",
             timeout=30_000,
@@ -76,13 +80,18 @@ def exercise_pitched_routes(browser: Browser, dataset_id: str) -> None:
         if mode == "3d" and "pitch=50" not in page.url:
             raise RuntimeError(f"3D pitch was replaced: {page.url}")
 
-        cdp = context.new_cdp_session(page)
         screenshot = base64.b64decode(
             cdp.send("Page.captureScreenshot", {"format": "png", "fromSurface": True})["data"]
         )
         counts[mode] = route_pixels(screenshot)
+        print(f"INITIAL_{mode.upper()}_ROUTE_PIXELS", counts[mode])
 
         if mode == "3d":
+            if counts[mode] <= 5:
+                raise RuntimeError(
+                    "initial pitched routes were not visibly rendered before interaction: "
+                    f"{counts}"
+                )
             rect = page.locator(".maplibre-base").bounding_box()
             if not rect:
                 raise RuntimeError("map canvas has no bounds")
@@ -132,8 +141,8 @@ def exercise_pitched_routes(browser: Browser, dataset_id: str) -> None:
     print("ROUTE_PIXELS", counts)
     if counts["2d"] <= 5:
         raise RuntimeError(f"2D routes were not visibly rendered: {counts}")
-    if counts["3d"] <= 5 or counts["3d"] <= counts["2d"] * 0.1:
-        raise RuntimeError(f"pitched routes were not visibly rendered: {counts}")
+    if counts["3d"] <= counts["2d"] * 0.1:
+        raise RuntimeError(f"pitched routes were not sufficiently visible: {counts}")
 
 
 def exercise_startup_interaction(browser: Browser, dataset_id: str) -> None:
