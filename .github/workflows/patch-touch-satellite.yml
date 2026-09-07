@@ -1,0 +1,92 @@
+name: Patch touch and clean satellite
+
+on:
+  push:
+    branches:
+      - fix/3d-touch-and-clean-satellite
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/3d-touch-and-clean-satellite
+      - name: Apply targeted patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old[:120]!r}")
+              p.write_text(text.replace(old, new))
+
+          replace_once(
+              'apps/web/src/contracts.ts',
+              'export type Basemap = "mapbox-standard" | "mapbox-satellite" | "mapbox-outdoors" | "carto-light" | "carto-dark" | "blank";',
+              'export type Basemap = "mapbox-standard" | "mapbox-satellite" | "mapbox-satellite-clean" | "mapbox-outdoors" | "carto-light" | "carto-dark" | "blank";',
+          )
+
+          replace_once(
+              'apps/web/src/App.tsx',
+              '  setStyle(style: StyleSpecification | string): void;\n  remove(): void;',
+              '  setStyle(style: StyleSpecification | string): void;\n  setConfigProperty(importId: string, name: string, value: boolean): void;\n  on(event: "style.load", listener: () => void): void;\n  remove(): void;',
+          )
+          replace_once(
+              'apps/web/src/App.tsx',
+              'const mapboxStyles: Record<"mapbox-standard" | "mapbox-satellite" | "mapbox-outdoors", string> = {\n  "mapbox-standard": "mapbox://styles/mapbox/standard",\n  "mapbox-satellite": "mapbox://styles/mapbox/standard-satellite",\n  "mapbox-outdoors": "mapbox://styles/mapbox/outdoors-v12",\n};',
+              'const mapboxStyles: Record<"mapbox-standard" | "mapbox-satellite" | "mapbox-satellite-clean" | "mapbox-outdoors", string> = {\n  "mapbox-standard": "mapbox://styles/mapbox/standard",\n  "mapbox-satellite": "mapbox://styles/mapbox/standard-satellite",\n  "mapbox-satellite-clean": "mapbox://styles/mapbox/standard-satellite",\n  "mapbox-outdoors": "mapbox://styles/mapbox/outdoors-v12",\n};',
+          )
+          replace_once(
+              'apps/web/src/App.tsx',
+              'const basemaps = new Set<Basemap>(["mapbox-standard", "mapbox-satellite", "mapbox-outdoors", "carto-light", "carto-dark", "blank"]);',
+              'const basemaps = new Set<Basemap>(["mapbox-standard", "mapbox-satellite", "mapbox-satellite-clean", "mapbox-outdoors", "carto-light", "carto-dark", "blank"]);',
+          )
+          replace_once(
+              'apps/web/src/App.tsx',
+              'function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; theme: "light" | "dark" }) {',
+              'function applySatelliteConfig(map: MapboxMapInstance, basemap: Basemap) {\n  if (basemap !== "mapbox-satellite" && basemap !== "mapbox-satellite-clean") return;\n  const visible = basemap === "mapbox-satellite";\n  for (const property of ["showRoadsAndTransit", "showPedestrianRoads", "showPlaceLabels", "showPointOfInterestLabels", "showRoadLabels", "showTransitLabels", "showAdminBoundaries"]) {\n    map.setConfigProperty("basemap", property, visible);\n  }\n}\n\nfunction BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; theme: "light" | "dark" }) {',
+          )
+          replace_once(
+              'apps/web/src/App.tsx',
+              '  const appliedStyle = useRef(`${basemap}:${theme}`);\n  useEffect(() => {',
+              '  const appliedStyle = useRef(`${basemap}:${theme}`);\n  const currentBasemap = useRef(basemap);\n  currentBasemap.current = basemap;\n  useEffect(() => {',
+          )
+          replace_once(
+              'apps/web/src/App.tsx',
+              '    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: false, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });\n    const closeAttribution',
+              '    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: false, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });\n    map.current.on("style.load", () => { if (map.current) applySatelliteConfig(map.current, currentBasemap.current); });\n    const closeAttribution',
+          )
+          replace_once(
+              'apps/web/src/App.tsx',
+              '<option value="mapbox-standard">Mapbox Standard</option><option value="mapbox-satellite">Mapbox Satellite</option><option value="mapbox-outdoors">Mapbox Outdoors / Topo</option>',
+              '<option value="mapbox-standard">Mapbox Standard</option><option value="mapbox-satellite">Mapbox Satellite</option><option value="mapbox-satellite-clean">Mapbox Satellite · imagery only</option><option value="mapbox-outdoors">Mapbox Outdoors / Topo</option>',
+          )
+          replace_once(
+              'apps/web/src/App.tsx',
+              '<DeckGL controller={spatialDrawing ? false : tab.style.viewMode === "3d" ? { dragRotate: true, touchRotate: true } : { dragRotate: false, touchRotate: false }} layers={layers}',
+              '<DeckGL controller={spatialDrawing ? false : tab.style.viewMode === "3d" ? { dragRotate: true, touchRotate: true, touchZoom: true } : { dragRotate: false, touchRotate: false }} touchAction="none" eventRecognizerOptions={{ multipan: { pointers: 2, threshold: 1 } }} layers={layers}',
+          )
+
+          test = Path('apps/web/src/App.test.tsx')
+          text = test.read_text()
+          old = 'expect(screen.getByRole("option", { name: "Mapbox Satellite" })).toBeInTheDocument();'
+          new = old + '\n    expect(screen.getByRole("option", { name: "Mapbox Satellite · imagery only" })).toBeInTheDocument();'
+          if text.count(old) != 1:
+              raise SystemExit('App.test.tsx expected satellite option assertion once')
+          test.write_text(text.replace(old, new))
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/web/src/App.tsx apps/web/src/App.test.tsx apps/web/src/contracts.ts
+          git commit -m "fix: enable two-finger pitch and clean satellite"
+          git push origin HEAD:fix/3d-touch-and-clean-satellite
