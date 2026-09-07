@@ -24,6 +24,8 @@ type MapboxCamera = { center: [number, number]; zoom: number; bearing?: number; 
 type MapboxMapInstance = {
   jumpTo(options: MapboxCamera): void;
   setStyle(style: StyleSpecification | string): void;
+  setConfigProperty(importId: string, name: string, value: boolean): void;
+  on(event: "style.load", listener: () => void): void;
   remove(): void;
 };
 type MapboxMapConstructor = new (options: {
@@ -44,9 +46,10 @@ const rasterStyles: Record<"carto-light" | "carto-dark", { tiles: string[]; attr
   "carto-light": { tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
   "carto-dark": { tiles: ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
 };
-const mapboxStyles: Record<"mapbox-standard" | "mapbox-satellite" | "mapbox-outdoors", string> = {
+const mapboxStyles: Record<"mapbox-standard" | "mapbox-satellite" | "mapbox-satellite-clean" | "mapbox-outdoors", string> = {
   "mapbox-standard": "mapbox://styles/mapbox/standard",
   "mapbox-satellite": "mapbox://styles/mapbox/standard-satellite",
+  "mapbox-satellite-clean": "mapbox://styles/mapbox/standard-satellite",
   "mapbox-outdoors": "mapbox://styles/mapbox/outdoors-v12",
 };
 const empty: SummaryStats = { activityCount: 0, distanceM: 0, elapsedSeconds: 0, movingSeconds: 0, elevationGainM: 0, elevationLossM: 0, minElevationM: null, maxElevationM: null, maxDistanceM: null, activeDays: 0, droppedJumpPoints: 0, droppedElevationPoints: 0, sportCounts: [], firstActivity: null, lastActivity: null };
@@ -57,7 +60,7 @@ const emptyHeat: CooperativeHeatResult = { scores: new Map(), sourceVertices: 0,
 const bytes = (value: number) => value < 1024 ? `${value} B` : value < 1024 ** 2 ? `${(value / 1024).toFixed(1)} KiB` : value < 1024 ** 3 ? `${(value / 1024 ** 2).toFixed(1)} MiB` : `${(value / 1024 ** 3).toFixed(2)} GiB`;
 const percent = (part: number, total: number) => total > 0 ? `${(part / total * 100).toFixed(1)}%` : "—";
 const SqlEditor = lazy(() => import("./SqlEditor").then(module => ({ default: module.SqlEditor })));
-const basemaps = new Set<Basemap>(["mapbox-standard", "mapbox-satellite", "mapbox-outdoors", "carto-light", "carto-dark", "blank"]);
+const basemaps = new Set<Basemap>(["mapbox-standard", "mapbox-satellite", "mapbox-satellite-clean", "mapbox-outdoors", "carto-light", "carto-dark", "blank"]);
 const viewModes = new Set<MapViewMode>(["2d", "3d"]);
 const heatPalettes = new Set<HeatPalette>(["sunset", "viridis", "fire", "ice"]);
 function finiteParameter(parameters: URLSearchParams, name: string, minimum: number, maximum: number) {
@@ -181,6 +184,14 @@ function mapStyle(basemap: Basemap, theme: "light" | "dark"): StyleSpecification
   return mapboxAccessToken ? mapboxStyles[basemap] : rasterStyle(theme === "dark" ? "carto-dark" : "carto-light");
 }
 
+function applySatelliteConfig(map: MapboxMapInstance, basemap: Basemap) {
+  if (basemap !== "mapbox-satellite" && basemap !== "mapbox-satellite-clean") return;
+  const visible = basemap === "mapbox-satellite";
+  for (const property of ["showRoadsAndTransit", "showPedestrianRoads", "showPlaceLabels", "showPointOfInterestLabels", "showRoadLabels", "showTransitLabels", "showAdminBoundaries"]) {
+    map.setConfigProperty("basemap", property, visible);
+  }
+}
+
 function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; theme: "light" | "dark" }) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapboxMapInstance | null>(null);
@@ -188,11 +199,14 @@ function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; t
   const initialBasemap = useRef(basemap);
   const initialTheme = useRef(theme);
   const appliedStyle = useRef(`${basemap}:${theme}`);
+  const currentBasemap = useRef(basemap);
+  currentBasemap.current = basemap;
   useEffect(() => {
     if (!container.current || !window.mapboxgl) return;
     const initial = initialView.current;
     const MapboxMap = window.mapboxgl.Map;
     map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: false, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
+    map.current.on("style.load", () => { if (map.current) applySatelliteConfig(map.current, currentBasemap.current); });
     const closeAttribution = () => container.current?.querySelector(".mapboxgl-ctrl-attrib")?.classList.remove("mapboxgl-compact-show");
     window.setTimeout(closeAttribution, 0);
     window.setTimeout(closeAttribution, 750);
@@ -732,7 +746,7 @@ export function App() {
     {toolbarOpen && <section className="toolbar" aria-label="Query and map settings">
       <header className="toolbar-header"><div><span className="eyebrow">QUERY TAB</span><input aria-label="Tab title" className="rename" title="Name this saved query tab" value={tab.title} onChange={event => rename(event.target.value)} /></div><button aria-label="Close query settings" onClick={() => setToolbarOpen(false)}>×</button></header>
       <section className="toolbar-section"><h3>Map</h3><div className="settings-grid">
-        <label data-tooltip="Use Mapbox Standard for general context, Satellite for imagery, Outdoors for contours and trails, or CARTO for maximum route contrast.">Basemap<select className="basemap-select" aria-label="Basemap" value={tab.style.basemap} onChange={event => changeStyle({ basemap: event.target.value as Basemap })}><option value="mapbox-standard">Mapbox Standard</option><option value="mapbox-satellite">Mapbox Satellite</option><option value="mapbox-outdoors">Mapbox Outdoors / Topo</option><option value="carto-light">CARTO Light</option><option value="carto-dark">CARTO Dark</option><option value="blank">Blank / offline</option></select></label>
+        <label data-tooltip="Use Mapbox Standard for general context, Satellite for imagery, Outdoors for contours and trails, or CARTO for maximum route contrast.">Basemap<select className="basemap-select" aria-label="Basemap" value={tab.style.basemap} onChange={event => changeStyle({ basemap: event.target.value as Basemap })}><option value="mapbox-standard">Mapbox Standard</option><option value="mapbox-satellite">Mapbox Satellite</option><option value="mapbox-satellite-clean">Mapbox Satellite · imagery only</option><option value="mapbox-outdoors">Mapbox Outdoors / Topo</option><option value="carto-light">CARTO Light</option><option value="carto-dark">CARTO Dark</option><option value="blank">Blank / offline</option></select></label>
         <label data-tooltip="Tilt the Web Mercator camera without enabling terrain, keeping routes and the basemap on the same projection.">View<div className="view-mode-control" role="group" aria-label="Map view"><button type="button" aria-label="Use 2D map view" aria-pressed={tab.style.viewMode === "2d"} onClick={() => changeViewMode("2d")}>2D</button><button type="button" aria-label="Use 3D map view" aria-pressed={tab.style.viewMode === "3d"} onClick={() => changeViewMode("3d")}>3D</button></div></label>
         <label data-tooltip="Choose the base route and hover-highlight color.">Route color<input aria-label="Route color" type="color" value={tab.style.color} onChange={event => changeStyle({ color: event.target.value })} /></label>
         <label className="temperature" data-tooltip="Multiply a route width equal to 0.15% of the map's shorter dimension. The width stays visually consistent at every zoom."><span>Thickness</span><input aria-label="Route thickness" type="range" min="0.25" max="4" step="0.05" value={tab.style.lineWidthScale} onChange={event => changeStyle({ lineWidthScale: Number(event.target.value) })} /><output>{tab.style.lineWidthScale.toFixed(2)}×</output></label>
@@ -751,7 +765,7 @@ export function App() {
 
     <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
       <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />
-      <DeckGL controller={spatialDrawing ? false : tab.style.viewMode === "3d" ? { dragRotate: true, touchRotate: true } : { dragRotate: false, touchRotate: false }} layers={layers} viewState={view} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isRotating || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
+      <DeckGL controller={spatialDrawing ? false : tab.style.viewMode === "3d" ? { dragRotate: true, touchRotate: true, touchZoom: true } : { dragRotate: false, touchRotate: false }} touchAction="none" eventRecognizerOptions={{ multipan: { pointers: 2, threshold: 1 } }} layers={layers} viewState={view} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isRotating || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
         if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isRotating && !interactionState.isZooming) return;
         const next = viewState as MapState;
         setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom, bearing: next.bearing ?? 0, pitch: next.pitch ?? 0 });

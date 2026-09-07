@@ -1,5 +1,5 @@
 export type MapState = { longitude: number; latitude: number; zoom: number; bearing: number; pitch: number };
-export type Basemap = "mapbox-standard" | "mapbox-satellite" | "mapbox-outdoors" | "carto-light" | "carto-dark" | "blank";
+export type Basemap = "mapbox-standard" | "mapbox-satellite" | "mapbox-satellite-clean" | "mapbox-outdoors" | "carto-light" | "carto-dark" | "blank";
 export type MapViewMode = "2d" | "3d";
 export type HeatPalette = "sunset" | "viridis" | "fire" | "ice";
 export type ThemeMode = "system" | "light" | "dark";

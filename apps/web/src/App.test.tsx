@@ -60,6 +60,7 @@ describe("App", () => {
     openQuerySettings();
     expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("mapbox-standard");
     expect(screen.getByRole("option", { name: "Mapbox Satellite" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Mapbox Satellite · imagery only" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Use 2D map view" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Use 3D map view" }));
     expect(screen.getByRole("button", { name: "Use 3D map view" })).toHaveAttribute("aria-pressed", "true");
