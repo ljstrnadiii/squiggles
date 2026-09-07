@@ -26,7 +26,6 @@ section.activity-table[aria-label="Activity table"][data-panel-expanded] .table-
 }
 
 section.toolbar[aria-label="Query and map settings"][data-panel-expanded] {
-  top: 0;
   overflow: auto;
 }
 
@@ -192,10 +191,6 @@ section.toolbar[aria-label="Query and map settings"] header > button[aria-label^
     max-height: none;
     margin: 0;
     border-radius: 0;
-  }
-
-  section.toolbar[aria-label="Query and map settings"][data-panel-expanded] {
-    top: 0;
   }
 
   .enhancement-diagnostics {
