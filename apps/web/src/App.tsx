@@ -282,7 +282,7 @@ function BaseMap({ view, basemap, options, viewMode, theme, layers, spatialDrawi
     const initial = initialView.current;
     const MapboxMap = window.mapboxgl.Map;
     map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current, initialOptions.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: true, touchPitch: true, touchZoomRotate: true, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
-    overlay.current = new MapboxOverlay({ interleaved: false, layers: initialLayers.current, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });
+    overlay.current = new MapboxOverlay({ interleaved: true, layers: initialLayers.current, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });
     map.current.addControl(overlay.current);
     map.current.on("style.load", () => { if (map.current) { applyBasemapOptions(map.current, currentBasemap.current, currentOptions.current); applyTerrain(map.current, currentViewMode.current === "3d"); } });
     map.current.on("move", () => { if (map.current) onViewChangeRef.current(cameraState(map.current)); });
