@@ -722,8 +722,8 @@ export function App() {
 
     <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
       <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />
-      <DeckGL controller={spatialDrawing ? false : tab.style.viewMode === "3d" ? { dragRotate: true, touchRotate: true } : { dragRotate: false, touchRotate: false }} layers={layers} viewState={view} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
-        if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isZooming) return;
+      <DeckGL controller={spatialDrawing ? false : tab.style.viewMode === "3d" ? { dragRotate: true, touchRotate: true } : { dragRotate: false, touchRotate: false }} layers={layers} viewState={view} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isRotating || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
+        if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isRotating && !interactionState.isZooming) return;
         const next = viewState as MapState;
         setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom, bearing: next.bearing ?? 0, pitch: next.pitch ?? 0 });
       }} onClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) { const longitude = coordinate[0], latitude = coordinate[1]; if (longitude !== undefined && latitude !== undefined) setSpatialDraft(previous => [...previous, [longitude, latitude]]); } return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />
