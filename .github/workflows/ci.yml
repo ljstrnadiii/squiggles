@@ -103,6 +103,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+        env:
+          VITE_MAPBOX_ACCESS_TOKEN: ${{ vars.VITE_MAPBOX_ACCESS_TOKEN }}
       - run: pnpm --filter @squiggles/aws build
       - uses: aws-actions/configure-aws-credentials@v6
         with:

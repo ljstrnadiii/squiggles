@@ -26,6 +26,8 @@ export async function publishView(
         longitude: tab.mapState.longitude,
         latitude: tab.mapState.latitude,
         zoom: tab.mapState.zoom,
+        bearing: tab.mapState.bearing,
+        pitch: tab.mapState.pitch,
       },
     };
   });
@@ -56,10 +58,16 @@ export async function loadPublishedView(
     ...published,
     tabs: published.tabs.map((tab) => ({
       ...tab,
+      style: {
+        ...tab.style,
+        viewMode: tab.style.viewMode ?? ((tab.mapState.pitch ?? 0) > 0 ? "3d" : "2d"),
+      },
       mapState: {
         longitude: tab.mapState.longitude,
         latitude: tab.mapState.latitude,
         zoom: tab.mapState.zoom,
+        bearing: Number.isFinite(tab.mapState.bearing) ? tab.mapState.bearing : 0,
+        pitch: Number.isFinite(tab.mapState.pitch) ? tab.mapState.pitch : 0,
       },
     })),
   };

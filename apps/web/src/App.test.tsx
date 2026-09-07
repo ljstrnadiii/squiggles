@@ -58,8 +58,11 @@ describe("App", () => {
     expect(screen.getByRole("img", { name: "Squiggles" })).toHaveAttribute("src", "/logo-light.png");
     fireEvent.click(screen.getByRole("button", { name: "Close system settings" }));
     openQuerySettings();
-    expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("streets");
-    expect(screen.getByRole("option", { name: "Imagery" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("mapbox-standard");
+    expect(screen.getByRole("option", { name: "Mapbox Satellite" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use 2D map view" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Use 3D map view" }));
+    expect(screen.getByRole("button", { name: "Use 3D map view" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("combobox", { name: "Heat colormap" })).toHaveValue("sunset");
     expect(screen.getByLabelText("Route color")).toHaveValue("#476bcc");
     const temperature = screen.getByRole("slider", { name: "Heat temperature" });
@@ -174,7 +177,7 @@ describe("App", () => {
   });
 
   it("restores map settings from the URL and keeps changes shareable", async () => {
-    window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=9.25&basemap=carto-dark&heat=0&palette=ice&temperature=2.4&thickness=1.6&clean=1&color=%23abcdef&units=imperial");
+    window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=9.25&bearing=31.5&pitch=47.0&basemap=carto-dark&view=3d&heat=0&palette=ice&temperature=2.4&thickness=1.6&clean=1&color=%23abcdef&units=imperial");
     render(<App />);
     openLogoMenu();
     fireEvent.click(screen.getByRole("button", { name: "System settings" }));
@@ -182,24 +185,28 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close system settings" }));
     openQuerySettings();
     expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("carto-dark");
+    expect(screen.getByRole("button", { name: "Use 3D map view" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("checkbox", { name: "Clean" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Heat" })).not.toBeChecked();
     expect(screen.getByRole("slider", { name: "Heat temperature" })).toHaveValue("2.4");
     expect(screen.getByRole("slider", { name: "Route thickness" })).toHaveValue("1.6");
-    fireEvent.change(screen.getByRole("combobox", { name: "Basemap" }), { target: { value: "topo" } });
-    await waitFor(() => expect(new URL(window.location.href).searchParams.get("basemap")).toBe("topo"));
+    fireEvent.change(screen.getByRole("combobox", { name: "Basemap" }), { target: { value: "mapbox-outdoors" } });
+    await waitFor(() => expect(new URL(window.location.href).searchParams.get("basemap")).toBe("mapbox-outdoors"));
+    expect(new URL(window.location.href).searchParams.get("view")).toBe("3d");
     expect(new URL(window.location.href).searchParams.get("lng")).toBe("-106.25000");
+    expect(new URL(window.location.href).searchParams.get("bearing")).toBe("31.5");
+    expect(new URL(window.location.href).searchParams.get("pitch")).toBe("47.0");
   });
 
   it("creates a query tab at the current camera instead of the default location", async () => {
-    window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=11.25&basemap=carto-dark");
+    window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=11.25&bearing=-22.0&pitch=43.5&basemap=carto-dark&view=3d");
     render(<App />);
     openQueryMenu();
     fireEvent.click(screen.getByRole("button", { name: "New query" }));
     expect(screen.getByRole("button", { name: "Open query menu" })).toHaveTextContent("New Query");
     await waitFor(() => expect(new URL(window.location.href).searchParams.get("lng")).toBe("-106.25000"));
     expect(new URL(window.location.href).searchParams.get("zoom")).toBe("11.25");
-    const stored = JSON.parse(localStorage.getItem("activity-map.tabs.v1") ?? "[]") as { title: string; mapState: { longitude: number; latitude: number; zoom: number }; style: { basemap: string } }[];
-    expect(stored.find(item => item.title === "New Query")).toMatchObject({ mapState: { longitude: -106.25, latitude: 39.5, zoom: 11.25 }, style: { basemap: "carto-dark" } });
+    const stored = JSON.parse(localStorage.getItem("activity-map.tabs.v1") ?? "[]") as { title: string; mapState: { longitude: number; latitude: number; zoom: number; bearing: number; pitch: number }; style: { basemap: string; viewMode: string } }[];
+    expect(stored.find(item => item.title === "New Query")).toMatchObject({ mapState: { longitude: -106.25, latitude: 39.5, zoom: 11.25, bearing: -22, pitch: 43.5 }, style: { basemap: "carto-dark", viewMode: "3d" } });
   });
 });

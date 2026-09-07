@@ -1,15 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import type { BinaryRouteBatch, RouteActivity } from "./contracts";
+import type { BinaryRouteBatch, MapState, RouteActivity } from "./contracts";
 import { buildBinaryHeatData, buildBinaryHeatDataCooperative, buildHeatData, colorForWeight } from "./heat";
 
 const route = (activityId: string, path: [number, number][]): RouteActivity => ({ activityId, path, fullPath: path, name: activityId, sportType: "Run", startTime: null, distanceM: null, elevationGainM: null, maxElevationM: null, sourceUrl: null, elevationProfile: [] });
+const camera = (longitude: number, latitude: number, zoom: number): MapState => ({ longitude, latitude, zoom, bearing: 0, pitch: 0 });
 
 describe("buildHeatData", () => {
   it("normalizes cross-activity overlap by each route's visible vertices", () => {
     const result = buildHeatData(
       [route("a", [[-105, 40], [-105, 40]]), route("b", [[-105, 40]])],
-      { longitude: -105, latitude: 40, zoom: 12 },
+      camera(-105, 40, 12),
       800,
       600,
       20,
@@ -24,14 +25,14 @@ describe("buildHeatData", () => {
   it("does not make a longer route hotter merely because it has more visible points", () => {
     const long = route("long", Array.from({ length: 20 }, () => [-105, 40]));
     const short = route("short", [[-105, 40]]);
-    const result = buildHeatData([long, short], { longitude: -105, latitude: 40, zoom: 12 }, 800, 600, 20);
+    const result = buildHeatData([long, short], camera(-105, 40, 12), 800, 600, 20);
     expect(result.scores.get("long")).toBe(1);
     expect(result.scores.get("short")).toBe(20);
   });
 
   it("scores all chosen visible vertices without rewriting the route", () => {
     const path: [number, number][] = Array.from({ length: 1000 }, (_, index) => [-105 + index / 1_000_000, 40]);
-    const result = buildHeatData([route("a", path), route("b", path)], { longitude: -105, latitude: 40, zoom: 15 }, 800, 600);
+    const result = buildHeatData([route("a", path), route("b", path)], camera(-105, 40, 15), 800, 600);
     expect(result.sourceVertices).toBe(2000);
     expect(result.scores.size).toBe(2);
     expect(result.scores.get("a")).toBeGreaterThan(0);
@@ -53,7 +54,7 @@ describe("buildHeatData", () => {
       startIndices: new Uint32Array([0, 2, 3]),
       segmentActivityIndices: new Uint32Array([0, 1]),
     };
-    const result = buildBinaryHeatData([batch], { longitude: -105, latitude: 40, zoom: 12 }, 800, 600, undefined, 20);
+    const result = buildBinaryHeatData([batch], camera(-105, 40, 12), 800, 600, undefined, 20);
     expect(result.sourceVertices).toBe(3);
     expect(result.scores.get("a")).toBe(1);
     expect(result.scores.get("b")).toBe(2);
@@ -72,8 +73,8 @@ describe("buildHeatData", () => {
       startIndices: new Uint32Array([0, 1, 2, 3, 4, 5]),
       segmentActivityIndices: new Uint32Array([0, 1, 2, 3, 4]),
     };
-    const west = buildBinaryHeatData([batch], { longitude: -105, latitude: 40, zoom: 12 }, 800, 600);
-    const east = buildBinaryHeatData([batch], { longitude: -104.5, latitude: 40, zoom: 12 }, 800, 600);
+    const west = buildBinaryHeatData([batch], camera(-105, 40, 12), 800, 600);
+    const east = buildBinaryHeatData([batch], camera(-104.5, 40, 12), 800, 600);
     expect(west.sourceVertices).toBe(2);
     expect(west.maxScore).toBe(1);
     expect(west.scores.get("c") ?? 0).toBe(0);
@@ -95,8 +96,8 @@ describe("buildHeatData", () => {
       startIndices: new Uint32Array([0, pointsPerRoute, pointsPerRoute * 2]),
       segmentActivityIndices: new Uint32Array([0, 1]),
     };
-    const expected = buildBinaryHeatData([batch], { longitude: -105, latitude: 40, zoom: 12 }, 800, 600);
-    const result = await buildBinaryHeatDataCooperative([batch], { longitude: -105, latitude: 40, zoom: 12 }, 800, 600, undefined, 8, () => false, 0);
+    const expected = buildBinaryHeatData([batch], camera(-105, 40, 12), 800, 600);
+    const result = await buildBinaryHeatDataCooperative([batch], camera(-105, 40, 12), 800, 600, undefined, 8, () => false, 0);
     expect(result).not.toBeNull();
     expect(result!.scores).toEqual(expected.scores);
     expect(result!.sourceVertices).toBe(expected.sourceVertices);

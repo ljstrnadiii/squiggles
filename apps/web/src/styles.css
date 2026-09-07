@@ -775,10 +775,12 @@ button:disabled {
   position: absolute;
   inset: 0;
 }
-.maplibregl-ctrl-attrib {
+.maplibregl-ctrl-attrib,
+.mapboxgl-ctrl-attrib {
   font-size: 10px !important;
 }
-.maplibregl-ctrl-attrib.maplibregl-compact {
+.maplibregl-ctrl-attrib.maplibregl-compact,
+.mapboxgl-ctrl-attrib.mapboxgl-compact {
   min-height: 24px;
   min-width: 24px;
 }
