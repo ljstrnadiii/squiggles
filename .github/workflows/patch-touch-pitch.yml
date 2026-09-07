@@ -1,0 +1,53 @@
+name: Patch touch pitch camera
+
+on:
+  push:
+    branches:
+      - fix/touch-pitch-camera-updates
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/touch-pitch-camera-updates
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.22.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Accept all deck camera updates
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('apps/web/src/App.tsx')
+          s = p.read_text()
+          old = '''onViewStateChange={({ viewState, interactionState }) => {
+                  if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isRotating && !interactionState.isZooming) return;
+                  const next = viewState as MapState;'''
+          new = '''onViewStateChange={({ viewState }) => {
+                  const next = viewState as MapState;'''
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one camera guard, found {s.count(old)}')
+          p.write_text(s.replace(old, new))
+      - name: Verify
+        run: |
+          pnpm lint
+          pnpm test
+          pnpm typecheck
+          pnpm build
+      - name: Commit
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/web/src/App.tsx
+          git commit -m "fix: accept touch pitch camera updates"
+          git push origin HEAD:fix/touch-pitch-camera-updates
