@@ -1,0 +1,116 @@
+name: Patch basemap options
+
+on:
+  push:
+    branches:
+      - fix/3d-touch-and-clean-satellite
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/3d-touch-and-clean-satellite
+      - name: Apply basemap option model
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old[:160]!r}")
+              p.write_text(text.replace(old, new))
+
+          replace_once(
+              'apps/web/src/contracts.ts',
+              'export type Basemap = "mapbox-standard" | "mapbox-satellite" | "mapbox-satellite-clean" | "mapbox-outdoors" | "carto-light" | "carto-dark" | "blank";\nexport type MapViewMode = "2d" | "3d";',
+              'export type Basemap = "mapbox-standard" | "mapbox-satellite" | "mapbox-outdoors" | "carto-light" | "carto-dark" | "blank";\nexport type BasemapOptions = { labels: boolean; roads: boolean; trails: boolean; boundaries: boolean; objects3d: boolean };\nexport type MapViewMode = "2d" | "3d";',
+          )
+          replace_once(
+              'apps/web/src/contracts.ts',
+              '  basemap: Basemap;\n  viewMode: MapViewMode;',
+              '  basemap: Basemap;\n  basemapOptions: BasemapOptions;\n  viewMode: MapViewMode;',
+          )
+
+          replace_once(
+              'apps/web/src/storage.ts',
+              'const defaultStyle = { color: ELECTRIC_BLUE, lineWidthScale: 1, basemap: "mapbox-standard" as const, viewMode: "2d" as const, heatEnabled: true, heatPalette: "sunset" as const, heatTemperature: 1.7, cleanEnabled: false };',
+              'const defaultBasemapOptions = { labels: false, roads: false, trails: false, boundaries: false, objects3d: false };\nconst defaultStyle = { color: ELECTRIC_BLUE, lineWidthScale: 1, basemap: "mapbox-standard" as const, basemapOptions: defaultBasemapOptions, viewMode: "2d" as const, heatEnabled: true, heatPalette: "sunset" as const, heatTemperature: 1.7, cleanEnabled: false };',
+          )
+          replace_once(
+              'apps/web/src/storage.ts',
+              '  imagery: "mapbox-satellite",\n};',
+              '  imagery: "mapbox-satellite",\n  "mapbox-satellite-clean": "mapbox-satellite",\n};',
+          )
+          replace_once(
+              'apps/web/src/storage.ts',
+              '      const merged = { ...defaultStyle, ...currentStyle, basemap: migratedBasemap, ...(legacyScale === undefined ? {} : { lineWidthScale: legacyScale }) };',
+              '      const merged = { ...defaultStyle, ...currentStyle, basemap: migratedBasemap, basemapOptions: { ...defaultBasemapOptions, ...currentStyle.basemapOptions }, ...(legacyScale === undefined ? {} : { lineWidthScale: legacyScale }) };',
+          )
+
+          replace_once(
+              'apps/web/src/publishing.ts',
+              '      style: {\n        ...tab.style,\n        viewMode: tab.style.viewMode ?? ((tab.mapState.pitch ?? 0) > 0 ? "3d" : "2d"),\n      },',
+              '      style: {\n        ...tab.style,\n        basemap: tab.style.basemap === "mapbox-satellite-clean" ? "mapbox-satellite" : tab.style.basemap,\n        basemapOptions: { labels: false, roads: false, trails: false, boundaries: false, objects3d: false, ...tab.style.basemapOptions },\n        viewMode: tab.style.viewMode ?? ((tab.mapState.pitch ?? 0) > 0 ? "3d" : "2d"),\n      },',
+          )
+
+          app = Path('apps/web/src/App.tsx')
+          text = app.read_text()
+          text = text.replace('import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, MapViewMode, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";', 'import type { ActivityListItem, Basemap, BasemapOptions, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, MapViewMode, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";')
+          text = text.replace('  setConfigProperty(importId: string, name: string, value: boolean): void;\n  on(event: "style.load", listener: () => void): void;', '  setConfigProperty(importId: string, name: string, value: boolean): void;\n  getStyle(): { layers?: Array<{ id: string; type: string; layout?: { visibility?: string } }> };\n  setLayoutProperty(layerId: string, name: "visibility", value: "visible" | "none"): void;\n  on(event: "style.load", listener: () => void): void;')
+          text = text.replace('const mapboxStyles: Record<"mapbox-standard" | "mapbox-satellite" | "mapbox-satellite-clean" | "mapbox-outdoors", string> = {\n  "mapbox-standard": "mapbox://styles/mapbox/standard",\n  "mapbox-satellite": "mapbox://styles/mapbox/standard-satellite",\n  "mapbox-satellite-clean": "mapbox://styles/mapbox/standard-satellite",\n  "mapbox-outdoors": "mapbox://styles/mapbox/outdoors-v12",\n};', 'const mapboxStyles: Record<"mapbox-standard" | "mapbox-satellite" | "mapbox-outdoors", string> = {\n  "mapbox-standard": "mapbox://styles/mapbox/standard",\n  "mapbox-satellite": "mapbox://styles/mapbox/standard-satellite",\n  "mapbox-outdoors": "mapbox://styles/mapbox/outdoors-v12",\n};')
+          text = text.replace('const basemaps = new Set<Basemap>(["mapbox-standard", "mapbox-satellite", "mapbox-satellite-clean", "mapbox-outdoors", "carto-light", "carto-dark", "blank"]);', 'const basemaps = new Set<Basemap>(["mapbox-standard", "mapbox-satellite", "mapbox-outdoors", "carto-light", "carto-dark", "blank"]);')
+
+          marker = '  const color = parameters.get("color");\n'
+          insertion = marker + '  const labels = parameters.get("labels");\n  const roads = parameters.get("roads");\n  const trails = parameters.get("trails");\n  const boundaries = parameters.get("boundaries");\n  const objects3d = parameters.get("objects3d");\n'
+          if text.count(marker) != 1: raise SystemExit('URL option marker mismatch')
+          text = text.replace(marker, insertion)
+          marker = '      ...(color && /^#[0-9a-f]{6}$/i.test(color) ? { color: normalizeRouteColor(color) } : {}),\n'
+          insertion = marker + '      basemapOptions: {\n        ...target.style.basemapOptions,\n        ...(labels === "1" ? { labels: true } : labels === "0" ? { labels: false } : {}),\n        ...(roads === "1" ? { roads: true } : roads === "0" ? { roads: false } : {}),\n        ...(trails === "1" ? { trails: true } : trails === "0" ? { trails: false } : {}),\n        ...(boundaries === "1" ? { boundaries: true } : boundaries === "0" ? { boundaries: false } : {}),\n        ...(objects3d === "1" ? { objects3d: true } : objects3d === "0" ? { objects3d: false } : {}),\n      },\n'
+          if text.count(marker) != 1: raise SystemExit('URL style marker mismatch')
+          text = text.replace(marker, insertion)
+
+          marker = '  url.searchParams.set("basemap", tab.style.basemap);\n'
+          insertion = marker + '  url.searchParams.set("labels", tab.style.basemapOptions.labels ? "1" : "0");\n  url.searchParams.set("roads", tab.style.basemapOptions.roads ? "1" : "0");\n  url.searchParams.set("trails", tab.style.basemapOptions.trails ? "1" : "0");\n  url.searchParams.set("boundaries", tab.style.basemapOptions.boundaries ? "1" : "0");\n  url.searchParams.set("objects3d", tab.style.basemapOptions.objects3d ? "1" : "0");\n'
+          if text.count(marker) != 1: raise SystemExit('replaceUrl marker mismatch')
+          text = text.replace(marker, insertion)
+
+          text = text.replace('function rasterStyle(basemap: "carto-light" | "carto-dark"): StyleSpecification {\n  const source = rasterStyles[basemap];\n  return { version: 8, sources: { basemap: { type: "raster", tiles: source.tiles, tileSize: 256, maxzoom: source.maxzoom, attribution: source.attribution } }, layers: [{ id: "basemap", type: "raster", source: "basemap" }] };\n}\n\nfunction mapStyle(basemap: Basemap, theme: "light" | "dark"): StyleSpecification | string {\n  if (basemap === "blank") return { ...blankStyle, layers: [{ id: "background", type: "background", paint: { "background-color": theme === "dark" ? "#07100e" : "#edf2ef" } }] };\n  if (basemap === "carto-light" || basemap === "carto-dark") return rasterStyle(basemap);\n  return mapboxAccessToken ? mapboxStyles[basemap] : rasterStyle(theme === "dark" ? "carto-dark" : "carto-light");\n}', 'function rasterStyle(basemap: "carto-light" | "carto-dark", labels = false): StyleSpecification {\n  const source = rasterStyles[basemap];\n  const tiles = labels ? source.tiles : source.tiles.map(tile => tile.replace("_all/", "_nolabels/"));\n  return { version: 8, sources: { basemap: { type: "raster", tiles, tileSize: 256, maxzoom: source.maxzoom, attribution: source.attribution } }, layers: [{ id: "basemap", type: "raster", source: "basemap" }] };\n}\n\nfunction mapStyle(basemap: Basemap, theme: "light" | "dark", options: BasemapOptions): StyleSpecification | string {\n  if (basemap === "blank") return { ...blankStyle, layers: [{ id: "background", type: "background", paint: { "background-color": theme === "dark" ? "#07100e" : "#edf2ef" } }] };\n  if (basemap === "carto-light" || basemap === "carto-dark") return rasterStyle(basemap, options.labels);\n  return mapboxAccessToken ? mapboxStyles[basemap] : rasterStyle(theme === "dark" ? "carto-dark" : "carto-light", options.labels);\n}')
+
+          start = text.index('function applySatelliteConfig(')
+          end = text.index('\n\nfunction BaseMap(', start)
+          replacement = '''function applyBasemapOptions(map: MapboxMapInstance, basemap: Basemap, options: BasemapOptions) {\n  if (basemap === "mapbox-standard" || basemap === "mapbox-satellite") {\n    for (const property of ["showPlaceLabels", "showPointOfInterestLabels", "showRoadLabels", "showTransitLabels"]) map.setConfigProperty("basemap", property, options.labels);\n    map.setConfigProperty("basemap", "showAdminBoundaries", options.boundaries);\n    map.setConfigProperty("basemap", "showPedestrianRoads", options.trails);\n    if (basemap === "mapbox-satellite") map.setConfigProperty("basemap", "showRoadsAndTransit", options.roads);\n    if (basemap === "mapbox-standard") map.setConfigProperty("basemap", "show3dObjects", options.objects3d);\n    return;\n  }\n  if (basemap === "mapbox-outdoors" && !options.labels) {\n    for (const layer of map.getStyle().layers ?? []) if (layer.type === "symbol") map.setLayoutProperty(layer.id, "visibility", "none");\n  }\n}'''
+          text = text[:start] + replacement + text[end:]
+          text = text.replace('function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; theme: "light" | "dark" }) {', 'function BaseMap({ view, basemap, options, theme }: { view: MapState; basemap: Basemap; options: BasemapOptions; theme: "light" | "dark" }) {')
+          text = text.replace('  const initialTheme = useRef(theme);\n  const appliedStyle = useRef(`${basemap}:${theme}`);\n  const currentBasemap = useRef(basemap);\n  currentBasemap.current = basemap;', '  const initialTheme = useRef(theme);\n  const initialOptions = useRef(options);\n  const appliedStyle = useRef(`${basemap}:${theme}:${JSON.stringify(options)}`);\n  const currentBasemap = useRef(basemap);\n  const currentOptions = useRef(options);\n  currentBasemap.current = basemap;\n  currentOptions.current = options;')
+          text = text.replace('style: mapStyle(initialBasemap.current, initialTheme.current)', 'style: mapStyle(initialBasemap.current, initialTheme.current, initialOptions.current)')
+          text = text.replace('map.current.on("style.load", () => { if (map.current) applySatelliteConfig(map.current, currentBasemap.current); });', 'map.current.on("style.load", () => { if (map.current) applyBasemapOptions(map.current, currentBasemap.current, currentOptions.current); });')
+          text = text.replace('    const key = `${basemap}:${theme}`;\n    if (appliedStyle.current === key) return;\n    appliedStyle.current = key;\n    map.current?.setStyle(mapStyle(basemap, theme));\n  }, [basemap, theme]);', '    const key = `${basemap}:${theme}:${JSON.stringify(options)}`;\n    if (appliedStyle.current === key) return;\n    appliedStyle.current = key;\n    map.current?.setStyle(mapStyle(basemap, theme, options));\n  }, [basemap, options, theme]);')
+
+          text = text.replace('<option value="mapbox-standard">Mapbox Standard</option><option value="mapbox-satellite">Mapbox Satellite</option><option value="mapbox-satellite-clean">Mapbox Satellite · imagery only</option><option value="mapbox-outdoors">Mapbox Outdoors / Topo</option>', '<option value="mapbox-standard">Mapbox Standard</option><option value="mapbox-satellite">Mapbox Satellite</option><option value="mapbox-outdoors">Mapbox Outdoors / Topo</option>')
+          controls_marker = '<label data-tooltip="Tilt the Web Mercator camera without enabling terrain, keeping routes and the basemap on the same projection.">View<div className="view-mode-control" role="group" aria-label="Map view"><button type="button" aria-label="Use 2D map view" aria-pressed={tab.style.viewMode === "2d"} onClick={() => changeViewMode("2d")}>2D</button><button type="button" aria-label="Use 3D map view" aria-pressed={tab.style.viewMode === "3d"} onClick={() => changeViewMode("3d")}>3D</button></div></label>\n'
+          controls = controls_marker + '''        {tab.style.basemap !== "blank" && <label className="check" data-tooltip="Show basemap text and icons. Off by default so routes remain the primary visual layer."><input aria-label="Basemap labels" type="checkbox" checked={tab.style.basemapOptions.labels} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, labels: event.target.checked } })} /> Labels</label>}\n        {tab.style.basemap === "mapbox-satellite" && <label className="check" data-tooltip="Show roads and transit networks over satellite imagery."><input aria-label="Basemap roads" type="checkbox" checked={tab.style.basemapOptions.roads} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, roads: event.target.checked } })} /> Roads</label>}\n        {(tab.style.basemap === "mapbox-standard" || tab.style.basemap === "mapbox-satellite") && <label className="check" data-tooltip="Show pedestrian roads, paths, and trails."><input aria-label="Basemap trails" type="checkbox" checked={tab.style.basemapOptions.trails} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, trails: event.target.checked } })} /> Trails</label>}\n        {(tab.style.basemap === "mapbox-standard" || tab.style.basemap === "mapbox-satellite") && <label className="check" data-tooltip="Show administrative boundaries."><input aria-label="Basemap boundaries" type="checkbox" checked={tab.style.basemapOptions.boundaries} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, boundaries: event.target.checked } })} /> Boundaries</label>}\n        {tab.style.basemap === "mapbox-standard" && <label className="check" data-tooltip="Show Mapbox Standard 3D objects such as buildings, landmarks, and trees."><input aria-label="Basemap 3D objects" type="checkbox" checked={tab.style.basemapOptions.objects3d} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, objects3d: event.target.checked } })} /> 3D objects</label>}\n'''
+          if text.count(controls_marker) != 1: raise SystemExit('dynamic control marker mismatch')
+          text = text.replace(controls_marker, controls)
+          text = text.replace('<BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />', '<BaseMap view={view} basemap={tab.style.basemap} options={tab.style.basemapOptions} theme={effectiveTheme} />')
+          app.write_text(text)
+
+          test = Path('apps/web/src/App.test.tsx')
+          t = test.read_text()
+          t = t.replace('\n    expect(screen.getByRole("option", { name: "Mapbox Satellite · imagery only" })).toBeInTheDocument();', '')
+          test.write_text(t)
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/web/src/App.tsx apps/web/src/App.test.tsx apps/web/src/contracts.ts apps/web/src/storage.ts apps/web/src/publishing.ts
+          git commit -m "feat: add dynamic basemap options"
+          git push origin HEAD:fix/3d-touch-and-clean-satellite
