@@ -252,10 +252,13 @@ export function App() {
   const mapElement = useRef<HTMLElement>(null);
   const ready = useRef(false);
   const selectionReady = useRef(false);
+  const selectionRequest = useRef(0);
   const viewportRequest = useRef(0);
   const panelRequest = useRef(0);
   const autoOpened = useRef(false);
   const initialUrlCamera = useRef(hasUrlCamera());
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const effectiveTheme = themeMode === "system" ? (systemDark ? "dark" : "light") : themeMode;
   const logoUrl = effectiveTheme === "dark" ? "/logo-dark.png" : "/logo-light.png";
   const refreshIdentity = useCallback(() => setSessionIdentity(identityFromSession(loadSession())), []);
@@ -309,6 +312,7 @@ export function App() {
   }, [tab, units, view]);
 
   async function run(queryTab = tab, mapState = view, sql = queryTab.id === tab.id ? draft : queryTab.sql) {
+    const selection = ++selectionRequest.current;
     try {
       if (!ready.current) throw new Error("Open a dataset first");
       // A selection change invalidates every viewport result that was started
@@ -322,18 +326,43 @@ export function App() {
       const current = { ...queryTab, sql, mapState };
       const renderStarted = performance.now();
       const result = await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current));
-      setRouteBatches(result.batches); setRenderedView(mapState);
+      if (selection !== selectionRequest.current) return;
+
       selectionReady.current = true;
-      setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
+      const latestView = viewRef.current;
+      const cameraUnchanged = latestView.longitude === mapState.longitude && latestView.latitude === mapState.latitude && latestView.zoom === mapState.zoom;
+      if (cameraUnchanged) {
+        setRouteBatches(result.batches); setRenderedView(mapState);
+        setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
+      } else {
+        // SQL establishes the new selection, but its geometry belongs to the
+        // camera from query start. Never flash those stale batches back onto a
+        // camera the user has already moved; render the selection at the latest
+        // viewport instead.
+        const bounds = viewportBounds(latestView, mapElement.current);
+        if (bounds) {
+          const request = ++viewportRequest.current;
+          const viewportStarted = performance.now();
+          const latestResult = await engine.renderViewport(latestView.zoom, bounds);
+          if (selection === selectionRequest.current && request === viewportRequest.current) {
+            setRouteBatches(latestResult.batches); setRenderedView(latestView);
+            setRenderMetrics({ lod: latestResult.lod, vertexCount: latestResult.vertexCount, geometryBufferBytes: latestResult.geometryBufferBytes, plannedVertexEstimate: latestResult.plannedVertexEstimate, rawVertexEstimate: latestResult.rawVertexEstimate, vertexBudget: latestResult.vertexBudget, visibleCount: latestResult.activityCount, durationMs: performance.now() - viewportStarted, scan: latestResult.scan, cache: latestResult.cache });
+          }
+        }
+      }
+      if (selection !== selectionRequest.current) return;
       setStatus(`${result.selectedCount.toLocaleString()} routes selected`);
       setTabs(previous => {
         const updated = previous.map(item => item.id === queryTab.id ? current : item);
         saveTabs(updated); return updated;
       });
     } catch (reason) {
+      if (selection !== selectionRequest.current) return;
       setError(reason instanceof Error ? reason.message : String(reason));
       setStatus("Query failed");
-    } finally { setBusy(false); }
+    } finally {
+      if (selection === selectionRequest.current) setBusy(false);
+    }
   }
 
   async function openSource(source: DatasetSource, requestedView?: MapState, initialTab = tab) {
