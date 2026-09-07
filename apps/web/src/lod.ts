@@ -51,7 +51,7 @@ export function metersPerPixel(zoom: number): number {
   return WEB_MERCATOR_CIRCUMFERENCE_METERS / (WEB_MERCATOR_WORLD_PIXELS_AT_ZOOM_ZERO * 2 ** zoom);
 }
 
-export function lodForMetersPerPixel(pixelMeters: number): Lod {
+function lodForMetersPerPixel(pixelMeters: number): Lod {
   for (let lod = 0; lod < LOD_TOLERANCES_METERS.length - 1; lod += 1) {
     const tolerance = LOD_TOLERANCES_METERS[lod];
     if (tolerance != null && tolerance <= pixelMeters) return lod as Lod;

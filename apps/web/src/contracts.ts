@@ -18,7 +18,7 @@ export type MapStyle = {
   cleanEnabled: boolean;
 };
 export type ViewportBounds = [west: number, south: number, east: number, north: number];
-export type ViewportSize = { width: number; height: number; effectiveMetersPerPixel?: number };
+export type ViewportSize = { width: number; height: number };
 export type SpatialPredicate = "intersects" | "within";
 export type SpatialFilter = {
   predicate: SpatialPredicate;
