@@ -1,13 +1,9 @@
-name: Patch Mapbox-owned camera
-
+name: Patch Mapbox camera
 on:
   push:
-    branches:
-      - fix/mapbox-owned-camera
-
+    branches: [fix/mapbox-owned-camera]
 permissions:
   contents: write
-
 jobs:
   patch:
     if: github.actor != 'github-actions[bot]'
@@ -33,156 +29,22 @@ jobs:
           s = p.read_text()
           s = s.replace('import { WebMercatorViewport, type PickingInfo } from "@deck.gl/core";', 'import { WebMercatorViewport, type Layer, type PickingInfo } from "@deck.gl/core";')
           s = s.replace('import { PathLayer, ScatterplotLayer } from "@deck.gl/layers";\nimport DeckGL from "@deck.gl/react";', 'import { PathLayer, ScatterplotLayer } from "@deck.gl/layers";\nimport { MapboxOverlay } from "@deck.gl/mapbox";')
-          old_type = '''type MapboxMapInstance = {
-  jumpTo(options: MapboxCamera): void;
-  setStyle(style: StyleSpecification | string): void;
-  setConfigProperty(importId: string, name: string, value: boolean): void;
-  getStyle(): { layers?: Array<{ id: string; type: string; layout?: { visibility?: string } }> };
-  setLayoutProperty(layerId: string, name: "visibility", value: "visible" | "none"): void;
-  addSource(id: string, source: { type: "raster-dem"; tiles: string[]; tileSize: number; maxzoom: number; encoding: "terrarium"; attribution: string }): void;
-  getSource(id: string): unknown;
-  setTerrain(terrain: { source: string; exaggeration: number } | null): void;
-  isStyleLoaded(): boolean;
-  on(event: "style.load", listener: () => void): void;
-  remove(): void;
-};'''
-          new_type = '''type MapboxHandler = { enable(): void; disable(): void; enableRotation?(): void; disableRotation?(): void };
-type MapboxMapInstance = {
-  jumpTo(options: MapboxCamera): void;
-  setStyle(style: StyleSpecification | string): void;
-  setConfigProperty(importId: string, name: string, value: boolean): void;
-  getStyle(): { layers?: Array<{ id: string; type: string; layout?: { visibility?: string } }> };
-  setLayoutProperty(layerId: string, name: "visibility", value: "visible" | "none"): void;
-  addSource(id: string, source: { type: "raster-dem"; tiles: string[]; tileSize: number; maxzoom: number; encoding: "terrarium"; attribution: string }): void;
-  getSource(id: string): unknown;
-  setTerrain(terrain: { source: string; exaggeration: number } | null): void;
-  isStyleLoaded(): boolean;
-  getCenter(): { lng: number; lat: number };
-  getZoom(): number;
-  getBearing(): number;
-  getPitch(): number;
-  addControl(control: unknown): void;
-  removeControl(control: unknown): void;
-  dragPan: MapboxHandler;
-  scrollZoom: MapboxHandler;
-  boxZoom: MapboxHandler;
-  dragRotate: MapboxHandler;
-  keyboard: MapboxHandler;
-  doubleClickZoom: MapboxHandler;
-  touchZoomRotate: MapboxHandler;
-  touchPitch: MapboxHandler;
-  on(event: string, listener: (event?: unknown) => void): void;
-  remove(): void;
-};'''
-          if old_type not in s:
-              raise SystemExit('map type block not found')
-          s = s.replace(old_type, new_type)
+          old = '  isStyleLoaded(): boolean;\n  on(event: "style.load", listener: () => void): void;\n  remove(): void;'
+          new = '  isStyleLoaded(): boolean;\n  getCenter(): { lng: number; lat: number };\n  getZoom(): number;\n  getBearing(): number;\n  getPitch(): number;\n  addControl(control: unknown): void;\n  removeControl(control: unknown): void;\n  dragPan: { enable(): void; disable(): void };\n  scrollZoom: { enable(): void; disable(): void };\n  boxZoom: { enable(): void; disable(): void };\n  dragRotate: { enable(): void; disable(): void };\n  keyboard: { enable(): void; disable(): void };\n  doubleClickZoom: { enable(): void; disable(): void };\n  touchZoomRotate: { enable(): void; disable(): void; enableRotation(): void; disableRotation(): void };\n  touchPitch: { enable(): void; disable(): void };\n  on(event: string, listener: () => void): void;\n  remove(): void;'
+          if old not in s: raise SystemExit('map methods not found')
+          s = s.replace(old, new)
           s = s.replace('  interactive: boolean;\n  attributionControl: boolean;', '  interactive: boolean;\n  touchPitch?: boolean;\n  touchZoomRotate?: boolean;\n  attributionControl: boolean;')
           start = s.index('function BaseMap(')
           end = s.index('\nfunction viewportBounds', start)
-          new_base = r'''function cameraState(map: MapboxMapInstance): MapState {
-  const center = map.getCenter();
-  return { longitude: center.lng, latitude: center.lat, zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
-}
-
-function sameCamera(a: MapState, b: MapState) {
-  return Math.abs(a.longitude - b.longitude) < 1e-7
-    && Math.abs(a.latitude - b.latitude) < 1e-7
-    && Math.abs(a.zoom - b.zoom) < 1e-7
-    && Math.abs((a.bearing ?? 0) - (b.bearing ?? 0)) < 1e-7
-    && Math.abs((a.pitch ?? 0) - (b.pitch ?? 0)) < 1e-7;
-}
-
-function configureMapboxNavigation(map: MapboxMapInstance, viewMode: MapViewMode, enabled: boolean) {
-  const navigation = [map.dragPan, map.scrollZoom, map.boxZoom, map.keyboard, map.doubleClickZoom, map.touchZoomRotate];
-  for (const handler of navigation) enabled ? handler.enable() : handler.disable();
-  if (!enabled || viewMode === "2d") {
-    map.dragRotate.disable();
-    map.touchPitch.disable();
-    map.touchZoomRotate.disableRotation?.();
-  } else {
-    map.dragRotate.enable();
-    map.touchPitch.enable();
-    map.touchZoomRotate.enableRotation?.();
-  }
-}
-
-function BaseMap({ view, basemap, options, viewMode, theme, layers, spatialDrawing, onViewChange, onInteractionChange, onDeckClick }: { view: MapState; basemap: Basemap; options: BasemapOptions; viewMode: MapViewMode; theme: "light" | "dark"; layers: Layer[]; spatialDrawing: boolean; onViewChange: (view: MapState) => void; onInteractionChange: (active: boolean) => void; onDeckClick: (info: PickingInfo) => void }) {
-  const container = useRef<HTMLDivElement>(null);
-  const map = useRef<MapboxMapInstance | null>(null);
-  const overlay = useRef<MapboxOverlay | null>(null);
-  const initialView = useRef(view);
-  const initialBasemap = useRef(basemap);
-  const initialTheme = useRef(theme);
-  const initialOptions = useRef(options);
-  const initialLayers = useRef(layers);
-  const appliedStyle = useRef(`${basemap}:${theme}:${JSON.stringify(options)}`);
-  const currentBasemap = useRef(basemap);
-  const currentOptions = useRef(options);
-  const currentViewMode = useRef(viewMode);
-  const onViewChangeRef = useRef(onViewChange);
-  const onInteractionChangeRef = useRef(onInteractionChange);
-  const onDeckClickRef = useRef(onDeckClick);
-  currentBasemap.current = basemap;
-  currentOptions.current = options;
-  currentViewMode.current = viewMode;
-  onViewChangeRef.current = onViewChange;
-  onInteractionChangeRef.current = onInteractionChange;
-  onDeckClickRef.current = onDeckClick;
-  useEffect(() => {
-    if (!container.current || !window.mapboxgl) return;
-    const initial = initialView.current;
-    const MapboxMap = window.mapboxgl.Map;
-    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current, initialOptions.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: true, touchPitch: true, touchZoomRotate: true, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
-    overlay.current = new MapboxOverlay({ interleaved: false, layers: initialLayers.current, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });
-    map.current.addControl(overlay.current);
-    map.current.on("style.load", () => { if (map.current) { applyBasemapOptions(map.current, currentBasemap.current, currentOptions.current); applyTerrain(map.current, currentViewMode.current === "3d"); } });
-    map.current.on("move", () => { if (map.current) onViewChangeRef.current(cameraState(map.current)); });
-    map.current.on("movestart", () => onInteractionChangeRef.current(true));
-    map.current.on("moveend", () => onInteractionChangeRef.current(false));
-    const closeAttribution = () => container.current?.querySelector(".mapboxgl-ctrl-attrib")?.classList.remove("mapboxgl-compact-show");
-    window.setTimeout(closeAttribution, 0);
-    window.setTimeout(closeAttribution, 750);
-    configureMapboxNavigation(map.current, currentViewMode.current, true);
-    return () => {
-      if (map.current && overlay.current) map.current.removeControl(overlay.current);
-      overlay.current = null;
-      map.current?.remove();
-      map.current = null;
-    };
-  }, []);
-  useLayoutEffect(() => {
-    if (!map.current) return;
-    const current = cameraState(map.current);
-    if (!sameCamera(current, view)) map.current.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: view.bearing ?? 0, pitch: view.pitch ?? 0 });
-  }, [view]);
-  useEffect(() => { overlay.current?.setProps({ layers, onClick: (info: PickingInfo) => onDeckClickRef.current(info) }); }, [layers]);
-  useEffect(() => {
-    if (!map.current) return;
-    configureMapboxNavigation(map.current, viewMode, !spatialDrawing);
-    if (map.current.isStyleLoaded()) applyTerrain(map.current, viewMode === "3d");
-  }, [spatialDrawing, viewMode]);
-  useEffect(() => {
-    const key = `${basemap}:${theme}:${JSON.stringify(options)}`;
-    if (appliedStyle.current === key) return;
-    appliedStyle.current = key;
-    map.current?.setStyle(mapStyle(basemap, theme, options));
-  }, [basemap, options, theme]);
-  return <div className="maplibre-base" ref={container} />;
-}
-'''
-          s = s[:start] + new_base + s[end:]
-          old_map = '''    <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
-      <BaseMap view={view} basemap={tab.style.basemap} options={tab.style.basemapOptions} viewMode={tab.style.viewMode} theme={effectiveTheme} />
-      <DeckGL controller={spatialDrawing ? false : tab.style.viewMode === "3d" ? { dragRotate: true, touchRotate: true, touchZoom: true } : { dragRotate: false, touchRotate: false }} touchAction="none" eventRecognizerOptions={{ multipan: { pointers: 2, threshold: 1 } }} layers={layers} viewState={view} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isRotating || interactionState.isZooming))} onViewStateChange={({ viewState }) => {
-        const next = viewState as MapState;
-        setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom, bearing: next.bearing ?? 0, pitch: next.pitch ?? 0 });
-      }} onClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) { const longitude = coordinate[0], latitude = coordinate[1]; if (longitude !== undefined && latitude !== undefined) setSpatialDraft(previous => [...previous, [longitude, latitude]]); } return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />'''
-          new_map = '''    <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
-      <BaseMap view={view} basemap={tab.style.basemap} options={tab.style.basemapOptions} viewMode={tab.style.viewMode} theme={effectiveTheme} layers={layers} spatialDrawing={spatialDrawing} onViewChange={next => setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom, bearing: next.bearing ?? 0, pitch: next.pitch ?? 0 })} onInteractionChange={setMapInteracting} onDeckClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) { const longitude = coordinate[0], latitude = coordinate[1]; if (longitude !== undefined && latitude !== undefined) setSpatialDraft(previous => [...previous, [longitude, latitude]]); } return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />'''
-          if old_map not in s:
-              raise SystemExit('DeckGL map block not found')
-          s = s.replace(old_map, new_map)
+          base = '''function cameraState(map: MapboxMapInstance): MapState {\n  const center = map.getCenter();\n  return { longitude: center.lng, latitude: center.lat, zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };\n}\n\nfunction configureMapboxNavigation(map: MapboxMapInstance, viewMode: MapViewMode, enabled: boolean) {\n  for (const handler of [map.dragPan, map.scrollZoom, map.boxZoom, map.keyboard, map.doubleClickZoom, map.touchZoomRotate]) enabled ? handler.enable() : handler.disable();\n  if (!enabled || viewMode === "2d") { map.dragRotate.disable(); map.touchPitch.disable(); map.touchZoomRotate.disableRotation(); }\n  else { map.dragRotate.enable(); map.touchPitch.enable(); map.touchZoomRotate.enableRotation(); }\n}\n\nfunction BaseMap({ view, basemap, options, viewMode, theme, layers, spatialDrawing, onViewChange, onInteractionChange, onDeckClick }: { view: MapState; basemap: Basemap; options: BasemapOptions; viewMode: MapViewMode; theme: "light" | "dark"; layers: Layer[]; spatialDrawing: boolean; onViewChange: (view: MapState) => void; onInteractionChange: (active: boolean) => void; onDeckClick: (info: PickingInfo) => void }) {\n  const container = useRef<HTMLDivElement>(null);\n  const map = useRef<MapboxMapInstance | null>(null);\n  const overlay = useRef<MapboxOverlay | null>(null);\n  const initialView = useRef(view);\n  const initialBasemap = useRef(basemap);\n  const initialTheme = useRef(theme);\n  const initialOptions = useRef(options);\n  const initialLayers = useRef(layers);\n  const appliedStyle = useRef(`${basemap}:${theme}:${JSON.stringify(options)}`);\n  const currentBasemap = useRef(basemap);\n  const currentOptions = useRef(options);\n  const currentViewMode = useRef(viewMode);\n  const onViewChangeRef = useRef(onViewChange);\n  const onInteractionChangeRef = useRef(onInteractionChange);\n  const onDeckClickRef = useRef(onDeckClick);\n  currentBasemap.current = basemap; currentOptions.current = options; currentViewMode.current = viewMode;\n  onViewChangeRef.current = onViewChange; onInteractionChangeRef.current = onInteractionChange; onDeckClickRef.current = onDeckClick;\n  useEffect(() => {\n    if (!container.current || !window.mapboxgl) return;\n    const initial = initialView.current;\n    const MapboxMap = window.mapboxgl.Map;\n    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current, initialOptions.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: true, touchPitch: true, touchZoomRotate: true, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });\n    overlay.current = new MapboxOverlay({ interleaved: false, layers: initialLayers.current, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });\n    map.current.addControl(overlay.current);\n    map.current.on("style.load", () => { if (map.current) { applyBasemapOptions(map.current, currentBasemap.current, currentOptions.current); applyTerrain(map.current, currentViewMode.current === "3d"); } });\n    map.current.on("move", () => { if (map.current) onViewChangeRef.current(cameraState(map.current)); });\n    map.current.on("movestart", () => onInteractionChangeRef.current(true));\n    map.current.on("moveend", () => onInteractionChangeRef.current(false));\n    configureMapboxNavigation(map.current, currentViewMode.current, true);\n    const closeAttribution = () => container.current?.querySelector(".mapboxgl-ctrl-attrib")?.classList.remove("mapboxgl-compact-show");\n    window.setTimeout(closeAttribution, 0); window.setTimeout(closeAttribution, 750);\n    return () => { if (map.current && overlay.current) map.current.removeControl(overlay.current); overlay.current = null; map.current?.remove(); map.current = null; };\n  }, []);\n  useLayoutEffect(() => {\n    if (!map.current) return;\n    const current = cameraState(map.current);\n    if (Math.abs(current.longitude - view.longitude) > 1e-7 || Math.abs(current.latitude - view.latitude) > 1e-7 || Math.abs(current.zoom - view.zoom) > 1e-7 || Math.abs(current.bearing - view.bearing) > 1e-7 || Math.abs(current.pitch - view.pitch) > 1e-7) map.current.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: view.bearing, pitch: view.pitch });\n  }, [view]);\n  useEffect(() => { overlay.current?.setProps({ layers, onClick: (info: PickingInfo) => onDeckClickRef.current(info) }); }, [layers]);\n  useEffect(() => { if (map.current) { configureMapboxNavigation(map.current, viewMode, !spatialDrawing); if (map.current.isStyleLoaded()) applyTerrain(map.current, viewMode === "3d"); } }, [spatialDrawing, viewMode]);\n  useEffect(() => { const key = `${basemap}:${theme}:${JSON.stringify(options)}`; if (appliedStyle.current !== key) { appliedStyle.current = key; map.current?.setStyle(mapStyle(basemap, theme, options)); } }, [basemap, options, theme]);\n  return <div className="maplibre-base" ref={container} />;\n}\n'''
+          s = s[:start] + base + s[end:]
+          start = s.index('    <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>')
+          deck_start = s.index('      <DeckGL ', start)
+          deck_end = s.index(' />\n      {spatialDrawing', deck_start) + 3
+          prefix = s[start:deck_start]
+          prefix = prefix.replace('<BaseMap view={view} basemap={tab.style.basemap} options={tab.style.basemapOptions} viewMode={tab.style.viewMode} theme={effectiveTheme} />\n', '')
+          replacement = '''      <BaseMap view={view} basemap={tab.style.basemap} options={tab.style.basemapOptions} viewMode={tab.style.viewMode} theme={effectiveTheme} layers={layers} spatialDrawing={spatialDrawing} onViewChange={setView} onInteractionChange={setMapInteracting} onDeckClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) setSpatialDraft(previous => [...previous, [coordinate[0], coordinate[1]]]); return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />\n'''
+          s = s[:start] + prefix + replacement + s[deck_end:]
           s = s.replace('data-tooltip="Tilt the Web Mercator camera without enabling terrain, keeping routes and the basemap on the same projection."', 'data-tooltip="Use Mapbox-native pitch and rotation with elevation terrain in 3D mode."')
           p.write_text(s)
       - name: Verify
