@@ -24,9 +24,13 @@ describe("map navigation enhancements", () => {
     expect(source).toContain('button.textContent?.trim() === "Rendering"');
   });
 
-  it("anchors normal mobile query settings at the bottom and expanded settings to the full viewport", () => {
+  it("anchors normal mobile query settings at the bottom", () => {
     expect(panelCss).toContain('section.toolbar[aria-label="Query and map settings"]:not([data-panel-expanded]) {\n    top: auto;');
-    expect(panelCss).toContain('section.toolbar[aria-label="Query and map settings"][data-panel-expanded] {\n    top: 0;');
+  });
+
+  it("keeps expanded query settings and table flush with the persistent top bar", () => {
+    expect(panelCss).toContain('section.activity-table[aria-label="Activity table"][data-panel-expanded],\nsection.toolbar[aria-label="Query and map settings"][data-panel-expanded] {\n  top: 54px;');
+    expect(panelCss).not.toContain('section.toolbar[aria-label="Query and map settings"][data-panel-expanded] {\n  top: 0;');
   });
 
   it("keeps desktop query settings, statistics, and table in the right-side drawer system", () => {
