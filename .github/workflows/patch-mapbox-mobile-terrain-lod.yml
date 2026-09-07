@@ -1,0 +1,110 @@
+name: Patch Mapbox mobile terrain LOD
+on:
+  push:
+    branches: [fix/mapbox-mobile-terrain-lod]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/mapbox-mobile-terrain-lod
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.22.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Patch implementation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              s = p.read_text()
+              actual = s.count(old)
+              if actual != count:
+                  raise SystemExit(f'{path}: expected {count} matches, found {actual}: {old[:100]}')
+              p.write_text(s.replace(old, new, count))
+
+          replace('apps/web/src/contracts.ts',
+              'export type ViewportSize = { width: number; height: number };',
+              'export type ViewportSize = { width: number; height: number; effectiveMetersPerPixel?: number };')
+
+          replace('apps/web/src/lod.ts',
+              'function lodForMetersPerPixel(pixelMeters: number): Lod {',
+              'export function lodForMetersPerPixel(pixelMeters: number): Lod {')
+
+          replace('apps/web/src/engine.ts',
+              'import { lodForView, lodForViewport, type Lod } from "./lod";',
+              'import { lodForMetersPerPixel, lodForView, lodForViewport, type Lod } from "./lod";')
+          replace('apps/web/src/engine.ts',
+              '    if (bounds && size?.width && size.height) {\n      return lodForViewport(bounds, size.width, size.height);\n    }',
+              '    if (size?.effectiveMetersPerPixel != null && Number.isFinite(size.effectiveMetersPerPixel)) {\n      return lodForMetersPerPixel(size.effectiveMetersPerPixel);\n    }\n    if (bounds && size?.width && size.height) {\n      return lodForViewport(bounds, size.width, size.height);\n    }')
+
+          p = Path('apps/web/src/App.tsx')
+          s = p.read_text()
+          s = s.replace('UnitSystem, ViewportBounds } from "./contracts";', 'UnitSystem, ViewportBounds, ViewportSize } from "./contracts";')
+          s = s.replace(
+              '  addSource(id: string, source: { type: "raster-dem"; tiles: string[]; tileSize: number; maxzoom: number; encoding: "terrarium"; attribution: string }): void;',
+              '  addSource(id: string, source: { type: "raster-dem"; url: string; tileSize: number; maxzoom: number } | { type: "raster-dem"; tiles: string[]; tileSize: number; maxzoom: number; encoding: "terrarium"; attribution: string }): void;')
+          s = s.replace(
+              'const terrainTiles = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";\nconst terrainAttribution = "Elevation: Mapzen/Tilezen · AWS Open Data";',
+              'const fallbackTerrainTiles = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";\nconst terrainAttribution = "Elevation: Mapzen/Tilezen · AWS Open Data";\nconst mapboxTerrainRgbTiles = mapboxAccessToken ? `https://api.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}.pngraw?access_token=${mapboxAccessToken}` : null;\nconst terrainTiles = mapboxTerrainRgbTiles ?? fallbackTerrainTiles;\nconst terrainDecoder = mapboxTerrainRgbTiles\n  ? { rScaler: 6553.6, gScaler: 25.6, bScaler: 0.1, offset: -10000 }\n  : { rScaler: 256, gScaler: 1, bScaler: 1 / 256, offset: -32768 };')
+          s = s.replace(
+              '  if (!map.getSource("squiggles-terrain")) map.addSource("squiggles-terrain", { type: "raster-dem", tiles: [terrainTiles], tileSize: 256, maxzoom: 15, encoding: "terrarium", attribution: terrainAttribution });',
+              '  if (!map.getSource("squiggles-terrain")) {\n    if (mapboxAccessToken) map.addSource("squiggles-terrain", { type: "raster-dem", url: "mapbox://mapbox.mapbox-terrain-dem-v1", tileSize: 512, maxzoom: 14 });\n    else map.addSource("squiggles-terrain", { type: "raster-dem", tiles: [fallbackTerrainTiles], tileSize: 256, maxzoom: 15, encoding: "terrarium", attribution: terrainAttribution });\n  }')
+          s = s.replace('  const initialLayers = useRef(layers);', '  const latestLayers = useRef(layers);')
+          s = s.replace(
+              '  currentBasemap.current = basemap; currentOptions.current = options; currentViewMode.current = viewMode;\n  onViewChangeRef.current = onViewChange; onInteractionChangeRef.current = onInteractionChange; onDeckClickRef.current = onDeckClick;',
+              '  currentBasemap.current = basemap; currentOptions.current = options; currentViewMode.current = viewMode; latestLayers.current = layers;\n  onViewChangeRef.current = onViewChange; onInteractionChangeRef.current = onInteractionChange; onDeckClickRef.current = onDeckClick;')
+          old = '''    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current, initialOptions.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: true, touchPitch: true, touchZoomRotate: true, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });\n    overlay.current = new MapboxOverlay({ interleaved: true, layers: initialLayers.current, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });\n    map.current.addControl(overlay.current);\n    map.current.on("style.load", () => { if (map.current) { applyBasemapOptions(map.current, currentBasemap.current, currentOptions.current); applyTerrain(map.current, currentViewMode.current === "3d"); } });'''
+          new = '''    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current, initialOptions.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: true, touchPitch: true, touchZoomRotate: true, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });\n    const installOverlay = () => {\n      if (!map.current) return;\n      if (overlay.current) { map.current.removeControl(overlay.current); overlay.current = null; }\n      overlay.current = new MapboxOverlay({ interleaved: true, layers: latestLayers.current, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });\n      map.current.addControl(overlay.current);\n      configureMapboxNavigation(map.current, currentViewMode.current, true);\n    };\n    map.current.on("style.load", () => {\n      if (!map.current) return;\n      applyBasemapOptions(map.current, currentBasemap.current, currentOptions.current);\n      applyTerrain(map.current, currentViewMode.current === "3d");\n      installOverlay();\n    });'''
+          if s.count(old) != 1: raise SystemExit('BaseMap startup block mismatch')
+          s = s.replace(old, new)
+          s = s.replace(
+              '  useEffect(() => { overlay.current?.setProps({ layers, onClick: (info: PickingInfo) => onDeckClickRef.current(info) }); }, [layers]);',
+              '  useEffect(() => { latestLayers.current = layers; overlay.current?.setProps({ layers, onClick: (info: PickingInfo) => onDeckClickRef.current(info) }); }, [layers]);')
+          s = s.replace(
+              'function viewportBounds(view: MapState, element: HTMLElement | null, respectDrawer = false): ViewportBounds | undefined {',
+              '''function mercatorMeters([longitude, latitude]: number[]): [number, number] {\n  const radius = 6_378_137;\n  const clamped = Math.max(-85.05112878, Math.min(85.05112878, latitude));\n  return [radius * longitude * Math.PI / 180, radius * Math.log(Math.tan(Math.PI / 4 + clamped * Math.PI / 360))];\n}\n\nfunction perspectiveViewportSize(view: MapState, element: HTMLElement | null): ViewportSize | undefined {\n  if (!element?.clientWidth || !element.clientHeight) return undefined;\n  const width = element.clientWidth;\n  const height = element.clientHeight;\n  if (view.pitch <= 0) return { width, height };\n  const viewport = new WebMercatorViewport({ ...view, width, height });\n  let finest = Number.POSITIVE_INFINITY;\n  for (const fraction of [0.55, 0.75, 0.9]) {\n    const x = width / 2;\n    const y = height * fraction;\n    const origin = mercatorMeters(viewport.unproject([x, y]));\n    const right = mercatorMeters(viewport.unproject([x + 1, y]));\n    const down = mercatorMeters(viewport.unproject([x, Math.min(height - 1, y + 1)]));\n    const horizontal = Math.hypot(right[0] - origin[0], right[1] - origin[1]);\n    const vertical = Math.hypot(down[0] - origin[0], down[1] - origin[1]);\n    const local = Math.max(horizontal, vertical);\n    if (Number.isFinite(local) && local > 0) finest = Math.min(finest, local);\n  }\n  return Number.isFinite(finest) ? { width, height, effectiveMetersPerPixel: finest } : { width, height };\n}\n\nfunction viewportBounds(view: MapState, element: HTMLElement | null, respectDrawer = false): ViewportBounds | undefined {''')
+          s = s.replace(
+              'new TerrainLayer({ id: "terrain-source", elevationData: terrainTiles, elevationDecoder: { rScaler: 256, gScaler: 1, bScaler: 1 / 256, offset: -32768 }, minZoom: 0, maxZoom: 15, strategy: "no-overlap", operation: "terrain" })',
+              'new TerrainLayer({ id: "terrain-source", elevationData: terrainTiles, elevationDecoder: terrainDecoder, minZoom: 0, maxZoom: 14, strategy: "no-overlap", operation: "terrain" })')
+          s = s.replace(
+              'await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current));',
+              'await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current), perspectiveViewportSize(mapState, mapElement.current));')
+          s = s.replace(
+              'await engine.renderViewport(latestView.zoom, bounds);',
+              'await engine.renderViewport(latestView.zoom, bounds, perspectiveViewportSize(latestView, mapElement.current));')
+          s = s.replace(
+              'await engine.renderViewport(view.zoom, bounds);',
+              'await engine.renderViewport(view.zoom, bounds, perspectiveViewportSize(view, mapElement.current));')
+          p.write_text(s)
+
+          replace('apps/web/src/lod.test.ts',
+              '  lodForView,\n  lodForViewport,',
+              '  lodForMetersPerPixel,\n  lodForView,\n  lodForViewport,')
+          replace('apps/web/src/lod.test.ts',
+              '  it("chooses the coarsest tolerance below one rendered pixel", () => {',
+              '  it("accepts a perspective-sampled effective resolution", () => {\n    expect(lodForMetersPerPixel(7)).toBe(5);\n    expect(lodForMetersPerPixel(1.5)).toBe(6);\n  });\n\n  it("chooses the coarsest tolerance below one rendered pixel", () => {')
+          PY
+      - name: Verify
+        run: |
+          pnpm lint
+          pnpm test
+          pnpm typecheck
+          pnpm build
+      - name: Commit
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/web/src/App.tsx apps/web/src/contracts.ts apps/web/src/engine.ts apps/web/src/lod.ts apps/web/src/lod.test.ts
+          git commit -m "fix: stabilize Mapbox mobile terrain and 3D LOD"
+          git push origin HEAD:fix/mapbox-mobile-terrain-lod
