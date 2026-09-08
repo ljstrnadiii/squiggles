@@ -1,3 +1,4 @@
 import * as maplibregl from "maplibre-gl";
+import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 
-maplibregl.setWorkerUrl("/maplibre-fork/maplibre-gl-worker.mjs");
+maplibregl.setWorkerUrl(workerUrl);
