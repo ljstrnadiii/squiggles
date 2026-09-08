@@ -17,6 +17,7 @@ import { distanceUnit, distanceValue, elevationUnit, elevationValue, loadUnits, 
 import { AccountPanel } from "./AccountPanel";
 import { clearSession, identityFromSession, loadSession } from "./auth";
 import { loadRuntimeConfig } from "./auth";
+import { MapLibreTerrainRoutes, type TerrainCamera } from "./MapLibreTerrainRoutes";
 import { loadPublishedView, publishView } from "./publishing";
 import { loadSystemResolution, saveSystemResolution } from "./resolution";
 
@@ -164,9 +165,6 @@ function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; t
     return () => { map.current?.remove(); map.current = null; };
   }, []);
   useLayoutEffect(() => {
-    // Deck and MapLibre are separate canvases. Apply the exact same camera
-    // before paint so the basemap never displays one interaction frame behind
-    // the route overlay (and wheel zoom retains deck.gl's cursor anchor).
     map.current?.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom });
   }, [view]);
   useEffect(() => {
@@ -197,6 +195,7 @@ function routeColor(value: string, alpha = 190): [number, number, number, number
 
 export function App() {
   const engine = useMemo(() => new BrowserDuckDBEngine(), []);
+  const terrainEnabled = new URLSearchParams(window.location.search).get("terrain") === "1";
   const [systemResolution, setSystemResolution] = useState<SystemResolution>(loadSystemResolution);
   engine.setResolution(systemResolution);
   const [tabs, setTabs] = useState(() => tabsWithUrlSettings(loadTabs()));
@@ -247,6 +246,7 @@ export function App() {
   const [mapSize, setMapSize] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
   const [view, setView] = useState(tab.mapState);
   const [renderedView, setRenderedView] = useState(tab.mapState);
+  const [terrainCamera, setTerrainCamera] = useState<TerrainCamera | null>(null);
   const [renderMetrics, setRenderMetrics] = useState({ lod: null as null | number, vertexCount: 0, geometryBufferBytes: 0, plannedVertexEstimate: 0, rawVertexEstimate: 0, vertexBudget: 0, visibleCount: 0, durationMs: 0, scan: emptyScan, cache: emptyCache });
   const [heat, setHeat] = useState<CooperativeHeatResult>(emptyHeat);
   const mapElement = useRef<HTMLElement>(null);
@@ -315,8 +315,6 @@ export function App() {
     const selection = ++selectionRequest.current;
     try {
       if (!ready.current) throw new Error("Open a dataset first");
-      // A selection change invalidates every viewport result that was started
-      // against the previous selection, even if its worker query is still running.
       viewportRequest.current += 1;
       selectionReady.current = false;
       setRouteBatches([]);
@@ -325,7 +323,8 @@ export function App() {
       setBusy(true); setStatus("Running DuckDB SQL…"); setError("");
       const current = { ...queryTab, sql, mapState };
       const renderStarted = performance.now();
-      const result = await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current));
+      const activeTerrainCamera = terrainEnabled && terrainCamera && Math.abs(terrainCamera.view.zoom - mapState.zoom) < 0.01 ? terrainCamera : null;
+      const result = await engine.execute(current, mapState.zoom, activeTerrainCamera?.bounds ?? viewportBounds(mapState, mapElement.current), activeTerrainCamera?.size);
       if (selection !== selectionRequest.current) return;
 
       selectionReady.current = true;
@@ -335,15 +334,12 @@ export function App() {
         setRouteBatches(result.batches); setRenderedView(mapState);
         setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
       } else {
-        // SQL establishes the new selection, but its geometry belongs to the
-        // camera from query start. Never flash those stale batches back onto a
-        // camera the user has already moved; render the selection at the latest
-        // viewport instead.
-        const bounds = viewportBounds(latestView, mapElement.current);
+        const latestCamera = terrainEnabled && terrainCamera ? terrainCamera : null;
+        const bounds = latestCamera?.bounds ?? viewportBounds(latestView, mapElement.current);
         if (bounds) {
           const request = ++viewportRequest.current;
           const viewportStarted = performance.now();
-          const latestResult = await engine.renderViewport(latestView.zoom, bounds);
+          const latestResult = await engine.renderViewport(latestView.zoom, bounds, latestCamera?.size);
           if (selection === selectionRequest.current && request === viewportRequest.current) {
             setRouteBatches(latestResult.batches); setRenderedView(latestView);
             setRenderMetrics({ lod: latestResult.lod, vertexCount: latestResult.vertexCount, geometryBufferBytes: latestResult.geometryBufferBytes, plannedVertexEstimate: latestResult.plannedVertexEstimate, rawVertexEstimate: latestResult.rawVertexEstimate, vertexBudget: latestResult.vertexBudget, visibleCount: latestResult.activityCount, durationMs: performance.now() - viewportStarted, scan: latestResult.scan, cache: latestResult.cache });
@@ -424,21 +420,19 @@ export function App() {
       ? { kind: "url" as const, baseUrl: `${hostedDatasetRoot}/${shared}`, name: shared }
       : { kind: "url" as const, baseUrl: `/local-data/${local!}`, name: local! };
     void openSource(source, initialUrlCamera.current ? view : undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    // Invalidate the previous request before checking interaction state. During
-    // a drag/wheel gesture we intentionally defer the next query, but a result
-    // for the camera we just left must never be allowed to repaint the map.
     const request = ++viewportRequest.current;
     if (!ready.current || !selectionReady.current || mapInteracting) return;
     const timer = window.setTimeout(async () => {
-      const bounds = viewportBounds(view, mapElement.current);
+      const camera = terrainEnabled ? terrainCamera : null;
+      const bounds = camera?.bounds ?? viewportBounds(view, mapElement.current);
       if (!bounds) return;
       try {
         const renderStarted = performance.now();
-        const result = await engine.renderViewport(view.zoom, bounds);
+        const result = await engine.renderViewport(view.zoom, bounds, camera?.size);
         if (request !== viewportRequest.current) return;
         setRouteBatches(result.batches); setRenderedView(view);
         setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
@@ -447,13 +441,13 @@ export function App() {
       }
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [engine, mapInteracting, systemResolution, view]);
+  }, [engine, mapInteracting, systemResolution, terrainCamera, terrainEnabled, view]);
 
   useEffect(() => {
     if (!viewportScope || (!statsOpen && !tableOpen) || !selectionReady.current) return;
     const request = ++panelRequest.current;
     const timer = window.setTimeout(async () => {
-      const bounds = viewportBounds(renderedView, mapElement.current, true);
+      const bounds = terrainEnabled && terrainCamera ? terrainCamera.bounds : viewportBounds(renderedView, mapElement.current, true);
       if (!bounds) return;
       try {
         setScopeLoading(true); setError("");
@@ -471,7 +465,7 @@ export function App() {
       }
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [engine, renderedView, statsOpen, tableOpen, viewportScope]);
+  }, [engine, renderedView, statsOpen, tableOpen, terrainCamera, terrainEnabled, viewportScope]);
 
   function choose(next: QueryTab, openQuery = false) {
     const isCurrent = next.id === active;
@@ -489,8 +483,6 @@ export function App() {
     if (ready.current && !isCurrent) void run(next, next.mapState, next.sql);
   }
   function add() {
-    // A query changes the selected routes, not the place the user is looking
-    // at. New tabs therefore inherit the live camera and visual settings.
     const next = { ...defaultTab, mapState: { ...view }, style: { ...tab.style }, id: crypto.randomUUID(), title: "New Query" };
     const updated = [...tabs, next]; setTabs(updated); saveTabs(updated); choose(next, true);
   }
@@ -507,8 +499,6 @@ export function App() {
     const nextTab = { ...tab, style: { ...tab.style, ...style } };
     const updated = tabs.map(item => item.id === tab.id ? nextTab : item);
     setTabs(updated); saveTabs(updated);
-    // Clean changes the logical activities view, so refresh the last
-    // successfully executed SQL automatically. Unsaved SQL remains a draft.
     if (style.cleanEnabled !== undefined && style.cleanEnabled !== tab.style.cleanEnabled && ready.current) void run(nextTab, view, tab.sql);
   }
   function saveSpatialFilter(spatialFilter: QueryTab["spatialFilter"], rerun: boolean) {
@@ -655,6 +645,9 @@ export function App() {
       ? colorForWeight(heat.scores.get(activity.activityId) ?? 0, heat.maxScore, tab.style.heatPalette, tab.style.heatTemperature)
       : routeColor(tab.style.color, 190);
   })), [heat, routeBatches, selected, tab.style.color, tab.style.heatEnabled, tab.style.heatPalette, tab.style.heatTemperature]);
+  const terrainColors = useMemo(() => routeBatches.map(batch => routeColors(batch, activity => tab.style.heatEnabled
+    ? colorForWeight(heat.scores.get(activity.activityId) ?? 0, heat.maxScore, tab.style.heatPalette, tab.style.heatTemperature)
+    : routeColor(tab.style.color, 190))), [heat, routeBatches, tab.style.color, tab.style.heatEnabled, tab.style.heatPalette, tab.style.heatTemperature]);
   const hoverColors = useMemo(() => hover ? routeBatches.map(batch => routeColors(batch, activity => activity.activityId === hover.item.activityId ? routeColor(tab.style.color, 255) : [0, 0, 0, 0])) : [], [hover, routeBatches, tab.style.color]);
   const overviewPathData = useMemo(() => routeBatches.map((batch, index) => binaryPathData(batch, overviewColors[index])), [overviewColors, routeBatches]);
   const pickingPathData = useMemo(() => routeBatches.map(batch => binaryPathData(batch)), [routeBatches]);
@@ -677,6 +670,7 @@ export function App() {
     ] : []),
     ...(profileHover && !spatialDrawing ? [new ScatterplotLayer<ElevationSample>({ id: "profile-position", data: [profileHover], getPosition: item => item.position, getFillColor: [71, 107, 204, 255], getLineColor: [255, 255, 255, 255], getRadius: 8, radiusUnits: "pixels", stroked: true, lineWidthMinPixels: 3 })] : []),
   ], [hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, spatialDraft, spatialDrawing, tab.spatialFilter, tab.style.color, tab.style.heatEnabled]);
+  const terrainHighlightActivityId = hover?.item.activityId ?? selected?.activityId;
 
   return <main className="app" onKeyDown={event => { if (spatialDrawing && event.key === "Escape") { setSpatialDrawing(false); setSpatialDraft([]); return; } if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void run(); }}>
     <header className="topbar">
@@ -720,14 +714,32 @@ export function App() {
     {error && <div className="error global-error" role="alert"><strong>Something needs attention</strong><span>{error}</span><button className="error-close" aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
 
     <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
-      <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />
-      <DeckGL controller={spatialDrawing ? false : { dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: 0 }} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
-        // Ignore camera callbacks produced while an asynchronously loaded published
-        // view is being applied. Only a real pointer/wheel gesture may own the camera.
-        if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isZooming) return;
-        const next = viewState as MapState;
-        setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });
-      }} onClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) { const longitude = coordinate[0], latitude = coordinate[1]; if (longitude !== undefined && latitude !== undefined) setSpatialDraft(previous => [...previous, [longitude, latitude]]); } return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />
+      {terrainEnabled && !spatialDrawing ? <MapLibreTerrainRoutes
+        view={view}
+        basemap={tab.style.basemap}
+        dark={effectiveTheme === "dark"}
+        batches={routeBatches}
+        colors={terrainColors}
+        widthPx={tab.style.heatEnabled ? lineWidths.heat : lineWidths.route}
+        highlightActivityId={terrainHighlightActivityId}
+        isolateActivityId={isolateSelected ? selected?.activityId : undefined}
+        onInteraction={setMapInteracting}
+        onView={camera => { setTerrainCamera(camera); setView(camera.view); }}
+        onHover={pick => {
+          if (!pick) { setHover(current => current?.origin === "map" ? null : current); return; }
+          const {activity, x, y} = pick;
+          void engine.getRouteMetadata(activity.activityId).then(metadata => { if (metadata) setHover({x, y, item: metadata, origin: "map"}); });
+        }}
+        onClick={activity => { void openActivity(activity); }}
+        onBackgroundClick={() => { setSelected(null); setProfileHover(null); }}
+      /> : <>
+        <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />
+        <DeckGL controller={spatialDrawing ? false : { dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: 0 }} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
+          if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isZooming) return;
+          const next = viewState as MapState;
+          setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });
+        }} onClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) { const longitude = coordinate[0], latitude = coordinate[1]; if (longitude !== undefined && latitude !== undefined) setSpatialDraft(previous => [...previous, [longitude, latitude]]); } return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />
+      </>}
       {spatialDrawing && <><div className="spatial-draw-tools" role="group" aria-label="Polygon drawing controls"><button aria-label="Undo last polygon vertex" title="Undo last point" disabled={spatialDraft.length === 0} onClick={() => setSpatialDraft(previous => previous.slice(0, -1))}>↶</button><button className="accept" aria-label="Accept polygon" title="Accept polygon" disabled={spatialDraft.length < 3} onClick={acceptSpatialDraw}>✓</button></div><div className="spatial-draw-hint">Tap the map to add polygon vertices · ↶ undo · ✓ apply</div></>}
       {!spatialDrawing && hover?.origin === "map" && <div className="tooltip" style={{ left: hover.x + 12, top: hover.y + 12 }}><strong>{hover.item.name}</strong><span>{hover.item.sportType} · {hover.item.startTime?.slice(0, 10)}</span><span>{distance(hover.item.distanceM ?? 0)} · {elevation(hover.item.elevationGainM ?? 0)} gain</span></div>}
     </section>
@@ -735,8 +747,8 @@ export function App() {
     {selected && <aside className="detail" aria-label="Activity detail"><button className="close" aria-label="Close detail" onClick={() => { setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>×</button><span className="eyebrow">{selected.sportType}</span><h2>{selected.name}</h2><p className="detail-date">{selected.startTime?.slice(0, 10)}</p><div className="detail-stats"><Stat value={distance(selected.distanceM ?? 0)} label="distance" /><Stat value={elevation(selected.elevationGainM ?? 0)} label="gain" /><Stat value={selected.maxElevationM == null ? "—" : elevation(selected.maxElevationM)} label="maximum" /></div><div className="detail-actions"><button onClick={zoomToSelected}>Zoom to route</button><button className={`isolate ${isolateSelected ? "active" : ""}`} aria-pressed={isolateSelected} onClick={() => setIsolateSelected(value => !value)}>{isolateSelected ? "Show all routes" : "Show only this route"}</button></div><ElevationProfile samples={selected.elevationProfile} active={profileHover} units={units} onHover={setProfileHover} />{selected.sourceUrl && <a href={selected.sourceUrl} target="_blank" rel="noreferrer">Open original activity ↗</a>}</aside>}
     {statsOpen && <section className="rich-stats" aria-label="Detailed selection statistics"><header><img src={logoUrl} alt="" /><div><span className="eyebrow">{viewportScope ? "CONTAINED IN VIEWPORT" : "CURRENT SELECTION"}</span><h2>{scopeLoading && viewportScope ? "Updating…" : `${integer.format((viewportScope ? scopedSummary : summary).activityCount)} activities`}</h2></div><button aria-label="Close statistics" onClick={() => setStatsOpen(false)}>×</button></header><ScopeToggle checked={viewportScope} onChange={changeViewportScope} /><Stats summary={viewportScope ? scopedSummary : summary} distance={distance} elevation={elevation} /></section>}
     {tableOpen && <section className="activity-table" aria-label="Activity table"><header><div><span className="eyebrow">{viewportScope ? "CONTAINED IN VIEWPORT" : "CURRENT SELECTION"}</span><h2>{tableLoading || (scopeLoading && viewportScope) ? "Loading activities…" : `${integer.format(tableActivities.length)} activities`}</h2></div><ScopeToggle checked={viewportScope} onChange={changeViewportScope} /><span>Hover to highlight · click to zoom</span><button aria-label="Close activity table" onClick={() => { setTableOpen(false); setHover(null); }}>×</button></header><div className="table-scroll"><table><thead><tr><SortableHeader label="Activity" field="name" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Sport" field="sport" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Date" field="date" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Distance" field="distance" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Gain" field="gain" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Maximum" field="maximum" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /></tr></thead><tbody>{tableRows.map(item => <tr key={item.activityId} className={selected?.activityId === item.activityId || hover?.origin === "table" && hover.item.activityId === item.activityId ? "selected" : ""} onMouseEnter={() => setHover({ x: 0, y: 0, item, origin: "table" })} onMouseLeave={() => setHover(current => current?.origin === "table" && current.item.activityId === item.activityId ? null : current)} onClick={() => void openTableActivity(item)}><td><strong>{item.name}</strong></td><td>{item.sportType}</td><td>{item.startTime?.slice(0, 10) ?? "—"}</td><td>{item.distanceM == null ? "—" : `${distanceValue(item.distanceM, units).toFixed(1)} ${distanceUnit(units)}`}</td><td>{item.elevationGainM == null ? "—" : elevation(item.elevationGainM)}</td><td>{item.maxElevationM == null ? "—" : elevation(item.maxElevationM)}</td></tr>)}</tbody></table>{!tableLoading && tableRows.length === 0 && <div className="table-empty">No selected activities are fully contained in the visible viewport.</div>}</div></section>}
-    {renderingOpen && <section className="rich-stats diagnostics-drawer" aria-label="Rendering diagnostics"><header><div><span className="eyebrow">BROWSER RENDER PLAN</span><h2>{renderMetrics.lod === 4 ? "Raw geometry" : renderMetrics.lod == null ? "Waiting for geometry" : `LOD ${renderMetrics.lod}`}</h2></div><button aria-label="Close rendering diagnostics" onClick={() => setRenderingOpen(false)}>×</button></header><table><tbody><Diagnostic label="Representation" value={renderMetrics.lod === 4 ? "LOD 4 · raw coordinates" : renderMetrics.lod == null ? "—" : `LOD ${renderMetrics.lod} · simplified overview`} /><Diagnostic label="Map zoom" value={renderedView.zoom.toFixed(2)} /><Diagnostic label="Fragments read" value={`${integer.format(renderMetrics.scan.candidateFragmentCount)} / ${integer.format(renderMetrics.scan.totalFragmentCount)}`} /><Diagnostic label="Candidate Parquet bytes" value={`${bytes(renderMetrics.scan.candidateBytes)} / ${bytes(renderMetrics.scan.totalBytes)}`} /><Diagnostic label="Fragment bytes avoided" value={percent(renderMetrics.scan.totalBytes - renderMetrics.scan.candidateBytes, renderMetrics.scan.totalBytes)} /><Diagnostic label="Row groups expected read" value={`${integer.format(renderMetrics.scan.expectedRowGroupCount)} / ${integer.format(renderMetrics.scan.candidateRowGroupCount)} candidate · ${integer.format(renderMetrics.scan.totalRowGroupCount)} total`} /><Diagnostic label="Row groups filtered" value={integer.format(renderMetrics.scan.totalRowGroupCount - renderMetrics.scan.expectedRowGroupCount)} /><Diagnostic label="Activity rows kept" value={`${integer.format(renderMetrics.scan.keptRowCount)} / ${integer.format(renderMetrics.scan.expectedRowCount)} expected-read rows`} /><Diagnostic label="Read-to-kept efficiency" value={percent(renderMetrics.scan.keptRowCount, renderMetrics.scan.expectedRowCount)} /><Diagnostic label="Visible routes" value={integer.format(renderMetrics.visibleCount)} /><Diagnostic label="Selected routes" value={integer.format(summary.activityCount)} /><Diagnostic label="Planned vertex estimate" value={`${integer.format(renderMetrics.plannedVertexEstimate)} / ${integer.format(renderMetrics.vertexBudget)} budget`} /><Diagnostic label="Raw vertex estimate" value={integer.format(renderMetrics.rawVertexEstimate)} /><Diagnostic label="Rendered vertices" value={integer.format(renderMetrics.vertexCount)} /><Diagnostic label="GeoArrow buffers" value={bytes(renderMetrics.geometryBufferBytes)} /><Diagnostic label="Coordinate objects created" value="0" /><Diagnostic label="Geometry query + transfer" value={`${renderMetrics.durationMs.toFixed(1)} ms`} /><Diagnostic label="Render cache" value={`${renderMetrics.cache.hit ? "hit" : "miss"} · ${bytes(renderMetrics.cache.bytes)} / ${bytes(renderMetrics.cache.budgetBytes)}`} /><Diagnostic label="Cached viewport batches" value={`${integer.format(renderMetrics.cache.entries)} · ${integer.format(renderMetrics.cache.evictions)} evicted`} /><Diagnostic label="Thickness control" value={`${tab.style.lineWidthScale.toFixed(2)}× · 0.15% viewport`} /><Diagnostic label="Route width" value={`${lineWidths.route.toFixed(2)} px`} /><Diagnostic label="Selected width" value={`${lineWidths.focus.toFixed(2)} px`} /><Diagnostic label="Heat vertices scored" value={integer.format(heat.sourceVertices)} /><Diagnostic label="Heat-colored routes" value={integer.format(heat.scores.size)} /><Diagnostic label="Heat proximity cells" value={integer.format(heat.cellCount)} /><Diagnostic label="Heat preparation" value={`${heat.durationMs.toFixed(1)} ms`} /><Diagnostic label="Heat UI slices" value={`${integer.format(heat.yieldCount + 1)} · ${heat.maxSliceMs.toFixed(1)} ms max`} /><Diagnostic label="Data view" value={tab.style.cleanEnabled ? "Clean derived view" : "Canonical raw view"} /><Diagnostic label="Basemap" value={tab.style.basemap} /></tbody></table><p>DuckDB transfers interleaved GeoArrow coordinate buffers to deck.gl without creating per-point JavaScript objects. Revisited and contained viewport batches remain in a bounded LRU cache (512 MiB desktop, 128 MiB mobile). Geometry layer inputs stay referentially stable while the camera moves, and heat scoring is recomputed between bounded main-thread slices. Fragment counts are exact for the worker query; row-group reads remain conservative estimates from compiler-recorded covering boxes.</p></section>}
-    {aboutOpen && <section className="rich-stats about-drawer" aria-label="About this project"><header><img src={logoUrl} alt="" /><div><span className="eyebrow">ABOUT THIS PROJECT</span><h2>Your archive, at browser scale</h2></div><button aria-label="Close about this project" onClick={() => setAboutOpen(false)}>×</button></header><p className="about-lead">Squiggles is built for the larger GPX archive that becomes awkward to understand in experiences centered on individual activities or route planning.</p><div className="technology-flow" aria-label="Technology pipeline"><strong>Parquet</strong><span>→</span><strong>GeoArrow</strong><span>→</span><strong>DuckDB-Wasm</strong><span>→</span><strong>deck.gl</strong></div><h3>Millions of points, locally</h3><p>Columnar GeoParquet keeps the compiled archive compact. GeoArrow carries coordinates without a giant GeoJSON conversion. DuckDB runs SQL, summaries, viewport pruning, and detail lookup inside a browser worker, while deck.gl sends the chosen geometry to WebGL.</p><p>Together, those pieces let a user's own browser query and view many millions of recorded points. Dropping the same archive as thousands of individual GPX files into a route-planning import flow—Caltopo included—can overwhelm a workflow that was designed for a different job.</p><h3>What it is—and is not</h3><p>This is not a route planner, navigation system, training coach, or social feed. It is a storytelling tool: find the patterns across years of movement, revisit the places that shaped you, and share the resulting map.</p><a className="github-link" href="https://github.com/ljstrnadiii/squiggles" target="_blank" rel="noreferrer" aria-label="Squiggles on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.02c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.74-1.55-2.57-.3-5.27-1.29-5.27-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.16 1.18a10.97 10.97 0 0 1 5.75 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.75.11 3.04.74.8 1.83 1.19 3.09 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.06.79 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" /></svg>View the project on GitHub</a><p className="privacy-note">Your activity SQL and rendering stay in the browser. Optional basemap tiles are the only runtime third-party requests.</p></section>}
+    {renderingOpen && <section className="rich-stats diagnostics-drawer" aria-label="Rendering diagnostics"><header><div><span className="eyebrow">BROWSER RENDER PLAN</span><h2>{renderMetrics.lod === 4 ? "Raw geometry" : renderMetrics.lod == null ? "Waiting for geometry" : `LOD ${renderMetrics.lod}`}</h2></div><button aria-label="Close rendering diagnostics" onClick={() => setRenderingOpen(false)}>×</button></header><table><tbody><Diagnostic label="Representation" value={renderMetrics.lod === 4 ? "LOD 4 · raw coordinates" : renderMetrics.lod == null ? "—" : `LOD ${renderMetrics.lod} · simplified overview`} /><Diagnostic label="Map zoom" value={renderedView.zoom.toFixed(2)} /><Diagnostic label="Fragments read" value={`${integer.format(renderMetrics.scan.candidateFragmentCount)} / ${integer.format(renderMetrics.scan.totalFragmentCount)}`} /><Diagnostic label="Candidate Parquet bytes" value={`${bytes(renderMetrics.scan.candidateBytes)} / ${bytes(renderMetrics.scan.totalBytes)}`} /><Diagnostic label="Fragment bytes avoided" value={percent(renderMetrics.scan.totalBytes - renderMetrics.scan.candidateBytes, renderMetrics.scan.totalBytes)} /><Diagnostic label="Row groups expected read" value={`${integer.format(renderMetrics.scan.expectedRowGroupCount)} / ${integer.format(renderMetrics.scan.candidateRowGroupCount)} candidate · ${integer.format(renderMetrics.scan.totalRowGroupCount)} total`} /><Diagnostic label="Row groups filtered" value={integer.format(renderMetrics.scan.totalRowGroupCount - renderMetrics.scan.expectedRowGroupCount)} /><Diagnostic label="Activity rows kept" value={`${integer.format(renderMetrics.scan.keptRowCount)} / ${integer.format(renderMetrics.scan.expectedRowCount)} expected-read rows`} /><Diagnostic label="Read-to-kept efficiency" value={percent(renderMetrics.scan.keptRowCount, renderMetrics.scan.expectedRowCount)} /><Diagnostic label="Visible routes" value={integer.format(renderMetrics.visibleCount)} /><Diagnostic label="Selected routes" value={integer.format(summary.activityCount)} /><Diagnostic label="Planned vertex estimate" value={`${integer.format(renderMetrics.plannedVertexEstimate)} / ${integer.format(renderMetrics.vertexBudget)} budget`} /><Diagnostic label="Raw vertex estimate" value={integer.format(renderMetrics.rawVertexEstimate)} /><Diagnostic label="Rendered vertices" value={integer.format(renderMetrics.vertexCount)} /><Diagnostic label="GeoArrow buffers" value={bytes(renderMetrics.geometryBufferBytes)} /><Diagnostic label="Coordinate objects created" value="0" /><Diagnostic label="Geometry query + transfer" value={`${renderMetrics.durationMs.toFixed(1)} ms`} /><Diagnostic label="Render cache" value={`${renderMetrics.cache.hit ? "hit" : "miss"} · ${bytes(renderMetrics.cache.bytes)} / ${bytes(renderMetrics.cache.budgetBytes}`} /><Diagnostic label="Cached viewport batches" value={`${integer.format(renderMetrics.cache.entries)} · ${integer.format(renderMetrics.cache.evictions)} evicted`} /><Diagnostic label="Thickness control" value={`${tab.style.lineWidthScale.toFixed(2)}× · 0.15% viewport`} /><Diagnostic label="Route width" value={`${lineWidths.route.toFixed(2)} px`} /><Diagnostic label="Selected width" value={`${lineWidths.focus.toFixed(2)} px`} /><Diagnostic label="Heat vertices scored" value={integer.format(heat.sourceVertices)} /><Diagnostic label="Heat-colored routes" value={integer.format(heat.scores.size)} /><Diagnostic label="Heat proximity cells" value={integer.format(heat.cellCount)} /><Diagnostic label="Heat preparation" value={`${heat.durationMs.toFixed(1)} ms`} /><Diagnostic label="Heat UI slices" value={`${integer.format(heat.yieldCount + 1)} · ${heat.maxSliceMs.toFixed(1)} ms max`} /><Diagnostic label="Data view" value={tab.style.cleanEnabled ? "Clean derived view" : "Canonical raw view"} /><Diagnostic label="Basemap" value={tab.style.basemap} /></tbody></table><p>DuckDB transfers interleaved GeoArrow coordinate buffers directly to the active WebGL renderer without creating per-point JavaScript objects. Revisited and contained viewport batches remain in a bounded LRU cache. Geometry layer inputs stay referentially stable while the camera moves, and heat scoring is recomputed between bounded main-thread slices.</p></section>}
+    {aboutOpen && <section className="rich-stats about-drawer" aria-label="About this project"><header><img src={logoUrl} alt="" /><div><span className="eyebrow">ABOUT THIS PROJECT</span><h2>Your archive, at browser scale</h2></div><button aria-label="Close about this project" onClick={() => setAboutOpen(false)}>×</button></header><p className="about-lead">Squiggles is built for the larger GPX archive that becomes awkward to understand in experiences centered on individual activities or route planning.</p><div className="technology-flow" aria-label="Technology pipeline"><strong>Parquet</strong><span>→</span><strong>GeoArrow</strong><span>→</span><strong>DuckDB-Wasm</strong><span>→</span><strong>WebGL</strong></div><h3>Millions of points, locally</h3><p>Columnar GeoParquet keeps the compiled archive compact. GeoArrow carries coordinates without a giant GeoJSON conversion. DuckDB runs SQL, summaries, viewport pruning, and detail lookup inside a browser worker, while the chosen binary geometry is sent directly to WebGL.</p><p>Together, those pieces let a user's own browser query and view many millions of recorded points. Dropping the same archive as thousands of individual GPX files into a route-planning import flow—Caltopo included—can overwhelm a workflow that was designed for a different job.</p><h3>What it is—and is not</h3><p>This is not a route planner, navigation system, training coach, or social feed. It is a storytelling tool: find the patterns across years of movement, revisit the places that shaped you, and share the resulting map.</p><a className="github-link" href="https://github.com/ljstrnadiii/squiggles" target="_blank" rel="noreferrer" aria-label="Squiggles on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.02c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.74-1.55-2.57-.3-5.27-1.29-5.27-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.16 1.18a10.97 10.97 0 0 1 5.75 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.75.11 3.04.74.8 1.83 1.19 3.09 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.06.79 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" /></svg>View the project on GitHub</a><p className="privacy-note">Your activity SQL and rendering stay in the browser. Optional basemap tiles are the only runtime third-party requests.</p></section>}
   </main>;
 }
 
