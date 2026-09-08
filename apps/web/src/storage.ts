@@ -3,7 +3,7 @@ import type { QueryTab } from "./contracts";
 const KEY = "activity-map.tabs.v1";
 export const ELECTRIC_BLUE = "#476bcc";
 const legacyDefaultColors = new Set(["#dcff4e", "#ff8a4c", "#315fd5", "#0000ff"]);
-const defaultStyle = { color: ELECTRIC_BLUE, lineWidthScale: 1, basemap: "streets" as const, heatEnabled: true, heatPalette: "sunset" as const, heatTemperature: 1.7, cleanEnabled: false };
+const defaultStyle = { color: ELECTRIC_BLUE, lineWidthScale: 1, basemap: "streets" as const, viewMode: "2d" as const, terrainExaggeration: 1, heatEnabled: true, heatPalette: "sunset" as const, heatTemperature: 1.7, cleanEnabled: false };
 
 export const defaultTab: QueryTab = {
   id: "all",
@@ -36,7 +36,12 @@ export function loadTabs(): QueryTab[] {
       const currentStyle = { ...tab.style };
       delete currentStyle.lineWidth;
       const merged = { ...defaultStyle, ...currentStyle, ...(legacyScale === undefined ? {} : { lineWidthScale: legacyScale }) };
-      const style = { ...merged, lineWidthScale: Math.max(0.25, Math.min(4, merged.lineWidthScale)) };
+      const style = {
+        ...merged,
+        lineWidthScale: Math.max(0.25, Math.min(4, merged.lineWidthScale)),
+        terrainExaggeration: Math.max(0.25, Math.min(3, Number.isFinite(merged.terrainExaggeration) ? merged.terrainExaggeration : 1)),
+        viewMode: merged.viewMode === "3d" ? "3d" as const : "2d" as const,
+      };
       return { ...tab, style: { ...style, color: normalizeRouteColor(style.color) } };
     }) : [defaultTab];
     return tabs.some(tab => tab.id === highRunsTab.id) ? tabs : [...tabs, highRunsTab];
