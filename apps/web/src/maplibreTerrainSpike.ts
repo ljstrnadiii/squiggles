@@ -9,10 +9,11 @@ window.addEventListener('unhandledrejection', event => fail(event.reason));
 async function main() {
   try {
     status.textContent = 'importing MapLibre…';
-    const [{default: maplibregl}] = await Promise.all([
+    const [maplibreModule] = await Promise.all([
       import('maplibre-gl'),
       import('maplibre-gl/dist/maplibre-gl.css')
     ]);
+    const maplibregl = maplibreModule.default ?? maplibreModule;
 
     status.textContent = 'MapLibre loaded · importing deck core…';
     const [{Deck, MapView}, {PathLayer}] = await Promise.all([
