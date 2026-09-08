@@ -1,6 +1,7 @@
 import { authFetch, type AuthSession, type RuntimeConfig } from "./auth";
 import type { QueryTab } from "./contracts";
 import { renderPlanHint } from "./renderPlanHints";
+import { normalizeTab } from "./storage";
 
 export type PublishedView = {
   slug: string;
@@ -26,8 +27,6 @@ export async function publishView(
         longitude: tab.mapState.longitude,
         latitude: tab.mapState.latitude,
         zoom: tab.mapState.zoom,
-        bearing: tab.mapState.bearing,
-        pitch: tab.mapState.pitch,
       },
     };
   });
@@ -56,24 +55,6 @@ export async function loadPublishedView(
   const published = (await response.json()) as PublishedView;
   return {
     ...published,
-    tabs: published.tabs.map((tab) => ({
-      ...tab,
-      style: {
-        ...tab.style,
-        basemap: (tab.style.basemap as string) === "mapbox-satellite-clean" ? "mapbox-satellite" : tab.style.basemap,
-        basemapOptions: Object.assign(
-          { labels: false, roads: false, trails: false, boundaries: false, objects3d: false },
-          tab.style.basemapOptions,
-        ),
-        viewMode: tab.style.viewMode ?? ((tab.mapState.pitch ?? 0) > 0 ? "3d" : "2d"),
-      },
-      mapState: {
-        longitude: tab.mapState.longitude,
-        latitude: tab.mapState.latitude,
-        zoom: tab.mapState.zoom,
-        bearing: Number.isFinite(tab.mapState.bearing) ? tab.mapState.bearing : 0,
-        pitch: Number.isFinite(tab.mapState.pitch) ? tab.mapState.pitch : 0,
-      },
-    })),
+    tabs: published.tabs.map(tab => normalizeTab(tab)),
   };
 }

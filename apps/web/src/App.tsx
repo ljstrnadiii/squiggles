@@ -1,10 +1,10 @@
-import { WebMercatorViewport, type Layer, type PickingInfo } from "@deck.gl/core";
+import { WebMercatorViewport, type PickingInfo } from "@deck.gl/core";
 import { PathLayer, ScatterplotLayer } from "@deck.gl/layers";
-import { MapboxOverlay } from "@deck.gl/mapbox";
+import DeckGL from "@deck.gl/react";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { StyleSpecification } from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
 
-import type { ActivityListItem, Basemap, BasemapOptions, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, MapViewMode, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds, ViewportSize } from "./contracts";
+import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";
 import { binaryPathData, pickedActivity, routeColors } from "./binaryRoutes";
 import { BrowserDuckDBEngine } from "./engine";
 import { buildBinaryHeatDataCooperative, colorForWeight, type CooperativeHeatResult } from "./heat";
@@ -17,63 +17,17 @@ import { distanceUnit, distanceValue, elevationUnit, elevationValue, loadUnits, 
 import { AccountPanel } from "./AccountPanel";
 import { clearSession, identityFromSession, loadSession } from "./auth";
 import { loadRuntimeConfig } from "./auth";
+import { MapLibreTerrainRoutes, type TerrainCamera } from "./MapLibreTerrainRoutes";
 import { loadPublishedView, publishView } from "./publishing";
 import { loadSystemResolution, saveSystemResolution } from "./resolution";
 
-type MapboxCamera = { center: [number, number]; zoom: number; bearing?: number; pitch?: number };
-type MapboxMapInstance = {
-  jumpTo(options: MapboxCamera): void;
-  setStyle(style: StyleSpecification | string): void;
-  setConfigProperty(importId: string, name: string, value: boolean): void;
-  getStyle(): { layers?: Array<{ id: string; type: string; layout?: { visibility?: string } }> };
-  setLayoutProperty(layerId: string, name: "visibility", value: "visible" | "none"): void;
-  addSource(id: string, source: { type: "raster-dem"; url: string; tileSize: number; maxzoom: number } | { type: "raster-dem"; tiles: string[]; tileSize: number; maxzoom: number; encoding: "terrarium"; attribution: string }): void;
-  getSource(id: string): unknown;
-  setTerrain(terrain: { source: string; exaggeration: number } | null): void;
-  isStyleLoaded(): boolean;
-  getCenter(): { lng: number; lat: number };
-  getZoom(): number;
-  getBearing(): number;
-  getPitch(): number;
-  addControl(control: unknown): void;
-  removeControl(control: unknown): void;
-  dragPan: { enable(): void; disable(): void };
-  scrollZoom: { enable(): void; disable(): void };
-  boxZoom: { enable(): void; disable(): void };
-  dragRotate: { enable(): void; disable(): void };
-  keyboard: { enable(): void; disable(): void };
-  doubleClickZoom: { enable(): void; disable(): void };
-  touchZoomRotate: { enable(): void; disable(): void; enableRotation(): void; disableRotation(): void };
-  touchPitch: { enable(): void; disable(): void };
-  on(event: string, listener: () => void): void;
-  remove(): void;
-};
-type MapboxMapConstructor = new (options: {
-  container: HTMLElement;
-  style: StyleSpecification | string;
-  center: [number, number];
-  zoom: number;
-  bearing: number;
-  pitch: number;
-  interactive: boolean;
-  touchPitch?: boolean;
-  touchZoomRotate?: boolean;
-  attributionControl: boolean;
-  accessToken?: string;
-}) => MapboxMapInstance;
-
-const mapboxAccessToken = (import.meta.env.VITE_MAPBOX_ACCESS_TOKEN as string | undefined)?.trim();
-const fallbackTerrainTiles = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
-const terrainAttribution = "Elevation: Mapzen/Tilezen · AWS Open Data";
-const blankStyle: StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
-const rasterStyles: Record<"carto-light" | "carto-dark", { tiles: string[]; attribution: string; maxzoom: number }> = {
+const blankStyle: maplibregl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
+const rasterStyles: Record<Exclude<Basemap, "blank">, { tiles: string[]; attribution: string; maxzoom: number }> = {
   "carto-light": { tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
   "carto-dark": { tiles: ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
-};
-const mapboxStyles: Record<"mapbox-standard" | "mapbox-satellite" | "mapbox-outdoors", string> = {
-  "mapbox-standard": "mapbox://styles/mapbox/standard",
-  "mapbox-satellite": "mapbox://styles/mapbox/standard-satellite",
-  "mapbox-outdoors": "mapbox://styles/mapbox/outdoors-v12",
+  streets: { tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors", maxzoom: 19 },
+  topo: { tiles: ["https://tile.opentopomap.org/{z}/{x}/{y}.png"], attribution: "Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)", maxzoom: 17 },
+  imagery: { tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], attribution: "Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community", maxzoom: 19 },
 };
 const empty: SummaryStats = { activityCount: 0, distanceM: 0, elapsedSeconds: 0, movingSeconds: 0, elevationGainM: 0, elevationLossM: 0, minElevationM: null, maxElevationM: null, maxDistanceM: null, activeDays: 0, droppedJumpPoints: 0, droppedElevationPoints: 0, sportCounts: [], firstActivity: null, lastActivity: null };
 const integer = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
@@ -83,8 +37,7 @@ const emptyHeat: CooperativeHeatResult = { scores: new Map(), sourceVertices: 0,
 const bytes = (value: number) => value < 1024 ? `${value} B` : value < 1024 ** 2 ? `${(value / 1024).toFixed(1)} KiB` : value < 1024 ** 3 ? `${(value / 1024 ** 2).toFixed(1)} MiB` : `${(value / 1024 ** 3).toFixed(2)} GiB`;
 const percent = (part: number, total: number) => total > 0 ? `${(part / total * 100).toFixed(1)}%` : "—";
 const SqlEditor = lazy(() => import("./SqlEditor").then(module => ({ default: module.SqlEditor })));
-const basemaps = new Set<Basemap>(["mapbox-standard", "mapbox-satellite", "mapbox-outdoors", "carto-light", "carto-dark", "blank"]);
-const viewModes = new Set<MapViewMode>(["2d", "3d"]);
+const basemaps = new Set<Basemap>(["carto-light", "carto-dark", "streets", "topo", "imagery", "blank"]);
 const heatPalettes = new Set<HeatPalette>(["sunset", "viridis", "fire", "ice"]);
 function finiteParameter(parameters: URLSearchParams, name: string, minimum: number, maximum: number) {
   const raw = parameters.get(name);
@@ -100,40 +53,28 @@ function tabsWithUrlSettings(tabs: QueryTab[]) {
   const longitude = finiteParameter(parameters, "lng", -180, 180);
   const latitude = finiteParameter(parameters, "lat", -85, 85);
   const zoom = finiteParameter(parameters, "zoom", 0, 24);
-  const bearing = finiteParameter(parameters, "bearing", -180, 180);
-  const pitch = finiteParameter(parameters, "pitch", 0, 60);
   const basemap = parameters.get("basemap");
-  const viewMode = parameters.get("view");
   const palette = parameters.get("palette");
   const temperature = finiteParameter(parameters, "temperature", 0.5, 3);
   const thickness = finiteParameter(parameters, "thickness", 0.25, 4);
+  const exaggeration = finiteParameter(parameters, "exaggeration", 0.25, 3);
+  const requestedView = parameters.get("view");
+  const legacyTerrain = parameters.get("terrain") === "1";
   const color = parameters.get("color");
-  const labels = parameters.get("labels");
-  const roads = parameters.get("roads");
-  const trails = parameters.get("trails");
-  const boundaries = parameters.get("boundaries");
-  const objects3d = parameters.get("objects3d");
   const next: QueryTab = {
     ...target,
-    mapState: longitude === undefined || latitude === undefined || zoom === undefined ? target.mapState : { longitude, latitude, zoom, bearing: bearing ?? target.mapState.bearing ?? 0, pitch: pitch ?? target.mapState.pitch ?? 0 },
+    mapState: longitude === undefined || latitude === undefined || zoom === undefined ? target.mapState : { longitude, latitude, zoom },
     style: {
       ...target.style,
       ...(basemap && basemaps.has(basemap as Basemap) ? { basemap: basemap as Basemap } : {}),
-      ...(viewMode && viewModes.has(viewMode as MapViewMode) ? { viewMode: viewMode as MapViewMode } : pitch !== undefined && pitch > 0 ? { viewMode: "3d" as const } : {}),
       ...(palette && heatPalettes.has(palette as HeatPalette) ? { heatPalette: palette as HeatPalette } : {}),
       ...(temperature === undefined ? {} : { heatTemperature: temperature }),
       ...(thickness === undefined ? {} : { lineWidthScale: thickness }),
+      ...(exaggeration === undefined ? {} : { terrainExaggeration: exaggeration }),
+      ...(requestedView === "3d" || legacyTerrain ? { viewMode: "3d" as const } : requestedView === "2d" ? { viewMode: "2d" as const } : {}),
       ...(parameters.get("heat") === "1" ? { heatEnabled: true } : parameters.get("heat") === "0" ? { heatEnabled: false } : {}),
       ...(parameters.get("clean") === "1" ? { cleanEnabled: true } : parameters.get("clean") === "0" ? { cleanEnabled: false } : {}),
       ...(color && /^#[0-9a-f]{6}$/i.test(color) ? { color: normalizeRouteColor(color) } : {}),
-      basemapOptions: {
-        ...target.style.basemapOptions,
-        ...(labels === "1" ? { labels: true } : labels === "0" ? { labels: false } : {}),
-        ...(roads === "1" ? { roads: true } : roads === "0" ? { roads: false } : {}),
-        ...(trails === "1" ? { trails: true } : trails === "0" ? { trails: false } : {}),
-        ...(boundaries === "1" ? { boundaries: true } : boundaries === "0" ? { boundaries: false } : {}),
-        ...(objects3d === "1" ? { objects3d: true } : objects3d === "0" ? { objects3d: false } : {}),
-      },
     },
   };
   return tabs.map(item => item.id === next.id ? next : item);
@@ -161,15 +102,9 @@ function replaceUrlSettings(tab: QueryTab, view: MapState, units: UnitSystem) {
   url.searchParams.set("lng", view.longitude.toFixed(5));
   url.searchParams.set("lat", view.latitude.toFixed(5));
   url.searchParams.set("zoom", view.zoom.toFixed(2));
-  url.searchParams.set("bearing", view.bearing.toFixed(1));
-  url.searchParams.set("pitch", view.pitch.toFixed(1));
   url.searchParams.set("basemap", tab.style.basemap);
-  url.searchParams.set("labels", tab.style.basemapOptions.labels ? "1" : "0");
-  url.searchParams.set("roads", tab.style.basemapOptions.roads ? "1" : "0");
-  url.searchParams.set("trails", tab.style.basemapOptions.trails ? "1" : "0");
-  url.searchParams.set("boundaries", tab.style.basemapOptions.boundaries ? "1" : "0");
-  url.searchParams.set("objects3d", tab.style.basemapOptions.objects3d ? "1" : "0");
   url.searchParams.set("view", tab.style.viewMode);
+  url.searchParams.set("exaggeration", tab.style.terrainExaggeration.toFixed(2));
   url.searchParams.set("heat", tab.style.heatEnabled ? "1" : "0");
   url.searchParams.set("palette", tab.style.heatPalette);
   url.searchParams.set("temperature", tab.style.heatTemperature.toFixed(1));
@@ -177,6 +112,7 @@ function replaceUrlSettings(tab: QueryTab, view: MapState, units: UnitSystem) {
   url.searchParams.set("clean", tab.style.cleanEnabled ? "1" : "0");
   url.searchParams.set("color", tab.style.color);
   url.searchParams.set("units", units);
+  url.searchParams.delete("terrain");
   window.history.replaceState({}, "", url);
 }
 
@@ -201,7 +137,7 @@ function viewportInsets(element: HTMLElement | null): ViewportInsets {
 function fitBounds([xmin, ymin, xmax, ymax]: [number, number, number, number], maximumZoom = 12, element: HTMLElement | null = null): MapState {
   if (!element?.clientWidth || !element.clientHeight) {
     const span = Math.max(xmax - xmin, (ymax - ymin) * 1.6, 0.001);
-    return { longitude: (xmin + xmax) / 2, latitude: (ymin + ymax) / 2, zoom: Math.max(1, Math.min(maximumZoom, Math.log2(360 / span) - 0.8)), bearing: 0, pitch: 0 };
+    return { longitude: (xmin + xmax) / 2, latitude: (ymin + ymax) / 2, zoom: Math.max(1, Math.min(maximumZoom, Math.log2(360 / span) - 0.8)) };
   }
   const occupied = viewportInsets(element);
   const viewport = new WebMercatorViewport({ width: element.clientWidth, height: element.clientHeight });
@@ -209,142 +145,48 @@ function fitBounds([xmin, ymin, xmax, ymax]: [number, number, number, number], m
     maxZoom: maximumZoom,
     padding: { top: 24 + occupied.top, right: 24 + occupied.right, bottom: 24 + occupied.bottom, left: 24 + occupied.left },
   });
-  return { longitude: fitted.longitude, latitude: fitted.latitude, zoom: fitted.zoom, bearing: 0, pitch: 0 };
+  return { longitude: fitted.longitude, latitude: fitted.latitude, zoom: fitted.zoom };
 }
 
 type TableSort = "name" | "sport" | "date" | "distance" | "gain" | "maximum";
 
-function rasterStyle(basemap: "carto-light" | "carto-dark", labels = false): StyleSpecification {
-  const source = rasterStyles[basemap];
-  const tiles = labels ? source.tiles : source.tiles.map(tile => tile.replace("_all/", "_nolabels/"));
-  return { version: 8, sources: { basemap: { type: "raster", tiles, tileSize: 256, maxzoom: source.maxzoom, attribution: source.attribution } }, layers: [{ id: "basemap", type: "raster", source: "basemap" }] };
-}
-
-function mapStyle(basemap: Basemap, theme: "light" | "dark", options: BasemapOptions): StyleSpecification | string {
+function mapStyle(basemap: Basemap, theme: "light" | "dark"): maplibregl.StyleSpecification {
   if (basemap === "blank") return { ...blankStyle, layers: [{ id: "background", type: "background", paint: { "background-color": theme === "dark" ? "#07100e" : "#edf2ef" } }] };
-  if (basemap === "carto-light" || basemap === "carto-dark") return rasterStyle(basemap, options.labels);
-  return mapboxAccessToken ? mapboxStyles[basemap] : rasterStyle(theme === "dark" ? "carto-dark" : "carto-light", options.labels);
+  const source = rasterStyles[basemap];
+  return { version: 8, sources: { basemap: { type: "raster", tiles: source.tiles, tileSize: 256, maxzoom: source.maxzoom, attribution: source.attribution } }, layers: [{ id: "basemap", type: "raster", source: "basemap" }] };
 }
 
-function applyBasemapOptions(map: MapboxMapInstance, basemap: Basemap, options: BasemapOptions) {
-  if (basemap === "mapbox-standard" || basemap === "mapbox-satellite") {
-    for (const property of ["showPlaceLabels", "showPointOfInterestLabels", "showRoadLabels", "showTransitLabels"]) map.setConfigProperty("basemap", property, options.labels);
-    map.setConfigProperty("basemap", "showAdminBoundaries", options.boundaries);
-    map.setConfigProperty("basemap", "showPedestrianRoads", options.trails);
-    if (basemap === "mapbox-satellite") map.setConfigProperty("basemap", "showRoadsAndTransit", options.roads);
-    if (basemap === "mapbox-standard") map.setConfigProperty("basemap", "show3dObjects", options.objects3d);
-    return;
-  }
-  if (basemap === "mapbox-outdoors" && !options.labels) {
-    for (const layer of map.getStyle().layers ?? []) if (layer.type === "symbol") map.setLayoutProperty(layer.id, "visibility", "none");
-  }
-}
-
-function applyTerrain(map: MapboxMapInstance, enabled: boolean) {
-  if (!enabled) { map.setTerrain(null); return; }
-  if (!map.getSource("squiggles-terrain")) {
-    if (mapboxAccessToken) map.addSource("squiggles-terrain", { type: "raster-dem", url: "mapbox://mapbox.mapbox-terrain-dem-v1", tileSize: 512, maxzoom: 14 });
-    else map.addSource("squiggles-terrain", { type: "raster-dem", tiles: [fallbackTerrainTiles], tileSize: 256, maxzoom: 15, encoding: "terrarium", attribution: terrainAttribution });
-  }
-  map.setTerrain({ source: "squiggles-terrain", exaggeration: 1 });
-}
-
-function cameraState(map: MapboxMapInstance): MapState {
-  const center = map.getCenter();
-  return { longitude: center.lng, latitude: center.lat, zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
-}
-
-function configureMapboxNavigation(map: MapboxMapInstance, viewMode: MapViewMode, enabled: boolean) {
-  for (const handler of [map.dragPan, map.scrollZoom, map.boxZoom, map.keyboard, map.doubleClickZoom, map.touchZoomRotate]) { if (enabled) handler.enable(); else handler.disable(); }
-  if (!enabled || viewMode === "2d") { map.dragRotate.disable(); map.touchPitch.disable(); map.touchZoomRotate.disableRotation(); }
-  else { map.dragRotate.enable(); map.touchPitch.enable(); map.touchZoomRotate.enableRotation(); }
-}
-
-function BaseMap({ view, basemap, options, viewMode, theme, layers, spatialDrawing, onViewChange, onInteractionChange, onDeckClick }: { view: MapState; basemap: Basemap; options: BasemapOptions; viewMode: MapViewMode; theme: "light" | "dark"; layers: Layer[]; spatialDrawing: boolean; onViewChange: (view: MapState) => void; onInteractionChange: (active: boolean) => void; onDeckClick: (info: PickingInfo) => void }) {
+function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; theme: "light" | "dark" }) {
   const container = useRef<HTMLDivElement>(null);
-  const map = useRef<MapboxMapInstance | null>(null);
-  const overlay = useRef<MapboxOverlay | null>(null);
+  const map = useRef<maplibregl.Map | null>(null);
   const initialView = useRef(view);
   const initialBasemap = useRef(basemap);
   const initialTheme = useRef(theme);
-  const initialOptions = useRef(options);
-  const latestLayers = useRef(layers);
-  const appliedStyle = useRef(`${basemap}:${theme}:${JSON.stringify(options)}`);
-  const currentBasemap = useRef(basemap);
-  const currentOptions = useRef(options);
-  const currentViewMode = useRef(viewMode);
-  const onViewChangeRef = useRef(onViewChange);
-  const onInteractionChangeRef = useRef(onInteractionChange);
-  const onDeckClickRef = useRef(onDeckClick);
-  currentBasemap.current = basemap; currentOptions.current = options; currentViewMode.current = viewMode; latestLayers.current = layers;
-  onViewChangeRef.current = onViewChange; onInteractionChangeRef.current = onInteractionChange; onDeckClickRef.current = onDeckClick;
+  const appliedStyle = useRef(`${basemap}:${theme}`);
   useEffect(() => {
-    if (!container.current || !window.mapboxgl) return;
+    if (!container.current) return;
     const initial = initialView.current;
-    const MapboxMap = window.mapboxgl.Map;
-    map.current = new MapboxMap({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current, initialOptions.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, bearing: initial.bearing ?? 0, pitch: initial.pitch ?? 0, interactive: true, touchPitch: true, touchZoomRotate: true, attributionControl: true, ...(mapboxAccessToken ? { accessToken: mapboxAccessToken } : {}) });
-    const installOverlay = () => {
-      if (!map.current) return;
-      if (overlay.current) { map.current.removeControl(overlay.current); overlay.current = null; }
-      overlay.current = new MapboxOverlay({ interleaved: true, layers: latestLayers.current, onClick: (info: PickingInfo) => onDeckClickRef.current(info) });
-      map.current.addControl(overlay.current);
-      configureMapboxNavigation(map.current, currentViewMode.current, true);
-    };
-    map.current.on("style.load", () => {
-      if (!map.current) return;
-      applyBasemapOptions(map.current, currentBasemap.current, currentOptions.current);
-      applyTerrain(map.current, currentViewMode.current === "3d");
-      installOverlay();
-    });
-    map.current.on("move", () => { if (map.current) onViewChangeRef.current(cameraState(map.current)); });
-    map.current.on("movestart", () => onInteractionChangeRef.current(true));
-    map.current.on("moveend", () => onInteractionChangeRef.current(false));
-    configureMapboxNavigation(map.current, currentViewMode.current, true);
-    const closeAttribution = () => container.current?.querySelector(".mapboxgl-ctrl-attrib")?.classList.remove("mapboxgl-compact-show");
-    window.setTimeout(closeAttribution, 0); window.setTimeout(closeAttribution, 750);
-    return () => { if (map.current && overlay.current) map.current.removeControl(overlay.current); overlay.current = null; map.current?.remove(); map.current = null; };
+    map.current = new maplibregl.Map({ container: container.current, style: mapStyle(initialBasemap.current, initialTheme.current), center: [initial.longitude, initial.latitude], zoom: initial.zoom, interactive: false, attributionControl: { compact: true } });
+    const closeAttribution = () => container.current?.querySelector(".maplibregl-ctrl-attrib")?.classList.remove("maplibregl-compact-show");
+    window.setTimeout(closeAttribution, 0);
+    window.setTimeout(closeAttribution, 750);
+    return () => { map.current?.remove(); map.current = null; };
   }, []);
   useLayoutEffect(() => {
-    if (!map.current) return;
-    const current = cameraState(map.current);
-    if (Math.abs(current.longitude - view.longitude) > 1e-7 || Math.abs(current.latitude - view.latitude) > 1e-7 || Math.abs(current.zoom - view.zoom) > 1e-7 || Math.abs(current.bearing - view.bearing) > 1e-7 || Math.abs(current.pitch - view.pitch) > 1e-7) map.current.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom, bearing: view.bearing, pitch: view.pitch });
+    map.current?.jumpTo({ center: [view.longitude, view.latitude], zoom: view.zoom });
   }, [view]);
-  useEffect(() => { latestLayers.current = layers; overlay.current?.setProps({ layers, onClick: (info: PickingInfo) => onDeckClickRef.current(info) }); }, [layers]);
-  useEffect(() => { if (map.current) { configureMapboxNavigation(map.current, viewMode, !spatialDrawing); if (map.current.isStyleLoaded()) applyTerrain(map.current, viewMode === "3d"); } }, [spatialDrawing, viewMode]);
-  useEffect(() => { const key = `${basemap}:${theme}:${JSON.stringify(options)}`; if (appliedStyle.current !== key) { appliedStyle.current = key; map.current?.setStyle(mapStyle(basemap, theme, options)); } }, [basemap, options, theme]);
+  useEffect(() => {
+    const key = `${basemap}:${theme}`;
+    if (appliedStyle.current === key) return;
+    appliedStyle.current = key;
+    map.current?.setStyle(mapStyle(basemap, theme));
+  }, [basemap, theme]);
   return <div className="maplibre-base" ref={container} />;
-}
-
-function mercatorMeters([longitude, latitude]: number[]): [number, number] {
-  const radius = 6_378_137;
-  const clamped = Math.max(-85.05112878, Math.min(85.05112878, latitude));
-  return [radius * longitude * Math.PI / 180, radius * Math.log(Math.tan(Math.PI / 4 + clamped * Math.PI / 360))];
-}
-
-function perspectiveViewportSize(view: MapState, element: HTMLElement | null): ViewportSize | undefined {
-  if (!element?.clientWidth || !element.clientHeight) return undefined;
-  const width = element.clientWidth;
-  const height = element.clientHeight;
-  if (view.pitch <= 0) return { width, height };
-  const viewport = new WebMercatorViewport({ ...view, width, height });
-  let finest = Number.POSITIVE_INFINITY;
-  for (const fraction of [0.55, 0.75, 0.9]) {
-    const x = width / 2;
-    const y = height * fraction;
-    const origin = mercatorMeters(viewport.unproject([x, y]));
-    const right = mercatorMeters(viewport.unproject([x + 1, y]));
-    const down = mercatorMeters(viewport.unproject([x, Math.min(height - 1, y + 1)]));
-    const horizontal = Math.hypot(right[0] - origin[0], right[1] - origin[1]);
-    const vertical = Math.hypot(down[0] - origin[0], down[1] - origin[1]);
-    const local = Math.max(horizontal, vertical);
-    if (Number.isFinite(local) && local > 0) finest = Math.min(finest, local);
-  }
-  return Number.isFinite(finest) ? { width, height, effectiveMetersPerPixel: finest } : { width, height };
 }
 
 function viewportBounds(view: MapState, element: HTMLElement | null, respectDrawer = false): ViewportBounds | undefined {
   if (!element) return undefined;
-  const viewport = new WebMercatorViewport({ ...view, bearing: view.bearing ?? 0, pitch: view.pitch ?? 0, width: element.clientWidth, height: element.clientHeight });
+  const viewport = new WebMercatorViewport({ ...view, width: element.clientWidth, height: element.clientHeight });
   if (respectDrawer) {
     const inset = viewportInsets(element);
     const southwest = viewport.unproject([inset.left, element.clientHeight - inset.bottom]);
@@ -369,6 +211,7 @@ export function App() {
     return tabs.some(item => item.id === requested) ? requested! : tabs[0].id;
   });
   const tab = tabs.find(item => item.id === active) ?? tabs[0];
+  const terrainEnabled = tab.style.viewMode === "3d";
   const [draft, setDraft] = useState(tab.sql);
   const [spatialDrawing, setSpatialDrawing] = useState(false);
   const [spatialDraft, setSpatialDraft] = useState<[number, number][]>([]);
@@ -411,6 +254,7 @@ export function App() {
   const [mapSize, setMapSize] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
   const [view, setView] = useState(tab.mapState);
   const [renderedView, setRenderedView] = useState(tab.mapState);
+  const [terrainCamera, setTerrainCamera] = useState<TerrainCamera | null>(null);
   const [renderMetrics, setRenderMetrics] = useState({ lod: null as null | number, vertexCount: 0, geometryBufferBytes: 0, plannedVertexEstimate: 0, rawVertexEstimate: 0, vertexBudget: 0, visibleCount: 0, durationMs: 0, scan: emptyScan, cache: emptyCache });
   const [heat, setHeat] = useState<CooperativeHeatResult>(emptyHeat);
   const mapElement = useRef<HTMLElement>(null);
@@ -455,7 +299,7 @@ export function App() {
       systemResolution === "low" ? 4 : 8,
     ).then(result => { if (!cancelled && result) setHeat(result); });
     return () => { cancelled = true; };
-  }, [isolateSelected, renderedView, routeBatches, selected?.activityId, systemResolution, tab.style.heatEnabled]);
+  }, [isolateSelected, renderedView, routeBatches, selected?.activityId, systemResolution, tab.style.heatEnabled, terrainEnabled]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = effectiveTheme;
@@ -487,7 +331,8 @@ export function App() {
       setBusy(true); setStatus("Running DuckDB SQL…"); setError("");
       const current = { ...queryTab, sql, mapState };
       const renderStarted = performance.now();
-      const result = await engine.execute(current, mapState.zoom, viewportBounds(mapState, mapElement.current), perspectiveViewportSize(mapState, mapElement.current));
+      const activeTerrainCamera = terrainEnabled && terrainCamera && Math.abs(terrainCamera.view.zoom - mapState.zoom) < 0.01 ? terrainCamera : null;
+      const result = await engine.execute(current, mapState.zoom, activeTerrainCamera?.bounds ?? viewportBounds(mapState, mapElement.current), activeTerrainCamera?.size);
       if (selection !== selectionRequest.current) return;
 
       selectionReady.current = true;
@@ -497,15 +342,12 @@ export function App() {
         setRouteBatches(result.batches); setRenderedView(mapState);
         setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
       } else {
-        // SQL establishes the new selection, but its geometry belongs to the
-        // camera from query start. Never flash those stale batches back onto a
-        // camera the user has already moved; render the selection at the latest
-        // viewport instead.
-        const bounds = viewportBounds(latestView, mapElement.current);
+        const latestCamera = terrainEnabled && terrainCamera ? terrainCamera : null;
+        const bounds = latestCamera?.bounds ?? viewportBounds(latestView, mapElement.current);
         if (bounds) {
           const request = ++viewportRequest.current;
           const viewportStarted = performance.now();
-          const latestResult = await engine.renderViewport(latestView.zoom, bounds, perspectiveViewportSize(latestView, mapElement.current));
+          const latestResult = await engine.renderViewport(latestView.zoom, bounds, latestCamera?.size);
           if (selection === selectionRequest.current && request === viewportRequest.current) {
             setRouteBatches(latestResult.batches); setRenderedView(latestView);
             setRenderMetrics({ lod: latestResult.lod, vertexCount: latestResult.vertexCount, geometryBufferBytes: latestResult.geometryBufferBytes, plannedVertexEstimate: latestResult.plannedVertexEstimate, rawVertexEstimate: latestResult.rawVertexEstimate, vertexBudget: latestResult.vertexBudget, visibleCount: latestResult.activityCount, durationMs: performance.now() - viewportStarted, scan: latestResult.scan, cache: latestResult.cache });
@@ -528,15 +370,11 @@ export function App() {
   }
 
   async function openSource(source: DatasetSource, requestedView?: MapState, initialTab = tab) {
-    const openingView = viewRef.current;
     try {
       setBusy(true); setError(""); setStatus("Reading dataset manifest…");
       const dataset = await engine.openDataset(source, (completed, total) => setStatus(`Opening dataset · ${completed.toLocaleString()} / ${total.toLocaleString()} files`));
       ready.current = true; setDatasetName(dataset.name);
-      const latestView = viewRef.current;
-      const moved = Math.abs(latestView.longitude-openingView.longitude)>1e-7 || Math.abs(latestView.latitude-openingView.latitude)>1e-7 || Math.abs(latestView.zoom-openingView.zoom)>1e-7 || Math.abs(latestView.bearing-openingView.bearing)>1e-7 || Math.abs(latestView.pitch-openingView.pitch)>1e-7;
-      const fitted = fitBounds(dataset.manifest.bbox);
-      const initialView = requestedView ?? (moved ? latestView : initialTab.style.viewMode === "3d" ? { ...fitted, bearing: openingView.bearing, pitch: openingView.pitch > 0 ? openingView.pitch : 50 } : fitted);
+      const initialView = requestedView ?? fitBounds(dataset.manifest.bbox);
       setView(initialView);
       setStatus("Running initial query…"); await run(initialTab, initialView, initialTab.sql);
     } catch (reason) {
@@ -590,18 +428,19 @@ export function App() {
       ? { kind: "url" as const, baseUrl: `${hostedDatasetRoot}/${shared}`, name: shared }
       : { kind: "url" as const, baseUrl: `/local-data/${local!}`, name: local! };
     void openSource(source, initialUrlCamera.current ? view : undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     const request = ++viewportRequest.current;
     if (!ready.current || !selectionReady.current || mapInteracting) return;
     const timer = window.setTimeout(async () => {
-      const bounds = viewportBounds(view, mapElement.current);
+      const camera = terrainEnabled ? terrainCamera : null;
+      const bounds = camera?.bounds ?? viewportBounds(view, mapElement.current);
       if (!bounds) return;
       try {
         const renderStarted = performance.now();
-        const result = await engine.renderViewport(view.zoom, bounds, perspectiveViewportSize(view, mapElement.current));
+        const result = await engine.renderViewport(view.zoom, bounds, camera?.size);
         if (request !== viewportRequest.current) return;
         setRouteBatches(result.batches); setRenderedView(view);
         setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
@@ -610,13 +449,13 @@ export function App() {
       }
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [engine, mapInteracting, systemResolution, view]);
+  }, [engine, mapInteracting, systemResolution, terrainCamera, terrainEnabled, view]);
 
   useEffect(() => {
     if (!viewportScope || (!statsOpen && !tableOpen) || !selectionReady.current) return;
     const request = ++panelRequest.current;
     const timer = window.setTimeout(async () => {
-      const bounds = viewportBounds(renderedView, mapElement.current, true);
+      const bounds = terrainEnabled && terrainCamera ? terrainCamera.bounds : viewportBounds(renderedView, mapElement.current, true);
       if (!bounds) return;
       try {
         setScopeLoading(true); setError("");
@@ -634,7 +473,7 @@ export function App() {
       }
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [engine, renderedView, statsOpen, tableOpen, viewportScope]);
+  }, [engine, renderedView, statsOpen, tableOpen, terrainCamera, terrainEnabled, viewportScope]);
 
   function choose(next: QueryTab, openQuery = false) {
     const isCurrent = next.id === active;
@@ -646,7 +485,7 @@ export function App() {
         saveTabs(updated);
         return updated;
       });
-      setActive(next.id); setDraft(next.sql); setView(next.mapState); setRenderedView(next.mapState); setToolbarOpen(openQuery);
+      setActive(next.id); setDraft(next.sql); setView(next.mapState); setRenderedView(next.mapState); setTerrainCamera(null); setToolbarOpen(openQuery);
     }
     replaceUrlSettings(next, next.mapState, units); setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false);
     if (ready.current && !isCurrent) void run(next, next.mapState, next.sql);
@@ -668,13 +507,8 @@ export function App() {
     const nextTab = { ...tab, style: { ...tab.style, ...style } };
     const updated = tabs.map(item => item.id === tab.id ? nextTab : item);
     setTabs(updated); saveTabs(updated);
+    if (style.viewMode !== undefined && style.viewMode !== tab.style.viewMode) { setTerrainCamera(null); setMapInteracting(false); replaceUrlSettings(nextTab, view, units); }
     if (style.cleanEnabled !== undefined && style.cleanEnabled !== tab.style.cleanEnabled && ready.current) void run(nextTab, view, tab.sql);
-  }
-  function changeViewMode(viewMode: MapViewMode) {
-    changeStyle({ viewMode });
-    setView(current => viewMode === "2d"
-      ? { ...current, bearing: 0, pitch: 0 }
-      : { ...current, pitch: current.pitch > 0 ? current.pitch : 50 });
   }
   function saveSpatialFilter(spatialFilter: QueryTab["spatialFilter"], rerun: boolean) {
     const nextTab = { ...tab, spatialFilter };
@@ -820,6 +654,9 @@ export function App() {
       ? colorForWeight(heat.scores.get(activity.activityId) ?? 0, heat.maxScore, tab.style.heatPalette, tab.style.heatTemperature)
       : routeColor(tab.style.color, 190);
   })), [heat, routeBatches, selected, tab.style.color, tab.style.heatEnabled, tab.style.heatPalette, tab.style.heatTemperature]);
+  const terrainColors = useMemo(() => routeBatches.map(batch => routeColors(batch, activity => tab.style.heatEnabled
+    ? colorForWeight(heat.scores.get(activity.activityId) ?? 0, heat.maxScore, tab.style.heatPalette, tab.style.heatTemperature)
+    : routeColor(tab.style.color, 190))), [heat, routeBatches, tab.style.color, tab.style.heatEnabled, tab.style.heatPalette, tab.style.heatTemperature]);
   const hoverColors = useMemo(() => hover ? routeBatches.map(batch => routeColors(batch, activity => activity.activityId === hover.item.activityId ? routeColor(tab.style.color, 255) : [0, 0, 0, 0])) : [], [hover, routeBatches, tab.style.color]);
   const overviewPathData = useMemo(() => routeBatches.map((batch, index) => binaryPathData(batch, overviewColors[index])), [overviewColors, routeBatches]);
   const pickingPathData = useMemo(() => routeBatches.map(batch => binaryPathData(batch)), [routeBatches]);
@@ -842,6 +679,7 @@ export function App() {
     ] : []),
     ...(profileHover && !spatialDrawing ? [new ScatterplotLayer<ElevationSample>({ id: "profile-position", data: [profileHover], getPosition: item => item.position, getFillColor: [71, 107, 204, 255], getLineColor: [255, 255, 255, 255], getRadius: 8, radiusUnits: "pixels", stroked: true, lineWidthMinPixels: 3 })] : []),
   ], [hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, spatialDraft, spatialDrawing, tab.spatialFilter, tab.style.color, tab.style.heatEnabled]);
+  const terrainHighlightActivityId = hover?.item.activityId ?? selected?.activityId;
 
   return <main className="app" onKeyDown={event => { if (spatialDrawing && event.key === "Escape") { setSpatialDrawing(false); setSpatialDraft([]); return; } if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void run(); }}>
     <header className="topbar">
@@ -868,16 +706,12 @@ export function App() {
     {toolbarOpen && <section className="toolbar" aria-label="Query and map settings">
       <header className="toolbar-header"><div><span className="eyebrow">QUERY TAB</span><input aria-label="Tab title" className="rename" title="Name this saved query tab" value={tab.title} onChange={event => rename(event.target.value)} /></div><button aria-label="Close query settings" onClick={() => setToolbarOpen(false)}>×</button></header>
       <section className="toolbar-section"><h3>Map</h3><div className="settings-grid">
-        <label data-tooltip="Use Mapbox Standard for general context, Satellite for imagery, Outdoors for contours and trails, or CARTO for maximum route contrast.">Basemap<select className="basemap-select" aria-label="Basemap" value={tab.style.basemap} onChange={event => changeStyle({ basemap: event.target.value as Basemap })}><option value="mapbox-standard">Mapbox Standard</option><option value="mapbox-satellite">Mapbox Satellite</option><option value="mapbox-outdoors">Mapbox Outdoors / Topo</option><option value="carto-light">CARTO Light</option><option value="carto-dark">CARTO Dark</option><option value="blank">Blank / offline</option></select></label>
-        <label data-tooltip="Use Mapbox-native pitch and rotation with elevation terrain in 3D mode.">View<div className="view-mode-control" role="group" aria-label="Map view"><button type="button" aria-label="Use 2D map view" aria-pressed={tab.style.viewMode === "2d"} onClick={() => changeViewMode("2d")}>2D</button><button type="button" aria-label="Use 3D map view" aria-pressed={tab.style.viewMode === "3d"} onClick={() => changeViewMode("3d")}>3D</button></div></label>
-        {tab.style.basemap !== "blank" && <label className="check" data-tooltip="Show basemap text and icons. Off by default so routes remain the primary visual layer."><input aria-label="Basemap labels" type="checkbox" checked={tab.style.basemapOptions.labels} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, labels: event.target.checked } })} /> Labels</label>}
-        {tab.style.basemap === "mapbox-satellite" && <label className="check" data-tooltip="Show roads and transit networks over satellite imagery."><input aria-label="Basemap roads" type="checkbox" checked={tab.style.basemapOptions.roads} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, roads: event.target.checked } })} /> Roads</label>}
-        {(tab.style.basemap === "mapbox-standard" || tab.style.basemap === "mapbox-satellite") && <label className="check" data-tooltip="Show pedestrian roads, paths, and trails."><input aria-label="Basemap trails" type="checkbox" checked={tab.style.basemapOptions.trails} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, trails: event.target.checked } })} /> Trails</label>}
-        {(tab.style.basemap === "mapbox-standard" || tab.style.basemap === "mapbox-satellite") && <label className="check" data-tooltip="Show administrative boundaries."><input aria-label="Basemap boundaries" type="checkbox" checked={tab.style.basemapOptions.boundaries} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, boundaries: event.target.checked } })} /> Boundaries</label>}
-        {tab.style.basemap === "mapbox-standard" && <label className="check" data-tooltip="Show Mapbox Standard 3D objects such as buildings, landmarks, and trees."><input aria-label="Basemap 3D objects" type="checkbox" checked={tab.style.basemapOptions.objects3d} onChange={event => changeStyle({ basemapOptions: { ...tab.style.basemapOptions, objects3d: event.target.checked } })} /> 3D objects</label>}
+        <label data-tooltip="Choose a subdued CARTO map for maximum route contrast, or switch to streets, topographic, imagery, or offline.">Basemap<select className="basemap-select" aria-label="Basemap" value={tab.style.basemap} onChange={event => changeStyle({ basemap: event.target.value as Basemap })}><option value="carto-light">CARTO Light</option><option value="carto-dark">CARTO Dark</option><option value="streets">Streets</option><option value="topo">Topographic</option><option value="imagery">Imagery</option><option value="blank">Blank / offline</option></select></label>
+        <label data-tooltip="Use the normal flat map or drape routes over MapLibre terrain."><span>View</span><div className="unit-control" role="group" aria-label="Map view"><button type="button" aria-pressed={tab.style.viewMode === "2d"} onClick={() => changeStyle({ viewMode: "2d" })}>2D</button><button type="button" aria-pressed={tab.style.viewMode === "3d"} onClick={() => changeStyle({ viewMode: "3d" })}>3D</button></div></label>
+        {terrainEnabled && <label className="temperature" data-tooltip="Scale terrain relief without changing route geometry."><span>Terrain</span><input aria-label="Terrain exaggeration" type="range" min="0.25" max="3" step="0.05" value={tab.style.terrainExaggeration} onChange={event => changeStyle({ terrainExaggeration: Number(event.target.value) })} /><output>{tab.style.terrainExaggeration.toFixed(2)}×</output></label>}
         <label data-tooltip="Choose the base route and hover-highlight color.">Route color<input aria-label="Route color" type="color" value={tab.style.color} onChange={event => changeStyle({ color: event.target.value })} /></label>
         <label className="temperature" data-tooltip="Multiply a route width equal to 0.15% of the map's shorter dimension. The width stays visually consistent at every zoom."><span>Thickness</span><input aria-label="Route thickness" type="range" min="0.25" max="4" step="0.05" value={tab.style.lineWidthScale} onChange={event => changeStyle({ lineWidthScale: Number(event.target.value) })} /><output>{tab.style.lineWidthScale.toFixed(2)}×</output></label>
-      </div><p className="network-note">{mapboxAccessToken ? "Wi‑Fi recommended for the best experience with remote archives and basemaps." : "Mapbox token not configured; Mapbox choices use a CARTO fallback locally."}</p></section>
+      </div><p className="network-note">Wi‑Fi recommended for the best experience with remote archives and basemaps.</p></section>
       <section className="toolbar-section"><h3>Heat</h3><div className="settings-grid">
         <label className="check" data-tooltip="Give each complete route one color based on nearby vertices from other routes in the current SQL selection."><input aria-label="Heat" type="checkbox" checked={tab.style.heatEnabled} onChange={event => changeStyle({ heatEnabled: event.target.checked })} /> Enabled</label>
         <label data-tooltip="Choose the color ramp for route proximity.">Colors<select aria-label="Heat colormap" value={tab.style.heatPalette} disabled={!tab.style.heatEnabled} onChange={event => changeStyle({ heatPalette: event.target.value as HeatPalette })}><option value="sunset">Sunset</option><option value="viridis">Viridis</option><option value="fire">Fire</option><option value="ice">Ice</option></select></label>
@@ -891,8 +725,34 @@ export function App() {
     {error && <div className="error global-error" role="alert"><strong>Something needs attention</strong><span>{error}</span><button className="error-close" aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
 
     <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
-            <BaseMap view={view} basemap={tab.style.basemap} options={tab.style.basemapOptions} viewMode={tab.style.viewMode} theme={effectiveTheme} layers={layers} spatialDrawing={spatialDrawing} onViewChange={setView} onInteractionChange={setMapInteracting} onDeckClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) setSpatialDraft(previous => [...previous, [coordinate[0], coordinate[1]]]); return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />
-
+      {terrainEnabled && !spatialDrawing ? <MapLibreTerrainRoutes
+        view={view}
+        basemap={tab.style.basemap}
+        dark={effectiveTheme === "dark"}
+        exaggeration={tab.style.terrainExaggeration}
+        batches={routeBatches}
+        colors={terrainColors}
+        widthPx={tab.style.heatEnabled ? lineWidths.heat : lineWidths.route}
+        profilePosition={profileHover?.position}
+        highlightActivityId={terrainHighlightActivityId}
+        isolateActivityId={isolateSelected ? selected?.activityId : undefined}
+        onInteraction={setMapInteracting}
+        onView={camera => { setTerrainCamera(camera); setView(camera.view); }}
+        onHover={pick => {
+          if (!pick) { setHover(current => current?.origin === "map" ? null : current); return; }
+          const {activity, x, y} = pick;
+          void engine.getRouteMetadata(activity.activityId).then(metadata => { if (metadata) setHover({x, y, item: metadata, origin: "map"}); });
+        }}
+        onClick={activity => { void openActivity(activity); }}
+        onBackgroundClick={() => { setSelected(null); setProfileHover(null); }}
+      /> : <>
+        <BaseMap view={view} basemap={tab.style.basemap} theme={effectiveTheme} />
+        <DeckGL controller={spatialDrawing ? false : { dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: 0 }} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
+          if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isZooming) return;
+          const next = viewState as MapState;
+          setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });
+        }} onClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) { const longitude = coordinate[0], latitude = coordinate[1]; if (longitude !== undefined && latitude !== undefined) setSpatialDraft(previous => [...previous, [longitude, latitude]]); } return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />
+      </>}
       {spatialDrawing && <><div className="spatial-draw-tools" role="group" aria-label="Polygon drawing controls"><button aria-label="Undo last polygon vertex" title="Undo last point" disabled={spatialDraft.length === 0} onClick={() => setSpatialDraft(previous => previous.slice(0, -1))}>↶</button><button className="accept" aria-label="Accept polygon" title="Accept polygon" disabled={spatialDraft.length < 3} onClick={acceptSpatialDraw}>✓</button></div><div className="spatial-draw-hint">Tap the map to add polygon vertices · ↶ undo · ✓ apply</div></>}
       {!spatialDrawing && hover?.origin === "map" && <div className="tooltip" style={{ left: hover.x + 12, top: hover.y + 12 }}><strong>{hover.item.name}</strong><span>{hover.item.sportType} · {hover.item.startTime?.slice(0, 10)}</span><span>{distance(hover.item.distanceM ?? 0)} · {elevation(hover.item.elevationGainM ?? 0)} gain</span></div>}
     </section>
@@ -900,8 +760,8 @@ export function App() {
     {selected && <aside className="detail" aria-label="Activity detail"><button className="close" aria-label="Close detail" onClick={() => { setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>×</button><span className="eyebrow">{selected.sportType}</span><h2>{selected.name}</h2><p className="detail-date">{selected.startTime?.slice(0, 10)}</p><div className="detail-stats"><Stat value={distance(selected.distanceM ?? 0)} label="distance" /><Stat value={elevation(selected.elevationGainM ?? 0)} label="gain" /><Stat value={selected.maxElevationM == null ? "—" : elevation(selected.maxElevationM)} label="maximum" /></div><div className="detail-actions"><button onClick={zoomToSelected}>Zoom to route</button><button className={`isolate ${isolateSelected ? "active" : ""}`} aria-pressed={isolateSelected} onClick={() => setIsolateSelected(value => !value)}>{isolateSelected ? "Show all routes" : "Show only this route"}</button></div><ElevationProfile samples={selected.elevationProfile} active={profileHover} units={units} onHover={setProfileHover} />{selected.sourceUrl && <a href={selected.sourceUrl} target="_blank" rel="noreferrer">Open original activity ↗</a>}</aside>}
     {statsOpen && <section className="rich-stats" aria-label="Detailed selection statistics"><header><img src={logoUrl} alt="" /><div><span className="eyebrow">{viewportScope ? "CONTAINED IN VIEWPORT" : "CURRENT SELECTION"}</span><h2>{scopeLoading && viewportScope ? "Updating…" : `${integer.format((viewportScope ? scopedSummary : summary).activityCount)} activities`}</h2></div><button aria-label="Close statistics" onClick={() => setStatsOpen(false)}>×</button></header><ScopeToggle checked={viewportScope} onChange={changeViewportScope} /><Stats summary={viewportScope ? scopedSummary : summary} distance={distance} elevation={elevation} /></section>}
     {tableOpen && <section className="activity-table" aria-label="Activity table"><header><div><span className="eyebrow">{viewportScope ? "CONTAINED IN VIEWPORT" : "CURRENT SELECTION"}</span><h2>{tableLoading || (scopeLoading && viewportScope) ? "Loading activities…" : `${integer.format(tableActivities.length)} activities`}</h2></div><ScopeToggle checked={viewportScope} onChange={changeViewportScope} /><span>Hover to highlight · click to zoom</span><button aria-label="Close activity table" onClick={() => { setTableOpen(false); setHover(null); }}>×</button></header><div className="table-scroll"><table><thead><tr><SortableHeader label="Activity" field="name" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Sport" field="sport" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Date" field="date" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Distance" field="distance" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Gain" field="gain" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Maximum" field="maximum" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /></tr></thead><tbody>{tableRows.map(item => <tr key={item.activityId} className={selected?.activityId === item.activityId || hover?.origin === "table" && hover.item.activityId === item.activityId ? "selected" : ""} onMouseEnter={() => setHover({ x: 0, y: 0, item, origin: "table" })} onMouseLeave={() => setHover(current => current?.origin === "table" && current.item.activityId === item.activityId ? null : current)} onClick={() => void openTableActivity(item)}><td><strong>{item.name}</strong></td><td>{item.sportType}</td><td>{item.startTime?.slice(0, 10) ?? "—"}</td><td>{item.distanceM == null ? "—" : `${distanceValue(item.distanceM, units).toFixed(1)} ${distanceUnit(units)}`}</td><td>{item.elevationGainM == null ? "—" : elevation(item.elevationGainM)}</td><td>{item.maxElevationM == null ? "—" : elevation(item.maxElevationM)}</td></tr>)}</tbody></table>{!tableLoading && tableRows.length === 0 && <div className="table-empty">No selected activities are fully contained in the visible viewport.</div>}</div></section>}
-    {renderingOpen && <section className="rich-stats diagnostics-drawer" aria-label="Rendering diagnostics"><header><div><span className="eyebrow">BROWSER RENDER PLAN</span><h2>{renderMetrics.lod === 4 ? "Raw geometry" : renderMetrics.lod == null ? "Waiting for geometry" : `LOD ${renderMetrics.lod}`}</h2></div><button aria-label="Close rendering diagnostics" onClick={() => setRenderingOpen(false)}>×</button></header><table><tbody><Diagnostic label="Representation" value={renderMetrics.lod === 4 ? "LOD 4 · raw coordinates" : renderMetrics.lod == null ? "—" : `LOD ${renderMetrics.lod} · simplified overview`} /><Diagnostic label="Map zoom" value={renderedView.zoom.toFixed(2)} /><Diagnostic label="Map view" value={tab.style.viewMode.toUpperCase()} /><Diagnostic label="Fragments read" value={`${integer.format(renderMetrics.scan.candidateFragmentCount)} / ${integer.format(renderMetrics.scan.totalFragmentCount)}`} /><Diagnostic label="Candidate Parquet bytes" value={`${bytes(renderMetrics.scan.candidateBytes)} / ${bytes(renderMetrics.scan.totalBytes)}`} /><Diagnostic label="Fragment bytes avoided" value={percent(renderMetrics.scan.totalBytes - renderMetrics.scan.candidateBytes, renderMetrics.scan.totalBytes)} /><Diagnostic label="Row groups expected read" value={`${integer.format(renderMetrics.scan.expectedRowGroupCount)} / ${integer.format(renderMetrics.scan.candidateRowGroupCount)} candidate · ${integer.format(renderMetrics.scan.totalRowGroupCount)} total`} /><Diagnostic label="Row groups filtered" value={integer.format(renderMetrics.scan.totalRowGroupCount - renderMetrics.scan.expectedRowGroupCount)} /><Diagnostic label="Activity rows kept" value={`${integer.format(renderMetrics.scan.keptRowCount)} / ${integer.format(renderMetrics.scan.expectedRowCount)} expected-read rows`} /><Diagnostic label="Read-to-kept efficiency" value={percent(renderMetrics.scan.keptRowCount, renderMetrics.scan.expectedRowCount)} /><Diagnostic label="Visible routes" value={integer.format(renderMetrics.visibleCount)} /><Diagnostic label="Selected routes" value={integer.format(summary.activityCount)} /><Diagnostic label="Planned vertex estimate" value={`${integer.format(renderMetrics.plannedVertexEstimate)} / ${integer.format(renderMetrics.vertexBudget)} budget`} /><Diagnostic label="Raw vertex estimate" value={integer.format(renderMetrics.rawVertexEstimate)} /><Diagnostic label="Rendered vertices" value={integer.format(renderMetrics.vertexCount)} /><Diagnostic label="GeoArrow buffers" value={bytes(renderMetrics.geometryBufferBytes)} /><Diagnostic label="Coordinate objects created" value="0" /><Diagnostic label="Geometry query + transfer" value={`${renderMetrics.durationMs.toFixed(1)} ms`} /><Diagnostic label="Render cache" value={`${renderMetrics.cache.hit ? "hit" : "miss"} · ${bytes(renderMetrics.cache.bytes)} / ${bytes(renderMetrics.cache.budgetBytes)}`} /><Diagnostic label="Cached viewport batches" value={`${integer.format(renderMetrics.cache.entries)} · ${integer.format(renderMetrics.cache.evictions)} evicted`} /><Diagnostic label="Thickness control" value={`${tab.style.lineWidthScale.toFixed(2)}× · 0.15% viewport`} /><Diagnostic label="Route width" value={`${lineWidths.route.toFixed(2)} px`} /><Diagnostic label="Selected width" value={`${lineWidths.focus.toFixed(2)} px`} /><Diagnostic label="Heat vertices scored" value={integer.format(heat.sourceVertices)} /><Diagnostic label="Heat-colored routes" value={integer.format(heat.scores.size)} /><Diagnostic label="Heat proximity cells" value={integer.format(heat.cellCount)} /><Diagnostic label="Heat preparation" value={`${heat.durationMs.toFixed(1)} ms`} /><Diagnostic label="Heat UI slices" value={`${integer.format(heat.yieldCount + 1)} · ${heat.maxSliceMs.toFixed(1)} ms max`} /><Diagnostic label="Data view" value={tab.style.cleanEnabled ? "Clean derived view" : "Canonical raw view"} /><Diagnostic label="Basemap" value={tab.style.basemap} /></tbody></table><p>DuckDB transfers interleaved GeoArrow coordinate buffers to deck.gl without creating per-point JavaScript objects. Revisited and contained viewport batches remain in a bounded LRU cache (512 MiB desktop, 128 MiB mobile). Geometry layer inputs stay referentially stable while the camera moves, and heat scoring is recomputed between bounded main-thread slices. Fragment counts are exact for the worker query; row-group reads remain conservative estimates from compiler-recorded covering boxes.</p></section>}
-    {aboutOpen && <section className="rich-stats about-drawer" aria-label="About this project"><header><img src={logoUrl} alt="" /><div><span className="eyebrow">ABOUT THIS PROJECT</span><h2>Your archive, at browser scale</h2></div><button aria-label="Close about this project" onClick={() => setAboutOpen(false)}>×</button></header><p className="about-lead">Squiggles is built for the larger GPX archive that becomes awkward to understand in experiences centered on individual activities or route planning.</p><div className="technology-flow" aria-label="Technology pipeline"><strong>Parquet</strong><span>→</span><strong>GeoArrow</strong><span>→</span><strong>DuckDB-Wasm</strong><span>→</span><strong>deck.gl</strong></div><h3>Millions of points, locally</h3><p>Columnar GeoParquet keeps the compiled archive compact. GeoArrow carries coordinates without a giant GeoJSON conversion. DuckDB runs SQL, summaries, viewport pruning, and detail lookup inside a browser worker, while deck.gl sends the chosen geometry to WebGL.</p><p>Together, those pieces let a user's own browser query and view many millions of recorded points. Dropping the same archive as thousands of individual GPX files into a route-planning import flow—Caltopo included—can overwhelm a workflow that was designed for a different job.</p><h3>What it is—and is not</h3><p>This is not a route planner, navigation system, training coach, or social feed. It is a storytelling tool: find the patterns across years of movement, revisit the places that shaped you, and share the resulting map.</p><a className="github-link" href="https://github.com/ljstrnadiii/squiggles" target="_blank" rel="noreferrer" aria-label="Squiggles on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.02c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.74-1.55-2.57-.3-5.27-1.29-5.27-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.16 1.18a10.97 10.97 0 0 1 5.75 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.75.11 3.04.74.8 1.83 1.19 3.09 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.06.79 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" /></svg>View the project on GitHub</a><p className="privacy-note">Your activity SQL and rendering stay in the browser. Optional basemap tiles are the only runtime third-party requests.</p></section>}
+    {renderingOpen && <section className="rich-stats diagnostics-drawer" aria-label="Rendering diagnostics"><header><div><span className="eyebrow">BROWSER RENDER PLAN</span><h2>{renderMetrics.lod === 4 ? "Raw geometry" : renderMetrics.lod == null ? "Waiting for geometry" : `LOD ${renderMetrics.lod}`}</h2></div><button aria-label="Close rendering diagnostics" onClick={() => setRenderingOpen(false)}>×</button></header><table><tbody><Diagnostic label="Representation" value={renderMetrics.lod === 4 ? "LOD 4 · raw coordinates" : renderMetrics.lod == null ? "—" : `LOD ${renderMetrics.lod} · simplified overview`} /><Diagnostic label="Map zoom" value={renderedView.zoom.toFixed(2)} /><Diagnostic label="Fragments read" value={`${integer.format(renderMetrics.scan.candidateFragmentCount)} / ${integer.format(renderMetrics.scan.totalFragmentCount)}`} /><Diagnostic label="Candidate Parquet bytes" value={`${bytes(renderMetrics.scan.candidateBytes)} / ${bytes(renderMetrics.scan.totalBytes)}`} /><Diagnostic label="Fragment bytes avoided" value={percent(renderMetrics.scan.totalBytes - renderMetrics.scan.candidateBytes, renderMetrics.scan.totalBytes)} /><Diagnostic label="Row groups expected read" value={`${integer.format(renderMetrics.scan.expectedRowGroupCount)} / ${integer.format(renderMetrics.scan.candidateRowGroupCount)} candidate · ${integer.format(renderMetrics.scan.totalRowGroupCount)} total`} /><Diagnostic label="Row groups filtered" value={integer.format(renderMetrics.scan.totalRowGroupCount - renderMetrics.scan.expectedRowGroupCount)} /><Diagnostic label="Activity rows kept" value={`${integer.format(renderMetrics.scan.keptRowCount)} / ${integer.format(renderMetrics.scan.expectedRowCount)} expected-read rows`} /><Diagnostic label="Read-to-kept efficiency" value={percent(renderMetrics.scan.keptRowCount, renderMetrics.scan.expectedRowCount)} /><Diagnostic label="Visible routes" value={integer.format(renderMetrics.visibleCount)} /><Diagnostic label="Selected routes" value={integer.format(summary.activityCount)} /><Diagnostic label="Planned vertex estimate" value={`${integer.format(renderMetrics.plannedVertexEstimate)} / ${integer.format(renderMetrics.vertexBudget)} budget`} /><Diagnostic label="Raw vertex estimate" value={integer.format(renderMetrics.rawVertexEstimate)} /><Diagnostic label="Rendered vertices" value={integer.format(renderMetrics.vertexCount)} /><Diagnostic label="GeoArrow buffers" value={bytes(renderMetrics.geometryBufferBytes)} /><Diagnostic label="Coordinate objects created" value="0" /><Diagnostic label="Geometry query + transfer" value={`${renderMetrics.durationMs.toFixed(1)} ms`} /><Diagnostic label="Render cache" value={`${renderMetrics.cache.hit ? "hit" : "miss"} · ${bytes(renderMetrics.cache.bytes)} / ${bytes(renderMetrics.cache.budgetBytes)}`} /><Diagnostic label="Cached viewport batches" value={`${integer.format(renderMetrics.cache.entries)} · ${integer.format(renderMetrics.cache.evictions)} evicted`} /><Diagnostic label="Map view" value={terrainEnabled ? `3D · ${tab.style.terrainExaggeration.toFixed(2)}× terrain` : "2D"} /><Diagnostic label="Thickness control" value={`${tab.style.lineWidthScale.toFixed(2)}× · 0.15% viewport`} /><Diagnostic label="Route width" value={`${lineWidths.route.toFixed(2)} px`} /><Diagnostic label="Selected width" value={`${lineWidths.focus.toFixed(2)} px`} /><Diagnostic label="Heat vertices scored" value={integer.format(heat.sourceVertices)} /><Diagnostic label="Heat-colored routes" value={integer.format(heat.scores.size)} /><Diagnostic label="Heat proximity cells" value={integer.format(heat.cellCount)} /><Diagnostic label="Heat preparation" value={`${heat.durationMs.toFixed(1)} ms`} /><Diagnostic label="Heat UI slices" value={`${integer.format(heat.yieldCount + 1)} · ${heat.maxSliceMs.toFixed(1)} ms max`} /><Diagnostic label="Data view" value={tab.style.cleanEnabled ? "Clean derived view" : "Canonical raw view"} /><Diagnostic label="Basemap" value={tab.style.basemap} /></tbody></table><p>DuckDB transfers interleaved GeoArrow coordinate buffers directly to the active WebGL renderer without creating per-point JavaScript objects. Revisited and contained viewport batches remain in a bounded LRU cache. Geometry layer inputs stay referentially stable while the camera moves, and heat scoring is recomputed between bounded main-thread slices.</p></section>}
+    {aboutOpen && <section className="rich-stats about-drawer" aria-label="About this project"><header><img src={logoUrl} alt="" /><div><span className="eyebrow">ABOUT THIS PROJECT</span><h2>Your archive, at browser scale</h2></div><button aria-label="Close about this project" onClick={() => setAboutOpen(false)}>×</button></header><p className="about-lead">Squiggles is built for the larger GPX archive that becomes awkward to understand in experiences centered on individual activities or route planning.</p><div className="technology-flow" aria-label="Technology pipeline"><strong>Parquet</strong><span>→</span><strong>GeoArrow</strong><span>→</span><strong>DuckDB-Wasm</strong><span>→</span><strong>WebGL</strong></div><h3>Millions of points, locally</h3><p>Columnar GeoParquet keeps the compiled archive compact. GeoArrow carries coordinates without a giant GeoJSON conversion. DuckDB runs SQL, summaries, viewport pruning, and detail lookup inside a browser worker, while the chosen binary geometry is sent directly to WebGL.</p><p>Together, those pieces let a user's own browser query and view many millions of recorded points. Dropping the same archive as thousands of individual GPX files into a route-planning import flow—Caltopo included—can overwhelm a workflow that was designed for a different job.</p><h3>What it is—and is not</h3><p>This is not a route planner, navigation system, training coach, or social feed. It is a storytelling tool: find the patterns across years of movement, revisit the places that shaped you, and share the resulting map.</p><a className="github-link" href="https://github.com/ljstrnadiii/squiggles" target="_blank" rel="noreferrer" aria-label="Squiggles on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.02c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.74-1.55-2.57-.3-5.27-1.29-5.27-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.16 1.18a10.97 10.97 0 0 1 5.75 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.75.11 3.04.74.8 1.83 1.19 3.09 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.06.79 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" /></svg>View the project on GitHub</a><p className="privacy-note">Your activity SQL and rendering stay in the browser. Optional basemap tiles are the only runtime third-party requests.</p></section>}
   </main>;
 }
 
@@ -933,9 +793,4 @@ function ScopeToggle({ checked, onChange }: { checked: boolean; onChange: (check
 function Stats({ summary, distance, elevation }: { summary: SummaryStats; distance: (meters: number) => string; elevation: (meters: number) => string }) { return <><div className="stats-grid"><Stat value={distance(summary.distanceM)} label="total distance" /><Stat value={distance(summary.maxDistanceM ?? 0)} label="longest" /><Stat value={distance(summary.activityCount ? summary.distanceM / summary.activityCount : 0)} label="average distance" /><Stat value={`${integer.format(summary.movingSeconds / 3600)} hr`} label="moving time" /><Stat value={`${integer.format(summary.elapsedSeconds / 3600)} hr`} label="elapsed time" /><Stat value={`${integer.format(summary.activityCount ? summary.movingSeconds / summary.activityCount / 60 : 0)} min`} label="average moving" /><Stat value={elevation(summary.elevationGainM)} label="elevation gain" /><Stat value={elevation(summary.elevationLossM)} label="elevation loss" /><Stat value={`${integer.format(summary.activeDays)} days`} label="active days" /><Stat value={integer.format(summary.droppedJumpPoints)} label="GPS spikes cleaned" /><Stat value={integer.format(summary.droppedElevationPoints)} label="elevation spikes cleaned" /></div><div className="sport-counts">{summary.sportCounts.map(item => <span key={item.sport}><strong>{integer.format(item.count)}</strong> {item.sport}</span>)}</div></>; }
 function Diagnostic({ label, value }: { label: string; value: string }) { return <tr><th>{label}</th><td>{value}</td></tr>; }
 function SortableHeader({ label, field, active, descending, onSort }: { label: string; field: TableSort; active: TableSort; descending: boolean; onSort: (field: TableSort) => void }) { return <th aria-sort={active === field ? (descending ? "descending" : "ascending") : "none"}><button aria-label={`Sort by ${label}`} onClick={() => onSort(field)}>{label}{active === field ? <span aria-hidden="true"> {descending ? "↓" : "↑"}</span> : null}</button></th>; }
-declare global {
-  interface Window {
-    showDirectoryPicker(options?: { mode?: "read" | "readwrite" }): Promise<FileSystemDirectoryHandle>;
-    mapboxgl?: { Map: MapboxMapConstructor };
-  }
-}
+declare global { interface Window { showDirectoryPicker(options?: { mode?: "read" | "readwrite" }): Promise<FileSystemDirectoryHandle> } }

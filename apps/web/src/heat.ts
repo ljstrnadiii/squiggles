@@ -40,9 +40,16 @@ function visibleWorldPoint(point: WorldPoint, view: MapState, width: number, hei
   return wrappedX <= width / 2 + marginPixels && Math.abs(point.y - center.y) <= height / 2 + marginPixels;
 }
 
+function terrainExperiment() {
+  return typeof window !== "undefined" && new URLSearchParams(window.location.search).get("terrain") === "1";
+}
+
 function heatCell(longitude: number, latitude: number, view: MapState, width: number, height: number, worldSize: number, cellPixels: number): Cell | null {
   const point = worldPoint(longitude, latitude, worldSize);
-  if (!visibleWorldPoint(point, view, width, height, worldSize, cellPixels)) return null;
+  // Terrain mode already prunes the binary batches with MapLibre's true pitched
+  // viewport bounds. Applying the old flat 2D screen rectangle a second time
+  // drops routes that are visibly draped near the horizon/viewport edges.
+  if (!terrainExperiment() && !visibleWorldPoint(point, view, width, height, worldSize, cellPixels)) return null;
   return { x: Math.floor(point.x / cellPixels), y: Math.floor(point.y / cellPixels), total: 0 };
 }
 
