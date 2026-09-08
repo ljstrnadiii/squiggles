@@ -1,5 +1,6 @@
 export type MapState = { longitude: number; latitude: number; zoom: number };
 export type Basemap = "carto-light" | "carto-dark" | "streets" | "topo" | "imagery" | "blank";
+export type MapViewMode = "2d" | "3d";
 export type HeatPalette = "sunset" | "viridis" | "fire" | "ice";
 export type ThemeMode = "system" | "light" | "dark";
 export type UnitSystem = "metric" | "imperial";
@@ -8,6 +9,8 @@ export type MapStyle = {
   color: string;
   lineWidthScale: number;
   basemap: Basemap;
+  viewMode: MapViewMode;
+  terrainExaggeration: number;
   heatEnabled: boolean;
   heatPalette: HeatPalette;
   heatTemperature: number;
