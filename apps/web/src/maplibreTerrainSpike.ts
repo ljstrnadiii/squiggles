@@ -9,23 +9,17 @@ window.addEventListener('unhandledrejection', event => fail(event.reason));
 async function main() {
   try {
     status.textContent = 'importing MapLibre…';
-    const [maplibreModule] = await Promise.all([
-      import('maplibre-gl'),
-      import('maplibre-gl/dist/maplibre-gl.css')
-    ]);
+    const maplibreModule = await import('maplibre-gl');
+    await import('maplibre-gl/dist/maplibre-gl.css');
     const maplibregl = maplibreModule.default ?? maplibreModule;
 
-    status.textContent = 'MapLibre loaded · importing deck core…';
-    const [{Deck, MapView}, {PathLayer}] = await Promise.all([
-      import('@deck.gl/core'),
-      import('@deck.gl/layers')
+    status.textContent = 'MapLibre loaded · importing deck layers…';
+    const [{PathLayer}, {_TerrainExtension: TerrainExtension}, {TerrainLayer}, {MapLibreOverlay}] = await Promise.all([
+      import('@deck.gl/layers'),
+      import('@deck.gl/extensions'),
+      import('@deck.gl/geo-layers'),
+      import('@deck.gl/maplibre')
     ]);
-
-    status.textContent = 'deck core loaded · importing TerrainExtension…';
-    const {_TerrainExtension: TerrainExtension} = await import('@deck.gl/extensions');
-
-    status.textContent = 'TerrainExtension loaded · importing TerrainLayer…';
-    const {TerrainLayer} = await import('@deck.gl/geo-layers');
 
     status.textContent = 'all modules loaded · initializing terrain…';
 
@@ -38,7 +32,13 @@ async function main() {
       style: {
         version: 8,
         sources: {
-          base: {type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png'], tileSize: 256, attribution: '© OpenStreetMap contributors © CARTO'},
+          base: {
+            type: 'raster',
+            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+            tileSize: 256,
+            maxzoom: 19,
+            attribution: '© OpenStreetMap contributors'
+          },
           terrain: {type: 'raster-dem', tiles: [DEM], tileSize: 256, maxzoom: 14, encoding: 'terrarium'}
         },
         layers: [{id: 'base', type: 'raster', source: 'base'}],
@@ -48,12 +48,10 @@ async function main() {
       zoom: initialViewState.zoom,
       bearing: initialViewState.bearing,
       pitch: initialViewState.pitch,
-      interactive: false,
+      interactive: true,
       attributionControl: false,
       canvasContextAttributes: {antialias: true}
     });
-
-    status.textContent = 'MapLibre terrain created · building binary routes…';
 
     const positions = new Float64Array([
       -105.3105,39.9780, -105.3065,39.9800, -105.3020,39.9830, -105.2980,39.9860,
@@ -97,25 +95,19 @@ async function main() {
       terrainDrawMode: 'drape'
     } as never);
 
-    status.textContent = 'binary layers built · creating deck…';
-
-    const deck = new Deck({
-      parent: document.getElementById('deck')!,
-      views: new MapView({repeat: true}),
-      controller: true,
-      initialViewState,
+    status.textContent = 'adding terrain-synchronized deck overlay…';
+    const overlay = new MapLibreOverlay({
+      interleaved: false,
       layers: [terrain, routes],
-      onViewStateChange: ({viewState}) => {
-        map.jumpTo({center: [viewState.longitude, viewState.latitude], zoom: viewState.zoom, bearing: viewState.bearing, pitch: viewState.pitch});
-      },
-      getTooltip: ({index}) => index >= 0 ? `binary route ${index + 1}` : null,
+      getTooltip: ({index}: {index: number}) => index >= 0 ? `binary route ${index + 1}` : null,
       onAfterRender: () => {
         status.className = '';
-        status.textContent = `ready · ${positions.length / 2} binary vertices · no GeoJSON`;
+        status.textContent = `ready · ${positions.length / 2} binary vertices · MapLibre camera sync · no GeoJSON`;
       }
     });
+    map.addControl(overlay);
 
-    Object.assign(window, {__terrainSpike: {map, deck, positions, startIndices, colors}});
+    Object.assign(window, {__terrainSpike: {map, overlay, positions, startIndices, colors}});
   } catch (reason) {
     fail(reason);
   }
