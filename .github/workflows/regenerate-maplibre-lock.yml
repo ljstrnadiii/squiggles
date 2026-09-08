@@ -1,0 +1,27 @@
+name: Regenerate MapLibre lockfile
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.22.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --lockfile-only --no-frozen-lockfile
+      - name: Emit regenerated lockfile
+        run: |
+          echo 'LOCKFILE_BASE64_BEGIN'
+          base64 -w0 pnpm-lock.yaml
+          echo
+          echo 'LOCKFILE_BASE64_END'
