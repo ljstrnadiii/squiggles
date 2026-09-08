@@ -8,21 +8,41 @@
   <style>
     html,body,#map,#deck{position:absolute;inset:0;margin:0;width:100%;height:100%;overflow:hidden}
     #deck{pointer-events:auto}
-    #hud{position:absolute;z-index:10;left:12px;top:12px;max-width:360px;padding:10px 12px;border-radius:8px;background:rgba(10,15,18,.86);color:#fff;font:13px/1.35 system-ui,sans-serif}
+    #hud{position:absolute;z-index:10;left:12px;top:12px;max-width:420px;padding:10px 12px;border-radius:8px;background:rgba(10,15,18,.86);color:#fff;font:13px/1.35 system-ui,sans-serif}
     #hud strong{display:block;margin-bottom:4px}
     #hud code{font-size:12px}
+    #status.error{color:#ff9b9b}
   </style>
 </head>
 <body>
   <div id="map"></div>
   <div id="deck"></div>
-  <div id="hud"><strong>MapLibre + deck binary terrain spike</strong><span id="status">loading…</span><br><small>Drag/zoom/pitch. Routes are binary PathLayers with TerrainExtension; MapLibre draws the terrain underneath.</small></div>
+  <div id="hud"><strong>MapLibre + deck binary terrain spike</strong><span id="status">loading modules…</span><br><small>Drag/zoom/pitch. Routes are binary PathLayers with TerrainExtension; MapLibre draws the terrain underneath.</small></div>
+  <script>
+    window.addEventListener('error', event => {
+      const status = document.getElementById('status');
+      if (status) {
+        status.className = 'error';
+        status.textContent = `startup error: ${event.message || 'unknown error'}`;
+      }
+    });
+    window.addEventListener('unhandledrejection', event => {
+      const status = document.getElementById('status');
+      if (status) {
+        status.className = 'error';
+        status.textContent = `startup error: ${event.reason?.message || event.reason || 'unhandled rejection'}`;
+      }
+    });
+  </script>
   <script type="module">
-    import maplibregl from 'https://unpkg.com/maplibre-gl@6.7.0/dist/maplibre-gl.mjs';
-    import {Deck, MapView} from 'https://unpkg.com/@deck.gl/core@9.4.1/dist/index.js';
-    import {PathLayer} from 'https://unpkg.com/@deck.gl/layers@9.4.1/dist/index.js';
-    import {TerrainLayer} from 'https://unpkg.com/@deck.gl/geo-layers@9.4.1/dist/index.js';
-    import {_TerrainExtension as TerrainExtension} from 'https://unpkg.com/@deck.gl/extensions@9.4.1/dist/index.js';
+    import maplibregl from 'https://esm.sh/maplibre-gl@6.7.0';
+    import {Deck, MapView} from 'https://esm.sh/@deck.gl/core@9.4.1';
+    import {PathLayer} from 'https://esm.sh/@deck.gl/layers@9.4.1';
+    import {TerrainLayer} from 'https://esm.sh/@deck.gl/geo-layers@9.4.1';
+    import {_TerrainExtension as TerrainExtension} from 'https://esm.sh/@deck.gl/extensions@9.4.1';
+
+    const status = document.getElementById('status');
+    status.textContent = 'modules loaded · initializing terrain…';
 
     const DEM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
     const decoder = {rScaler: 256, gScaler: 1, bScaler: 1 / 256, offset: -32768};
@@ -58,8 +78,6 @@
       canvasContextAttributes: {antialias: true}
     });
 
-    // Two close, partially overlapping paths around Green Mountain. Supplying
-    // flat typed arrays + startIndices mirrors Squiggles' PathLayer contract.
     const positions = new Float64Array([
       -105.3105,39.9780, -105.3065,39.9800, -105.3020,39.9830, -105.2980,39.9860,
       -105.2940,39.9890, -105.2895,39.9910, -105.2850,39.9920, -105.2810,39.9910,
@@ -103,7 +121,6 @@
       terrainDrawMode: 'drape'
     });
 
-    const status = document.getElementById('status');
     const deck = new Deck({
       parent: document.getElementById('deck'),
       views: new MapView({repeat: true}),
@@ -120,6 +137,7 @@
       },
       getTooltip: ({index}) => index >= 0 ? `binary route ${index + 1}` : null,
       onAfterRender: () => {
+        status.className = '';
         status.textContent = `ready · ${positions.length / 2} binary vertices · no GeoJSON`;
       }
     });
