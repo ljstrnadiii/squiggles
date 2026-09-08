@@ -1,4 +1,5 @@
 import {useEffect, useMemo, useRef, useState} from "react";
+import {createPortal} from "react-dom";
 import * as maplibregl from "maplibre-gl";
 
 import type {Basemap, BinaryRouteBatch, MapState, RouteMetadata, ViewportBounds, ViewportSize} from "./contracts";
@@ -8,6 +9,8 @@ const RTT_SIZE = 512;
 const MAX_DIAGNOSTIC_SEGMENT_METERS = 5_000;
 const PICK_GRID_SCALE = 2 ** 15;
 const PICK_TOLERANCE_PX = 14;
+const MODE_KEY = "squiggles.map.dimension";
+const EXAGGERATION_KEY = "squiggles.terrain.exaggeration";
 
 type TileID = {wrap?: number; canonical: {x: number; y: number; z: number}};
 type TerrainInput = maplibregl.CustomRenderMethodInput & {tileID: TileID | null};
@@ -16,7 +19,6 @@ export type SegmentBatch = {endpoints: Float32Array; colors: Uint8Array; owners:
 export type TerrainCamera = {view: MapState; bounds: ViewportBounds; size: ViewportSize};
 export type TerrainPick = {activity: RouteMetadata; x: number; y: number};
 type PickingIndex = {cells: Map<number, number[]>; data: SegmentBatch};
-
 type PointData = {x: number; y: number} | null;
 
 const rasterStyles: Record<Exclude<Basemap, "blank">, {tiles: string[]; attribution: string; maxzoom: number}> = {
@@ -24,8 +26,18 @@ const rasterStyles: Record<Exclude<Basemap, "blank">, {tiles: string[]; attribut
   "carto-dark": {tiles: ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20},
   streets: {tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors", maxzoom: 19},
   topo: {tiles: ["https://tile.opentopomap.org/{z}/{x}/{y}.png"], attribution: "Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)", maxzoom: 17},
-  imagery: {tiles: ["https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], attribution: "Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community", maxzoom: 19},
+  imagery: {tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], attribution: "Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community", maxzoom: 19},
 };
+
+function initialThreeD() {
+  try { return localStorage.getItem(MODE_KEY) !== "2d"; } catch { return true; }
+}
+function initialExaggeration() {
+  try {
+    const value = Number(localStorage.getItem(EXAGGERATION_KEY) ?? "1");
+    return Number.isFinite(value) ? Math.max(0.25, Math.min(3, value)) : 1;
+  } catch { return 1; }
+}
 
 function terrainStyle(basemap: Basemap, dark: boolean, exaggeration: number): maplibregl.StyleSpecification {
   const sources: maplibregl.StyleSpecification["sources"] = {terrain: {type: "raster-dem", tiles: [DEM], tileSize: 256, maxzoom: 14, encoding: "terrarium"}};
@@ -208,7 +220,12 @@ export function MapLibreTerrainRoutes({view, basemap, dark, batches, colors, wid
 }) {
   const container = useRef<HTMLDivElement>(null), mapRef = useRef<maplibregl.Map | null>(null), layerRef = useRef<BinaryTerrainLayer | null>(null), highlightLayerRef = useRef<BinaryTerrainLayer | null>(null), pointLayerRef = useRef<BinaryTerrainPointLayer | null>(null), indexRef = useRef<PickingIndex | null>(null);
   const callbacks = useRef({onView, onInteraction, onHover, onClick, onBackgroundClick}); callbacks.current = {onView, onInteraction, onHover, onClick, onBackgroundClick};
-  const [threeD, setThreeD] = useState(true), [exaggeration, setExaggeration] = useState(1);
+  const [threeD, setThreeD] = useState(initialThreeD);
+  const [exaggeration, setExaggeration] = useState(initialExaggeration);
+  const [settingsTarget, setSettingsTarget] = useState<Element | null>(null);
+  const camera3d = useRef({pitch: 60, bearing: -20});
+  const modeRef = useRef(threeD), exaggerationRef = useRef(exaggeration);
+  modeRef.current = threeD; exaggerationRef.current = exaggeration;
   const data = useMemo(() => terrainSegmentBatch(batches, colors, isolateActivityId), [batches, colors, isolateActivityId]);
   const highlightColors = useMemo(() => batches.map(batch => { const color = new Uint8Array(batch.positions.length / 2 * 4); color.fill(255); return color; }), [batches]);
   const highlightData = useMemo(() => highlightActivityId ? terrainSegmentBatch(batches, highlightColors, highlightActivityId) : null, [batches, highlightActivityId, highlightColors]);
@@ -216,18 +233,27 @@ export function MapLibreTerrainRoutes({view, basemap, dark, batches, colors, wid
   useEffect(() => { onDiagnostics?.(data); }, [data, onDiagnostics]);
 
   useEffect(() => {
+    const locate = () => setSettingsTarget(document.querySelector(".toolbar .toolbar-section .settings-grid"));
+    locate();
+    const observer = new MutationObserver(locate);
+    observer.observe(document.body, {childList: true, subtree: true});
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     if (!container.current) return;
-    const map = new maplibregl.Map({container: container.current, style: terrainStyle(basemap, dark, exaggeration), center: [view.longitude, view.latitude], zoom: view.zoom, pitch: 60, bearing: -20, attributionControl: {compact: true}, canvasContextAttributes: {antialias: true}});
+    const map = new maplibregl.Map({container: container.current, style: terrainStyle(basemap, dark, threeD ? exaggeration : 0), center: [view.longitude, view.latitude], zoom: view.zoom, pitch: threeD ? 60 : 0, bearing: threeD ? -20 : 0, maxPitch: 85, attributionControl: {compact: true}, canvasContextAttributes: {antialias: true}});
     mapRef.current = map;
     const layer = new BinaryTerrainLayer(), highlightLayer = new BinaryTerrainLayer("squiggles-binary-terrain-highlight"), pointLayer = new BinaryTerrainPointLayer();
     layer.setData(data, widthPx); highlightLayer.setData(highlightData ?? {...data, segmentCount: 0}, widthPx * 1.8); layerRef.current = layer; highlightLayerRef.current = highlightLayer; pointLayerRef.current = pointLayer;
     const addLayers = () => { if (!map.getLayer(layer.id)) map.addLayer(layer as maplibregl.CustomLayerInterface); if (!map.getLayer(highlightLayer.id)) map.addLayer(highlightLayer as maplibregl.CustomLayerInterface); if (!map.getLayer(pointLayer.id)) map.addLayer(pointLayer as maplibregl.CustomLayerInterface); };
     map.on("load", addLayers); map.on("style.load", addLayers);
-    const start = () => callbacks.current.onInteraction(true), end = () => { callbacks.current.onInteraction(false); callbacks.current.onView(cameraSnapshot(map)); };
+    const start = () => callbacks.current.onInteraction(true), end = () => { callbacks.current.onInteraction(false); if (modeRef.current) camera3d.current = {pitch: map.getPitch(), bearing: map.getBearing()}; callbacks.current.onView(cameraSnapshot(map)); };
     map.on("movestart", start); map.on("moveend", end);
     let frame = 0, pending: maplibregl.MapMouseEvent | null = null;
     const flushHover = () => { frame = 0; const event = pending; pending = null; if (!event) return; const value = indexRef.current ? pick(indexRef.current, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y) : null; map.getCanvas().style.cursor = value ? "pointer" : ""; callbacks.current.onHover?.(value); };
-    const move = (event: maplibregl.MapMouseEvent) => { pending = event; if (!frame) frame = requestAnimationFrame(flushHover); }, leave = () => { pending = null; if (frame) cancelAnimationFrame(frame); frame = 0; map.getCanvas().style.cursor = ""; callbacks.current.onHover?.(null); };
+    const move = (event: maplibregl.MapMouseEvent) => { pending = event; if (!frame) frame = requestAnimationFrame(flushHover); };
+    const leave = () => { pending = null; if (frame) cancelAnimationFrame(frame); frame = 0; map.getCanvas().style.cursor = ""; callbacks.current.onHover?.(null); };
     const click = (event: maplibregl.MapMouseEvent) => { const value = indexRef.current ? pick(indexRef.current, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y) : null; if (value) callbacks.current.onClick?.(value.activity); else callbacks.current.onBackgroundClick?.(); };
     map.on("mousemove", move); map.on("mouseout", leave); map.on("click", click);
     return () => { if (frame) cancelAnimationFrame(frame); map.remove(); mapRef.current = null; layerRef.current = null; highlightLayerRef.current = null; pointLayerRef.current = null; };
@@ -237,8 +263,25 @@ export function MapLibreTerrainRoutes({view, basemap, dark, batches, colors, wid
   useEffect(() => { layerRef.current?.setData(data, widthPx); }, [data, widthPx]);
   useEffect(() => { highlightLayerRef.current?.setData(highlightData ?? {...data, segmentCount: 0}, widthPx * 1.8); }, [data, highlightData, widthPx]);
   useEffect(() => { const map = mapRef.current; if (!map) return; const center = map.getCenter(); if (Math.abs(center.lng - view.longitude) > 1e-7 || Math.abs(center.lat - view.latitude) > 1e-7 || Math.abs(map.getZoom() - view.zoom) > 1e-4) map.jumpTo({center: [view.longitude, view.latitude], zoom: view.zoom}); }, [view]);
-  useEffect(() => { const map = mapRef.current; if (!map) return; map.setStyle(terrainStyle(basemap, dark, threeD ? exaggeration : 0)); }, [basemap, dark, exaggeration, threeD]);
-  useEffect(() => { const map = mapRef.current; if (!map) return; map.easeTo({pitch: threeD ? 60 : 0, bearing: threeD ? -20 : 0, duration: 250}); }, [threeD]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    map.setStyle(terrainStyle(basemap, dark, modeRef.current ? exaggerationRef.current : 0));
+  }, [basemap, dark]);
+  useEffect(() => {
+    try { localStorage.setItem(MODE_KEY, threeD ? "3d" : "2d"); } catch {}
+    const map = mapRef.current;
+    if (!map) return;
+    if (!threeD) camera3d.current = {pitch: map.getPitch(), bearing: map.getBearing()};
+    map.setTerrain({source: "terrain", exaggeration: threeD ? exaggeration : 0});
+    const target = threeD ? camera3d.current : {pitch: 0, bearing: 0};
+    map.easeTo({...target, duration: 250});
+  }, [threeD]);
+  useEffect(() => {
+    try { localStorage.setItem(EXAGGERATION_KEY, String(exaggeration)); } catch {}
+    const map = mapRef.current;
+    if (map && threeD) map.setTerrain({source: "terrain", exaggeration});
+  }, [exaggeration, threeD]);
   useEffect(() => {
     const profile = document.querySelector<SVGSVGElement>(".detail .profile svg");
     if (!profile || !highlightData) { pointLayerRef.current?.setPoint(null); return; }
@@ -250,9 +293,9 @@ export function MapLibreTerrainRoutes({view, basemap, dark, batches, colors, wid
 
   return <>
     <div className="maplibre-base" ref={container}/>
-    <div style={{position: "absolute", right: 12, bottom: 40, zIndex: 12, display: "flex", gap: 8, alignItems: "center", padding: 8, borderRadius: 10, background: "rgba(7,16,14,.82)", color: "white", font: "12px system-ui,sans-serif", backdropFilter: "blur(8px)"}}>
-      <button type="button" onClick={() => setThreeD(value => !value)} style={{minWidth: 54, height: 32, borderRadius: 7, border: "1px solid rgba(255,255,255,.25)", background: "rgba(255,255,255,.08)", color: "inherit"}}>{threeD ? "3D" : "2D"}</button>
-      {threeD && <label style={{display: "flex", alignItems: "center", gap: 6}}>Exaggeration <input aria-label="Terrain exaggeration" type="range" min="0.25" max="3" step="0.05" value={exaggeration} onChange={event => setExaggeration(Number(event.target.value))}/><output>{exaggeration.toFixed(2)}×</output></label>}
-    </div>
+    {settingsTarget && createPortal(<>
+      <label data-tooltip="Use the normal flat map or pitch the map over terrain.">View<div className="unit-control" role="group" aria-label="Map dimension"><button type="button" aria-pressed={!threeD} onClick={() => setThreeD(false)}>2D</button><button type="button" aria-pressed={threeD} onClick={() => setThreeD(true)}>3D</button></div></label>
+      {threeD && <label className="temperature" data-tooltip="Scale terrain relief without changing route elevation relative to the terrain."><span>Terrain exaggeration</span><input aria-label="Terrain exaggeration" type="range" min="0.25" max="3" step="0.05" value={exaggeration} onChange={event => setExaggeration(Number(event.target.value))}/><output>{exaggeration.toFixed(2)}×</output></label>}
+    </>, settingsTarget)}
   </>;
 }
