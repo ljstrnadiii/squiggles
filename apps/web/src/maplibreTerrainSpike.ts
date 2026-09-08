@@ -114,7 +114,7 @@ class BinaryTerrainRTTLayer implements TerrainCustomLayer {
     const colors = new Float32Array(this.vertexCount * 4);
     const redVertices = red.length / 2;
     for (let i = 0; i < this.vertexCount; i++) {
-      colors.set(i < redVertices ? [1, 0.12, 0.18, 0.95] : [0.05, 0.55, 1, 0.95], i * 4);
+      colors.set(i < redVertices ? [1, 0.05, 0.05, 1] : [0.05, 0.35, 1, 1], i * 4);
     }
 
     this.positionBuffer = gl.createBuffer();
@@ -136,7 +136,9 @@ class BinaryTerrainRTTLayer implements TerrainCustomLayer {
     if (!this.program || !this.positionBuffer || !this.colorBuffer || !options.tileID) return;
 
     const tileID = options.tileID;
-    const projectionData = options.getProjectionData({tileID, applyTerrainMatrix: true});
+    // Important: draw into the RTT in flat tile space. MapLibre applies the terrain
+    // deformation later when it drapes the completed RTT over the DEM mesh.
+    const projectionData = options.getProjectionData({tileID, applyTerrainMatrix: false});
     const scale = 2 ** tileID.canonical.z;
     const originX = tileID.canonical.x + (tileID.wrap ?? 0) * scale;
     const originY = tileID.canonical.y;
@@ -160,12 +162,12 @@ class BinaryTerrainRTTLayer implements TerrainCustomLayer {
     gl.depthMask(false);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    gl.lineWidth(4);
+    gl.lineWidth(8);
     gl.drawArrays(gl.LINES, 0, this.vertexCount);
 
     this.renderedTiles.add(`${tileID.canonical.z}/${tileID.canonical.x}/${tileID.canonical.y}/${tileID.wrap ?? 0}`);
     status.className = '';
-    status.textContent = `ready · terrain RTT drape · ${this.vertexCount} binary vertices · ${this.renderedTiles.size} terrain tiles · no elevation sampling`;
+    status.textContent = `ready · flat tile RTT → terrain drape · ${this.vertexCount} binary vertices · ${this.renderedTiles.size} terrain tiles`;
   }
 
   onRemove(_map: maplibregl.Map, gl: WebGL2RenderingContext) {
