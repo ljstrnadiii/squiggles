@@ -1,7 +1,7 @@
 import {useEffect, useMemo, useRef} from "react";
 import * as maplibregl from "maplibre-gl";
 
-import type {Basemap, BinaryRouteBatch, MapState} from "./contracts";
+import type {Basemap, BinaryRouteBatch, MapState, ViewportBounds, ViewportSize} from "./contracts";
 
 const DEM = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 const RTT_SIZE = 512;
@@ -11,6 +11,7 @@ type TileID = {wrap?: number; canonical: {x: number; y: number; z: number}};
 type TerrainInput = maplibregl.CustomRenderMethodInput & {tileID: TileID | null};
 type TerrainLayer = maplibregl.CustomLayerInterface & {renderToTile(gl: WebGL2RenderingContext, options: TerrainInput): void};
 export type SegmentBatch = {endpoints: Float32Array; colors: Uint8Array; segmentCount: number; skippedLongSegments: number};
+export type TerrainCamera = {view: MapState; bounds: ViewportBounds; size: ViewportSize};
 
 const rasterStyles: Record<Exclude<Basemap, "blank">, {tiles: string[]; attribution: string; maxzoom: number}> = {
   "carto-light": {tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20},
@@ -135,7 +136,18 @@ precision highp float; in vec4 v_color; out vec4 fragColor; void main(){fragColo
   onRemove(_map: maplibregl.Map, gl: WebGL2RenderingContext) { this.gl=null; this.map=null; if(this.endpointBuffer)gl.deleteBuffer(this.endpointBuffer); if(this.colorBuffer)gl.deleteBuffer(this.colorBuffer); if(this.program)gl.deleteProgram(this.program); }
 }
 
-export function MapLibreTerrainRoutes({view, basemap, dark, batches, colors, widthPx, onView, onInteraction, onDiagnostics}: {view: MapState; basemap: Basemap; dark: boolean; batches: BinaryRouteBatch[]; colors: Uint8Array[]; widthPx: number; onView: (view: MapState) => void; onInteraction: (active: boolean) => void; onDiagnostics?: (data: SegmentBatch) => void}) {
+function cameraSnapshot(map: maplibregl.Map): TerrainCamera {
+  const center = map.getCenter();
+  const bounds = map.getBounds();
+  const canvas = map.getCanvas();
+  return {
+    view: {longitude: center.lng, latitude: center.lat, zoom: map.getZoom()},
+    bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
+    size: {width: canvas.clientWidth, height: canvas.clientHeight},
+  };
+}
+
+export function MapLibreTerrainRoutes({view, basemap, dark, batches, colors, widthPx, onView, onInteraction, onDiagnostics}: {view: MapState; basemap: Basemap; dark: boolean; batches: BinaryRouteBatch[]; colors: Uint8Array[]; widthPx: number; onView: (camera: TerrainCamera) => void; onInteraction: (active: boolean) => void; onDiagnostics?: (data: SegmentBatch) => void}) {
   const container = useRef<HTMLDivElement>(null), mapRef = useRef<maplibregl.Map | null>(null), layerRef = useRef<BinaryTerrainLayer | null>(null);
   const data = useMemo(() => terrainSegmentBatch(batches, colors), [batches, colors]);
   useEffect(() => { onDiagnostics?.(data); }, [data, onDiagnostics]);
@@ -144,7 +156,7 @@ export function MapLibreTerrainRoutes({view, basemap, dark, batches, colors, wid
     const map = new maplibregl.Map({container: container.current, style: terrainStyle(basemap, dark), center: [view.longitude, view.latitude], zoom: view.zoom, pitch: 60, bearing: -20, attributionControl: {compact: true}, canvasContextAttributes: {antialias: true}});
     mapRef.current = map; const layer = new BinaryTerrainLayer(); layer.setData(data, widthPx); layerRef.current = layer;
     map.on("load", () => map.addLayer(layer as maplibregl.CustomLayerInterface));
-    const start = () => onInteraction(true), end = () => {onInteraction(false); const center=map.getCenter(); onView({longitude:center.lng, latitude:center.lat, zoom:map.getZoom()});};
+    const start = () => onInteraction(true), end = () => {onInteraction(false); onView(cameraSnapshot(map));};
     map.on("movestart", start); map.on("moveend", end);
     return () => {map.remove(); mapRef.current=null; layerRef.current=null;};
   // eslint-disable-next-line react-hooks/exhaustive-deps
