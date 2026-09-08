@@ -7,7 +7,7 @@ const localDataRoot = resolve(import.meta.dirname, "../../data/local");
 const maplibreRoot = resolve(import.meta.dirname, "../../../maplibre-gl-js");
 
 export default defineConfig({
-  optimizeDeps: { include: ["maplibre-gl"] },
+  optimizeDeps: { exclude: ["maplibre-gl"] },
   server: {
     fs: {
       allow: [resolve(import.meta.dirname, "../.."), maplibreRoot],
