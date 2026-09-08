@@ -14,9 +14,9 @@ async function main() {
     const maplibregl = maplibreModule.default ?? maplibreModule;
 
     status.textContent = 'MapLibre loaded · importing deck…';
-    const [{PathLayer}, {MapLibreOverlay}] = await Promise.all([
+    const [{PathLayer}, {MapboxOverlay}] = await Promise.all([
       import('@deck.gl/layers'),
-      import('@deck.gl/maplibre')
+      import('@deck.gl/mapbox')
     ]);
 
     const DEM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
@@ -58,8 +58,8 @@ async function main() {
     for (let i = 0; i < 8; i++) colors.set([255, 62, 82, 235], i * 4);
     for (let i = 8; i < 16; i++) colors.set([40, 160, 255, 235], i * 4);
 
-    const overlay = new MapLibreOverlay({interleaved: true, layers: []});
-    map.addControl(overlay);
+    const overlay = new MapboxOverlay({interleaved: true, layers: []});
+    map.addControl(overlay as never);
 
     const updateRoutes = () => {
       const xyz = new Float64Array(16 * 3);
