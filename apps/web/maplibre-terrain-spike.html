@@ -13,7 +13,7 @@
 </head>
 <body>
   <div id="map"></div>
-  <div id="hud"><strong>MapLibre custom binary terrain spike</strong><span id="status">starting local bundle…</span><br><small>Raw typed-array WebGL custom layer. No deck, no GeoJSON, no CPU terrain sampling. Red is fixed at 2100m; blue at 2350m. Terrain should occlude portions below the surface.</small></div>
+  <div id="hud"><strong>MapLibre custom binary terrain spike</strong><span id="status">starting local bundle…</span><br><small>Raw typed-array WebGL custom layer rendered directly into MapLibre terrain RTTs. No deck, no GeoJSON, no CPU terrain sampling. Thick red/blue routes should conform exactly to the terrain surface.</small></div>
   <script type="module" src="/src/maplibreTerrainSpike.ts"></script>
 </body>
 </html>
