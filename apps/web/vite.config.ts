@@ -4,8 +4,15 @@ import { createReadStream, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 const localDataRoot = resolve(import.meta.dirname, "../../data/local");
+const maplibreRoot = resolve(import.meta.dirname, "../../../maplibre-gl-js");
+
 export default defineConfig({
   optimizeDeps: { exclude: ["maplibre-gl"] },
+  server: {
+    fs: {
+      allow: [resolve(import.meta.dirname, "../.."), maplibreRoot],
+    },
+  },
   plugins: [
     react(),
     {
