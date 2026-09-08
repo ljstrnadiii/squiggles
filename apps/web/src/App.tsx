@@ -297,6 +297,7 @@ export function App() {
       8,
       () => cancelled,
       systemResolution === "low" ? 4 : 8,
+      terrainEnabled,
     ).then(result => { if (!cancelled && result) setHeat(result); });
     return () => { cancelled = true; };
   }, [isolateSelected, renderedView, routeBatches, selected?.activityId, systemResolution, tab.style.heatEnabled, terrainEnabled]);
@@ -678,7 +679,7 @@ export function App() {
       new PathLayer<RouteSegment>({ id: "selected-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8, pickable: !spatialDrawing }),
     ] : []),
     ...(profileHover && !spatialDrawing ? [new ScatterplotLayer<ElevationSample>({ id: "profile-position", data: [profileHover], getPosition: item => item.position, getFillColor: [71, 107, 204, 255], getLineColor: [255, 255, 255, 255], getRadius: 8, radiusUnits: "pixels", stroked: true, lineWidthMinPixels: 3 })] : []),
-  ], [hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, spatialDraft, spatialDrawing, tab.spatialFilter, tab.style.color, tab.style.heatEnabled]);
+  ], [engine, hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, spatialDraft, spatialDrawing, tab.spatialFilter, tab.style.color, tab.style.heatEnabled]);
   const terrainHighlightActivityId = hover?.item.activityId ?? selected?.activityId;
 
   return <main className="app" onKeyDown={event => { if (spatialDrawing && event.key === "Escape") { setSpatialDrawing(false); setSpatialDraft([]); return; } if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void run(); }}>

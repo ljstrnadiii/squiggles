@@ -203,7 +203,8 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
     const layer = new BinaryTerrainLayer(), highlightLayer = new BinaryTerrainLayer("squiggles-binary-terrain-highlight"), pointLayer = new BinaryTerrainPointLayer();
     layer.setData(data, widthPx); highlightLayer.setData(highlightData ?? {...data, segmentCount: 0}, widthPx * 1.8); layerRef.current = layer; highlightLayerRef.current = highlightLayer; pointLayerRef.current = pointLayer;
     const addLayers = () => { if (!map.getLayer(layer.id)) map.addLayer(layer as maplibregl.CustomLayerInterface); if (!map.getLayer(highlightLayer.id)) map.addLayer(highlightLayer as maplibregl.CustomLayerInterface); if (!map.getLayer(pointLayer.id)) map.addLayer(pointLayer as maplibregl.CustomLayerInterface); };
-    map.on("load", addLayers); map.on("style.load", addLayers);
+    const load = () => { addLayers(); callbacks.current.onView(cameraSnapshot(map)); };
+    map.on("load", load); map.on("style.load", addLayers);
     const start = () => callbacks.current.onInteraction(true), end = () => { callbacks.current.onInteraction(false); callbacks.current.onView(cameraSnapshot(map)); };
     map.on("movestart", start); map.on("moveend", end);
     let frame = 0, pending: maplibregl.MapMouseEvent | null = null;
