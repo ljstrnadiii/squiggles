@@ -5,11 +5,12 @@ import type {Basemap, BinaryRouteBatch, MapState} from "./contracts";
 
 const DEM = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 const RTT_SIZE = 512;
+const MAX_DIAGNOSTIC_SEGMENT_METERS = 5_000;
 
 type TileID = {wrap?: number; canonical: {x: number; y: number; z: number}};
 type TerrainInput = maplibregl.CustomRenderMethodInput & {tileID: TileID | null};
 type TerrainLayer = maplibregl.CustomLayerInterface & {renderToTile(gl: WebGL2RenderingContext, options: TerrainInput): void};
-type SegmentBatch = {endpoints: Float32Array; colors: Uint8Array; segmentCount: number};
+export type SegmentBatch = {endpoints: Float32Array; colors: Uint8Array; segmentCount: number; skippedLongSegments: number};
 
 const rasterStyles: Record<Exclude<Basemap, "blank">, {tiles: string[]; attribution: string; maxzoom: number}> = {
   "carto-light": {tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20},
@@ -35,26 +36,48 @@ function mercator(lng: number, lat: number): [number, number] {
   return [(lng + 180) / 360, 0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)];
 }
 
+function distanceMeters(lng0: number, lat0: number, lng1: number, lat1: number) {
+  const radians = Math.PI / 180;
+  const dLat = (lat1 - lat0) * radians;
+  const dLng = (lng1 - lng0) * radians;
+  const aLat = lat0 * radians;
+  const bLat = lat1 * radians;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(aLat) * Math.cos(bLat) * Math.sin(dLng / 2) ** 2;
+  return 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Array[]): SegmentBatch {
-  let segmentCount = 0;
-  for (const batch of batches) for (let route = 0; route < batch.startIndices.length - 1; route++) segmentCount += Math.max(0, batch.startIndices[route + 1] - batch.startIndices[route] - 1);
-  const endpoints = new Float32Array(segmentCount * 4);
-  const segmentColors = new Uint8Array(segmentCount * 4);
+  let candidateCount = 0;
+  for (const batch of batches) {
+    if (batch.startIndices.length !== batch.segmentActivityIndices.length + 1) {
+      throw new Error(`Invalid BinaryRouteBatch: ${batch.startIndices.length} start indices for ${batch.segmentActivityIndices.length} segments`);
+    }
+    for (let route = 0; route < batch.segmentActivityIndices.length; route++) candidateCount += Math.max(0, batch.startIndices[route + 1] - batch.startIndices[route] - 1);
+  }
+  const endpoints = new Float32Array(candidateCount * 4);
+  const segmentColors = new Uint8Array(candidateCount * 4);
   let segment = 0;
+  let skippedLongSegments = 0;
   batches.forEach((batch, batchIndex) => {
     const vertexColors = colors[batchIndex];
-    for (let route = 0; route < batch.startIndices.length - 1; route++) {
+    for (let route = 0; route < batch.segmentActivityIndices.length; route++) {
       const start = batch.startIndices[route], end = batch.startIndices[route + 1];
       for (let point = start; point + 1 < end; point++) {
-        const [x0, y0] = mercator(batch.positions[point * 2], batch.positions[point * 2 + 1]);
-        const [x1, y1] = mercator(batch.positions[(point + 1) * 2], batch.positions[(point + 1) * 2 + 1]);
+        const lng0 = batch.positions[point * 2], lat0 = batch.positions[point * 2 + 1];
+        const lng1 = batch.positions[(point + 1) * 2], lat1 = batch.positions[(point + 1) * 2 + 1];
+        if (distanceMeters(lng0, lat0, lng1, lat1) > MAX_DIAGNOSTIC_SEGMENT_METERS) {
+          skippedLongSegments++;
+          continue;
+        }
+        const [x0, y0] = mercator(lng0, lat0);
+        const [x1, y1] = mercator(lng1, lat1);
         endpoints.set([x0, y0, x1, y1], segment * 4);
         segmentColors.set(vertexColors.subarray(point * 4, point * 4 + 4), segment * 4);
         segment++;
       }
     }
   });
-  return {endpoints, colors: segmentColors, segmentCount};
+  return {endpoints: endpoints.subarray(0, segment * 4), colors: segmentColors.subarray(0, segment * 4), segmentCount: segment, skippedLongSegments};
 }
 
 function compile(gl: WebGL2RenderingContext, type: number, source: string) {
@@ -75,7 +98,7 @@ class BinaryTerrainLayer implements TerrainLayer {
   private colorBuffer: WebGLBuffer | null = null;
   private segmentCount = 0;
   private widthPx = 2;
-  private pending: SegmentBatch = {endpoints: new Float32Array(), colors: new Uint8Array(), segmentCount: 0};
+  private pending: SegmentBatch = {endpoints: new Float32Array(), colors: new Uint8Array(), segmentCount: 0, skippedLongSegments: 0};
 
   setData(data: SegmentBatch, widthPx: number) {
     this.pending = data; this.segmentCount = data.segmentCount; this.widthPx = widthPx;
@@ -112,9 +135,10 @@ precision highp float; in vec4 v_color; out vec4 fragColor; void main(){fragColo
   onRemove(_map: maplibregl.Map, gl: WebGL2RenderingContext) { this.gl=null; this.map=null; if(this.endpointBuffer)gl.deleteBuffer(this.endpointBuffer); if(this.colorBuffer)gl.deleteBuffer(this.colorBuffer); if(this.program)gl.deleteProgram(this.program); }
 }
 
-export function MapLibreTerrainRoutes({view, basemap, dark, batches, colors, widthPx, onView, onInteraction}: {view: MapState; basemap: Basemap; dark: boolean; batches: BinaryRouteBatch[]; colors: Uint8Array[]; widthPx: number; onView: (view: MapState) => void; onInteraction: (active: boolean) => void}) {
+export function MapLibreTerrainRoutes({view, basemap, dark, batches, colors, widthPx, onView, onInteraction, onDiagnostics}: {view: MapState; basemap: Basemap; dark: boolean; batches: BinaryRouteBatch[]; colors: Uint8Array[]; widthPx: number; onView: (view: MapState) => void; onInteraction: (active: boolean) => void; onDiagnostics?: (data: SegmentBatch) => void}) {
   const container = useRef<HTMLDivElement>(null), mapRef = useRef<maplibregl.Map | null>(null), layerRef = useRef<BinaryTerrainLayer | null>(null);
   const data = useMemo(() => terrainSegmentBatch(batches, colors), [batches, colors]);
+  useEffect(() => { onDiagnostics?.(data); }, [data, onDiagnostics]);
   useEffect(() => {
     if (!container.current) return;
     const map = new maplibregl.Map({container: container.current, style: terrainStyle(basemap, dark), center: [view.longitude, view.latitude], zoom: view.zoom, pitch: 60, bearing: -20, attributionControl: {compact: true}, canvasContextAttributes: {antialias: true}});
