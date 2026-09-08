@@ -3,7 +3,7 @@ import {MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodIn
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 const status = document.getElementById('status')!;
-status.textContent = 'module loaded · initializing terrain RTT custom layer…';
+status.textContent = 'module loaded · initializing terrain RTT stress test…';
 const fail = (reason: unknown) => {
   status.className = 'error';
   status.textContent = `startup error: ${reason instanceof Error ? reason.message : String(reason)}`;
@@ -14,7 +14,9 @@ window.addEventListener('unhandledrejection', event => fail(event.reason));
 const DEM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
 const initialViewState = {longitude: -105.292, latitude: 39.985, zoom: 12.2, bearing: -24, pitch: 62};
 const RTT_SIZE = 512;
-const LINE_WIDTH_PX = 10;
+const LINE_WIDTH_PX = 6;
+const requestedCopies = Number(new URLSearchParams(location.search).get('copies') ?? 10000);
+const COPY_COUNT = Number.isFinite(requestedCopies) ? Math.max(1, Math.min(100000, Math.floor(requestedCopies))) : 10000;
 
 const pathA = [
   [-105.3105,39.9780], [-105.3065,39.9800], [-105.3020,39.9830], [-105.2980,39.9860],
@@ -39,6 +41,7 @@ type SegmentBatch = {
   endpoints: Float32Array;
   colors: Float32Array;
   segmentCount: number;
+  generationMs: number;
 };
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string) {
@@ -52,29 +55,40 @@ function compileShader(gl: WebGL2RenderingContext, type: number, source: string)
   return shader;
 }
 
-function makeSegmentBatch() : SegmentBatch {
-  const paths = [
-    {path: pathA, color: [1, 0.05, 0.05, 1] as const},
-    {path: pathB, color: [0.05, 0.35, 1, 1] as const},
+function makeSegmentBatch(): SegmentBatch {
+  const started = performance.now();
+  const base = [
+    {path: pathA, color: [1, 0.05, 0.05, 0.72] as const},
+    {path: pathB, color: [0.05, 0.35, 1, 0.72] as const},
   ];
-  const segmentCount = paths.reduce((sum, {path}) => sum + path.length - 1, 0);
+  const segmentsPerCopy = base.reduce((sum, {path}) => sum + path.length - 1, 0);
+  const segmentCount = segmentsPerCopy * COPY_COUNT;
   const endpoints = new Float32Array(segmentCount * 4);
   const colors = new Float32Array(segmentCount * 4);
   let segment = 0;
-  for (const {path, color} of paths) {
-    for (let i = 0; i < path.length - 1; i++) {
-      const start = MercatorCoordinate.fromLngLat(path[i]);
-      const end = MercatorCoordinate.fromLngLat(path[i + 1]);
-      endpoints.set([start.x, start.y, end.x, end.y], segment * 4);
-      colors.set(color, segment * 4);
-      segment += 1;
+
+  for (let copy = 0; copy < COPY_COUNT; copy++) {
+    const angle = copy * 2.399963229728653;
+    const radius = Math.sqrt(copy / Math.max(1, COPY_COUNT - 1));
+    const lngOffset = Math.cos(angle) * radius * 0.035;
+    const latOffset = Math.sin(angle) * radius * 0.022;
+
+    for (const {path, color} of base) {
+      for (let i = 0; i < path.length - 1; i++) {
+        const start = MercatorCoordinate.fromLngLat([path[i][0] + lngOffset, path[i][1] + latOffset]);
+        const end = MercatorCoordinate.fromLngLat([path[i + 1][0] + lngOffset, path[i + 1][1] + latOffset]);
+        endpoints.set([start.x, start.y, end.x, end.y], segment * 4);
+        colors.set(color, segment * 4);
+        segment += 1;
+      }
     }
   }
-  return {endpoints, colors, segmentCount};
+
+  return {endpoints, colors, segmentCount, generationMs: performance.now() - started};
 }
 
 class BinaryTerrainRTTLayer implements TerrainCustomLayer {
-  id = 'binary-terrain-rtt-test';
+  id = 'binary-terrain-rtt-stress';
   type = 'custom' as const;
   renderingMode = '2d' as const;
 
@@ -83,6 +97,11 @@ class BinaryTerrainRTTLayer implements TerrainCustomLayer {
   private colorBuffer: WebGLBuffer | null = null;
   private segmentCount = 0;
   private renderedTiles = new Set<string>();
+  private generationMs = 0;
+  private uploadMs = 0;
+  private submitTotalMs = 0;
+  private submitMaxMs = 0;
+  private submitCount = 0;
 
   onAdd(_map: maplibregl.Map, gl: WebGL2RenderingContext) {
     const vertexShader = compileShader(gl, gl.VERTEX_SHADER, `#version 300 es
@@ -98,10 +117,11 @@ class BinaryTerrainRTTLayer implements TerrainCustomLayer {
       void main() {
         bool atEnd = gl_VertexID == 2 || gl_VertexID == 3 || gl_VertexID == 5;
         float side = (gl_VertexID == 1 || gl_VertexID == 4 || gl_VertexID == 5) ? 1.0 : -1.0;
-
         vec2 start = a_start * u_tile_scale - u_tile_origin;
         vec2 end = a_end * u_tile_scale - u_tile_origin;
-        vec2 direction = normalize(end - start);
+        vec2 delta = end - start;
+        float len = length(delta);
+        vec2 direction = len > 0.0 ? delta / len : vec2(1.0, 0.0);
         vec2 normal = vec2(-direction.y, direction.x);
         vec2 tile01 = (atEnd ? end : start) + normal * side * u_half_width;
         vec2 ndc = vec2(tile01.x * 2.0 - 1.0, 1.0 - tile01.y * 2.0);
@@ -131,25 +151,25 @@ class BinaryTerrainRTTLayer implements TerrainCustomLayer {
 
     const batch = makeSegmentBatch();
     this.segmentCount = batch.segmentCount;
+    this.generationMs = batch.generationMs;
 
+    const uploadStarted = performance.now();
     this.endpointBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.endpointBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, batch.endpoints, gl.STATIC_DRAW);
-
     this.colorBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, batch.colors, gl.STATIC_DRAW);
+    this.uploadMs = performance.now() - uploadStarted;
 
-    status.textContent = `binary buffers ready · ${this.segmentCount} GPU segments · waiting for terrain RTT…`;
+    const mib = (batch.endpoints.byteLength + batch.colors.byteLength) / 1024 / 1024;
+    status.textContent = `stress buffers ready · ${this.segmentCount.toLocaleString()} segments · ${mib.toFixed(1)} MiB · build ${this.generationMs.toFixed(1)} ms · upload ${this.uploadMs.toFixed(1)} ms`;
   }
 
-  render() {
-    // Terrain-enabled rendering is handled exclusively by renderToTile in the fork.
-  }
+  render() {}
 
   renderToTile(gl: WebGL2RenderingContext, options: TerrainRenderInput) {
     if (!this.program || !this.endpointBuffer || !this.colorBuffer || !options.tileID) return;
-
     const tileID = options.tileID;
     const scale = 2 ** tileID.canonical.z;
     const originX = tileID.canonical.x + (tileID.wrap ?? 0) * scale;
@@ -165,7 +185,6 @@ class BinaryTerrainRTTLayer implements TerrainCustomLayer {
     gl.enableVertexAttribArray(startLocation);
     gl.vertexAttribPointer(startLocation, 2, gl.FLOAT, false, 16, 0);
     gl.vertexAttribDivisor(startLocation, 1);
-
     const endLocation = gl.getAttribLocation(this.program, 'a_end');
     gl.enableVertexAttribArray(endLocation);
     gl.vertexAttribPointer(endLocation, 2, gl.FLOAT, false, 16, 8);
@@ -181,11 +200,18 @@ class BinaryTerrainRTTLayer implements TerrainCustomLayer {
     gl.depthMask(false);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+    const submitStarted = performance.now();
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, this.segmentCount);
+    const submitMs = performance.now() - submitStarted;
+    this.submitTotalMs += submitMs;
+    this.submitMaxMs = Math.max(this.submitMaxMs, submitMs);
+    this.submitCount += 1;
 
     this.renderedTiles.add(`${tileID.canonical.z}/${tileID.canonical.x}/${tileID.canonical.y}/${tileID.wrap ?? 0}`);
+    const avgSubmitMs = this.submitTotalMs / this.submitCount;
     status.className = '';
-    status.textContent = `ready · thick binary RTT → terrain drape · ${this.segmentCount} segments · ${this.renderedTiles.size} terrain tiles`;
+    status.textContent = `ready · ${this.segmentCount.toLocaleString()} segments · ${this.renderedTiles.size} terrain tiles · draw submit avg ${avgSubmitMs.toFixed(3)} ms max ${this.submitMaxMs.toFixed(3)} ms · copies=${COPY_COUNT.toLocaleString()}`;
   }
 
   onRemove(_map: maplibregl.Map, gl: WebGL2RenderingContext) {
@@ -196,7 +222,7 @@ class BinaryTerrainRTTLayer implements TerrainCustomLayer {
 }
 
 try {
-  status.textContent = 'initializing MapLibre terrain…';
+  status.textContent = `initializing MapLibre terrain · stress copies=${COPY_COUNT.toLocaleString()}…`;
   const map = new maplibregl.Map({
     container: 'map',
     style: {
@@ -224,7 +250,6 @@ try {
   });
 
   map.on('load', () => {
-    status.textContent = 'MapLibre loaded · adding terrain RTT binary layer…';
     const layer = new BinaryTerrainRTTLayer();
     map.addLayer(layer as CustomLayerInterface);
     Object.assign(window, {__terrainSpike: {map, layer}});
