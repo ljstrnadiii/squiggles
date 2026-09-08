@@ -4,15 +4,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const engineCalls = vi.hoisted(() => ({ execute: vi.fn(), getSummary: vi.fn() }));
 
 vi.mock("maplibre-gl", () => ({ Map: class {
+  constructor(private camera: { center: [number, number]; zoom: number }) {}
   handlers = new Map<string, ((...args: unknown[]) => void)[]>();
   on(name: string, handler: (...args: unknown[]) => void) { this.handlers.set(name, [...(this.handlers.get(name) ?? []), handler]); if (name === "load") handler(); return this; }
-  getCenter() { return { lng: -106.25, lat: 39.5 }; }
+  getCenter() { return { lng: this.camera.center[0], lat: this.camera.center[1] }; }
   getBounds() { return { getWest: () => -107, getSouth: () => 38, getEast: () => -105, getNorth: () => 41 }; }
   getCanvas() { return { clientWidth: 1200, clientHeight: 800, style: { cursor: "" } }; }
-  getZoom() { return 9.25; }
+  getZoom() { return this.camera.zoom; }
   getLayer() { return undefined; }
   addLayer() {}
-  jumpTo() {}
+  jumpTo(camera: { center: [number, number]; zoom: number }) { this.camera = camera; }
   setStyle() {}
   setTerrain() {}
   remove() {}
