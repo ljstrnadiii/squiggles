@@ -28,7 +28,7 @@
     "@uiw/react-codemirror": "4.25.11",
     "@zip.js/zip.js": "^2.8.57",
     "apache-arrow": "21.2.0",
-    "maplibre-gl": "github:ljstrnadiii/maplibre-gl-js#51fbd2418ccbaafdc05d0778c9dfc4f546af595a",
+    "maplibre-gl": "github:ljstrnadiii/maplibre-gl-js#45ed5dbd2e4184548e7ef9573614338bc78e670c",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "vite": "8.2.2"
