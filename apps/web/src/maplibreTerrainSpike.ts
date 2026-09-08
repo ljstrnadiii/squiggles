@@ -1,7 +1,9 @@
-import maplibregl, {MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput} from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
+import {MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput} from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 const status = document.getElementById('status')!;
+status.textContent = 'module loaded · initializing custom layer…';
 const fail = (reason: unknown) => {
   status.className = 'error';
   status.textContent = `startup error: ${reason instanceof Error ? reason.message : String(reason)}`;
@@ -178,6 +180,7 @@ try {
   });
 
   map.on('load', () => {
+    status.textContent = 'MapLibre loaded · adding binary custom layer…';
     const layer = new BinaryTerrainDepthLayer();
     map.addLayer(layer);
     Object.assign(window, {__terrainSpike: {map, layer}});
