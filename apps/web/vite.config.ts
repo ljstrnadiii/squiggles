@@ -4,35 +4,11 @@ import { createReadStream, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 const localDataRoot = resolve(import.meta.dirname, "../../data/local");
-const maplibreRoot = resolve(import.meta.dirname, "../../../maplibre-gl-js");
-const maplibreDistRoot = resolve(maplibreRoot, "dist");
 
 export default defineConfig({
   optimizeDeps: { exclude: ["maplibre-gl"] },
-  server: {
-    fs: {
-      allow: [resolve(import.meta.dirname, "../.."), maplibreRoot],
-    },
-  },
   plugins: [
     react(),
-    {
-      name: "linked-maplibre-worker",
-      configureServer(server) {
-        server.middlewares.use("/maplibre-fork", (request, response, next) => {
-          const requested = resolve(maplibreDistRoot, `.${decodeURIComponent(request.url ?? "/")}`);
-          if (!requested.startsWith(`${maplibreDistRoot}${sep}`)) return next();
-          try {
-            const size = statSync(requested).size;
-            response.setHeader("Content-Type", requested.endsWith(".mjs") ? "text/javascript" : "application/octet-stream");
-            response.setHeader("Content-Length", size);
-            createReadStream(requested).pipe(response);
-          } catch {
-            next();
-          }
-        });
-      },
-    },
     {
       name: "local-dataset",
       configureServer(server) {
