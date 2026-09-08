@@ -1,6 +1,7 @@
 import { authFetch, type AuthSession, type RuntimeConfig } from "./auth";
 import type { QueryTab } from "./contracts";
 import { renderPlanHint } from "./renderPlanHints";
+import { normalizeTab } from "./storage";
 
 export type PublishedView = {
   slug: string;
@@ -54,13 +55,6 @@ export async function loadPublishedView(
   const published = (await response.json()) as PublishedView;
   return {
     ...published,
-    tabs: published.tabs.map((tab) => ({
-      ...tab,
-      mapState: {
-        longitude: tab.mapState.longitude,
-        latitude: tab.mapState.latitude,
-        zoom: tab.mapState.zoom,
-      },
-    })),
+    tabs: published.tabs.map(tab => normalizeTab(tab)),
   };
 }
