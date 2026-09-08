@@ -1,9 +1,9 @@
-import {useEffect, useMemo, useState} from "react";
+import {useEffect, useMemo, useRef, useState} from "react";
 
 import type {DatasetSource, MapState, ViewportResult} from "./contracts";
 import {routeColors} from "./binaryRoutes";
 import {BrowserDuckDBEngine} from "./engine";
-import {MapLibreTerrainRoutes, type SegmentBatch} from "./MapLibreTerrainRoutes";
+import {MapLibreTerrainRoutes, type SegmentBatch, type TerrainCamera} from "./MapLibreTerrainRoutes";
 import {defaultTab} from "./storage";
 
 function fitBounds([xmin, ymin, xmax, ymax]: [number, number, number, number]): MapState {
@@ -13,6 +13,8 @@ function fitBounds([xmin, ymin, xmax, ymax]: [number, number, number, number]): 
 
 export function TerrainExperimentApp() {
   const engine = useMemo(() => new BrowserDuckDBEngine(), []);
+  const request = useRef(0);
+  const ready = useRef(false);
   const [view, setView] = useState<MapState>(defaultTab.mapState);
   const [result, setResult] = useState<ViewportResult | null>(null);
   const [status, setStatus] = useState("Opening Squiggles terrain experiment…");
@@ -42,23 +44,39 @@ export function TerrainExperimentApp() {
         setStatus("Running DuckDB selection + LOD…");
         const rendered = await engine.execute({...defaultTab, mapState: initial}, initial.zoom);
         if (cancelled) return;
+        ready.current = true;
         setResult(rendered);
         setStatus(`${rendered.activityCount.toLocaleString()} routes · ${rendered.vertexCount.toLocaleString()} vertices · LOD ${rendered.lod}`);
       } catch (reason) {
         if (!cancelled) setStatus(`Terrain experiment failed: ${reason instanceof Error ? reason.message : String(reason)}`);
       }
     })();
-    return () => {cancelled = true;};
+    return () => {cancelled = true; ready.current = false; request.current += 1;};
   }, [engine]);
+
+  async function updateViewport(camera: TerrainCamera) {
+    setView(camera.view);
+    if (!ready.current) return;
+    const current = ++request.current;
+    try {
+      setStatus(`Updating viewport · zoom ${camera.view.zoom.toFixed(2)}…`);
+      const rendered = await engine.renderViewport(camera.view.zoom, camera.bounds, camera.size);
+      if (current !== request.current) return;
+      setResult(rendered);
+      setStatus(`${rendered.activityCount.toLocaleString()} routes · ${rendered.vertexCount.toLocaleString()} vertices · LOD ${rendered.lod} · zoom ${camera.view.zoom.toFixed(2)}`);
+    } catch (reason) {
+      if (current === request.current) setStatus(`Viewport update failed: ${reason instanceof Error ? reason.message : String(reason)}`);
+    }
+  }
 
   const colors = useMemo(() => result?.batches.map(batch => routeColors(batch, () => [35, 105, 255, 220])) ?? [], [result]);
   return <main style={{position: "fixed", inset: 0, background: "#07100e"}}>
-    {result && <MapLibreTerrainRoutes view={view} basemap="streets" dark batches={result.batches} colors={colors} widthPx={2.5} onView={setView} onInteraction={setInteracting} onDiagnostics={setSegments}/>} 
+    {result && <MapLibreTerrainRoutes view={view} basemap="streets" dark batches={result.batches} colors={colors} widthPx={2.5} onView={camera => void updateViewport(camera)} onInteraction={setInteracting} onDiagnostics={setSegments}/>} 
     <div style={{position: "absolute", zIndex: 20, left: 12, top: 12, maxWidth: 560, padding: "9px 12px", borderRadius: 8, background: "rgba(7,16,14,.88)", color: "white", font: "13px/1.35 system-ui,sans-serif"}}>
       <strong style={{display: "block"}}>Squiggles × MapLibre fork · real binary terrain</strong>
       <span>{status}{interacting ? " · moving" : ""}</span>
       {segments && <small style={{display: "block", marginTop: 4}}>RTT edges: {segments.segmentCount.toLocaleString()} · skipped &gt;5 km diagnostic edges: {segments.skippedLongSegments.toLocaleString()}</small>}
-      <small style={{display: "block", marginTop: 4, opacity: .76}}>Actual BrowserDuckDBEngine + BinaryRouteBatch data. OpenStreetMap basemap needs no API key. MapLibre owns the pitched 3D camera; routes render through the fork's terrain RTT hook.</small>
+      <small style={{display: "block", marginTop: 4, opacity: .76}}>Actual BrowserDuckDBEngine + BinaryRouteBatch data. OpenStreetMap basemap needs no API key. MapLibre owns the pitched 3D camera; viewport moves now refresh Squiggles LOD through the fork's terrain RTT hook.</small>
     </div>
   </main>;
 }
