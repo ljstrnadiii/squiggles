@@ -4,5 +4,5 @@ packages:
   - packages/*
 allowBuilds:
   esbuild: true
-  maplibre-gl: true
+  maplibre-gl@https://codeload.github.com/ljstrnadiii/maplibre-gl-js/tar.gz/cd24b019d0944bb4c3ecfd2b5c6755e730ee723f: true
   protobufjs: true
