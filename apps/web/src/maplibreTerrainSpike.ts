@@ -72,15 +72,15 @@ class BinaryTerrainRTTLayer implements TerrainCustomLayer {
   onAdd(_map: maplibregl.Map, gl: WebGL2RenderingContext) {
     const vertexShader = compileShader(gl, gl.VERTEX_SHADER, `#version 300 es
       precision highp float;
-      uniform mat4 u_matrix;
       uniform vec2 u_tile_origin;
       uniform float u_tile_scale;
       in vec2 a_position;
       in vec4 a_color;
       out vec4 v_color;
       void main() {
-        vec2 tile_position = (a_position * u_tile_scale - u_tile_origin) * ${EXTENT}.0;
-        gl_Position = u_matrix * vec4(tile_position, 0.0, 1.0);
+        vec2 tile01 = a_position * u_tile_scale - u_tile_origin;
+        vec2 ndc = vec2(tile01.x * 2.0 - 1.0, 1.0 - tile01.y * 2.0);
+        gl_Position = vec4(ndc, 0.0, 1.0);
         v_color = a_color;
       }
     `);
@@ -129,22 +129,18 @@ class BinaryTerrainRTTLayer implements TerrainCustomLayer {
   }
 
   render() {
-    // When terrain is enabled the fork routes this layer through renderToTile.
+    // Terrain-enabled rendering is handled exclusively by renderToTile in the fork.
   }
 
   renderToTile(gl: WebGL2RenderingContext, options: TerrainRenderInput) {
     if (!this.program || !this.positionBuffer || !this.colorBuffer || !options.tileID) return;
 
     const tileID = options.tileID;
-    // Important: draw into the RTT in flat tile space. MapLibre applies the terrain
-    // deformation later when it drapes the completed RTT over the DEM mesh.
-    const projectionData = options.getProjectionData({tileID, applyTerrainMatrix: false});
     const scale = 2 ** tileID.canonical.z;
     const originX = tileID.canonical.x + (tileID.wrap ?? 0) * scale;
     const originY = tileID.canonical.y;
 
     gl.useProgram(this.program);
-    gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_matrix'), false, projectionData.mainMatrix);
     gl.uniform2f(gl.getUniformLocation(this.program, 'u_tile_origin'), originX, originY);
     gl.uniform1f(gl.getUniformLocation(this.program, 'u_tile_scale'), scale);
 
@@ -167,7 +163,7 @@ class BinaryTerrainRTTLayer implements TerrainCustomLayer {
 
     this.renderedTiles.add(`${tileID.canonical.z}/${tileID.canonical.x}/${tileID.canonical.y}/${tileID.wrap ?? 0}`);
     status.className = '';
-    status.textContent = `ready · flat tile RTT → terrain drape · ${this.vertexCount} binary vertices · ${this.renderedTiles.size} terrain tiles`;
+    status.textContent = `ready · direct tile RTT → terrain drape · ${this.vertexCount} binary vertices · ${this.renderedTiles.size} terrain tiles`;
   }
 
   onRemove(_map: maplibregl.Map, gl: WebGL2RenderingContext) {
