@@ -265,6 +265,8 @@ export function MapLibreTerrainRoutes({view, basemap, dark, batches, colors, wid
   }), [batches]);
   const highlightData = useMemo(() => highlightActivityId ? terrainSegmentBatch(batches, highlightColors, highlightActivityId) : null, [batches, highlightActivityId, highlightColors]);
   const index = useMemo(() => pickingIndex(data), [data]);
+  const indexRef = useRef(index);
+  indexRef.current = index;
   useEffect(() => { onDiagnostics?.(data); }, [data, onDiagnostics]);
 
   useEffect(() => {
@@ -292,14 +294,14 @@ export function MapLibreTerrainRoutes({view, basemap, dark, batches, colors, wid
       frame = 0;
       const event = pending; pending = null;
       if (!event) return;
-      const value = pick(index, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y);
+      const value = pick(indexRef.current, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y);
       map.getCanvas().style.cursor = value ? "pointer" : "";
       callbacks.current.onHover?.(value);
     };
     const move = (event: maplibregl.MapMouseEvent) => { pending = event; if (!frame) frame = requestAnimationFrame(flushHover); };
     const leave = () => { pending = null; if (frame) cancelAnimationFrame(frame); frame = 0; map.getCanvas().style.cursor = ""; callbacks.current.onHover?.(null); };
     const click = (event: maplibregl.MapMouseEvent) => {
-      const value = pick(index, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y);
+      const value = pick(indexRef.current, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y);
       if (value) callbacks.current.onClick?.(value.activity); else callbacks.current.onBackgroundClick?.();
     };
     map.on("mousemove", move); map.on("mouseout", leave); map.on("click", click);
