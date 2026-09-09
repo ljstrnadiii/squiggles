@@ -44,9 +44,7 @@ export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Ar
     if (batch.startIndices.length !== batch.segmentActivityIndices.length + 1) throw new Error(`Invalid BinaryRouteBatch: ${batch.startIndices.length} start indices for ${batch.segmentActivityIndices.length} segments`);
     activityOffsets.push(activities.length);
     activities.push(...batch.activities);
-    const routes = Array.from({ length: batch.segmentActivityIndices.length }, (_, route) => route)
-      .sort((left, right) => Number(batch.activities[batch.segmentActivityIndices[left]]?.activityId === priorityActivityId) - Number(batch.activities[batch.segmentActivityIndices[right]]?.activityId === priorityActivityId));
-    for (const route of routes) {
+    for (let route = 0; route < batch.segmentActivityIndices.length; route += 1) {
       const activity = batch.activities[batch.segmentActivityIndices[route]];
       if (onlyActivityId && activity?.activityId !== onlyActivityId) continue;
       candidateCount += Math.max(0, batch.startIndices[route + 1] - batch.startIndices[route] - 1);
@@ -58,29 +56,32 @@ export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Ar
   const widths = new Float32Array(candidateCount);
   const owners = new Uint32Array(candidateCount);
   let segment = 0;
-  batches.forEach((batch, batchIndex) => {
-    const vertexColors = colors[batchIndex];
-    const activityOffset = activityOffsets[batchIndex];
-    const routes = Array.from({ length: batch.segmentActivityIndices.length }, (_, route) => route)
-      .sort((left, right) => Number(batch.activities[batch.segmentActivityIndices[left]]?.activityId === priorityActivityId) - Number(batch.activities[batch.segmentActivityIndices[right]]?.activityId === priorityActivityId));
-    for (const route of routes) {
-      const activityIndex = batch.segmentActivityIndices[route];
-      const activity = batch.activities[activityIndex];
-      if (onlyActivityId && activity?.activityId !== onlyActivityId) continue;
-      const start = batch.startIndices[route], end = batch.startIndices[route + 1];
-      for (let point = start; point + 1 < end; point++) {
-        const lng0 = batch.positions[point * 2], lat0 = batch.positions[point * 2 + 1];
-        const lng1 = batch.positions[(point + 1) * 2], lat1 = batch.positions[(point + 1) * 2 + 1];
-        if (!Number.isFinite(lng0) || !Number.isFinite(lat0) || !Number.isFinite(lng1) || !Number.isFinite(lat1)) continue;
-        const [x0, y0] = mercator(lng0, lat0), [x1, y1] = mercator(lng1, lat1);
-        endpoints.set([x0, y0, x1, y1], segment * 4);
-        segmentColors.set(vertexColors.subarray(point * 4, point * 4 + 4), segment * 4);
-        widths[segment] = activity?.activityId === priorityActivityId ? 1.35 : 1;
-        owners[segment] = activityOffset + activityIndex;
-        segment++;
+  for (const priority of [false, true]) {
+    batches.forEach((batch, batchIndex) => {
+      const vertexColors = colors[batchIndex];
+      const activityOffset = activityOffsets[batchIndex];
+      for (let route = 0; route < batch.segmentActivityIndices.length; route += 1) {
+        const activityIndex = batch.segmentActivityIndices[route];
+        const activity = batch.activities[activityIndex];
+        if (onlyActivityId && activity?.activityId !== onlyActivityId) continue;
+        const isPriority = activity?.activityId === priorityActivityId;
+        if (priorityActivityId && isPriority !== priority) continue;
+        if (!priorityActivityId && priority) continue;
+        const start = batch.startIndices[route], end = batch.startIndices[route + 1];
+        for (let point = start; point + 1 < end; point++) {
+          const lng0 = batch.positions[point * 2], lat0 = batch.positions[point * 2 + 1];
+          const lng1 = batch.positions[(point + 1) * 2], lat1 = batch.positions[(point + 1) * 2 + 1];
+          if (!Number.isFinite(lng0) || !Number.isFinite(lat0) || !Number.isFinite(lng1) || !Number.isFinite(lat1)) continue;
+          const [x0, y0] = mercator(lng0, lat0), [x1, y1] = mercator(lng1, lat1);
+          endpoints.set([x0, y0, x1, y1], segment * 4);
+          segmentColors.set(vertexColors.subarray(point * 4, point * 4 + 4), segment * 4);
+          widths[segment] = isPriority ? 1.35 : 1;
+          owners[segment] = activityOffset + activityIndex;
+          segment++;
+        }
       }
-    }
-  });
+    });
+  }
   if (highlight && (!onlyActivityId || onlyActivityId === highlight.activity.activityId)) {
     const owner = activities.length;
     activities.push(highlight.activity);
