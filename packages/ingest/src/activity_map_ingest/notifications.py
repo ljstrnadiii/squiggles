@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
@@ -10,7 +11,10 @@ ARCHIVE_READY_BODY = "\n".join(
     [
         "Your activity archive has finished optimizing and is ready to explore in Squiggles.",
         "",
-        "This is the last automated email Squiggles sends. We do not send marketing or engagement email.",
+        (
+            "This is the last automated email Squiggles sends. "
+            "We do not send marketing or engagement email."
+        ),
     ]
 )
 
@@ -68,13 +72,11 @@ def send_archive_ready_email(
         )
         return True
     except Exception:
-        try:
+        with suppress(Exception):
             dynamo.update_item(
                 TableName=table_name,
                 Key=key,
                 UpdateExpression="REMOVE #marker",
                 ExpressionAttributeNames={"#marker": marker},
             )
-        except Exception:
-            pass
         raise
