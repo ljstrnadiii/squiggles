@@ -13,6 +13,7 @@ const domainName = config.get("domainName") ?? "squiggles.io";
 const stack = pulumi.getStack();
 const tags = { Project: "squiggles", ManagedBy: "pulumi", Environment: stack };
 const region = aws.getRegionOutput().name;
+const accountId = aws.getCallerIdentityOutput().accountId;
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const webPackage = JSON.parse(fs.readFileSync(path.join(projectRoot, "apps/web/package.json"), "utf8")) as { version?: string };
 const appVersion = webPackage.version ?? "0.0.0";
@@ -42,6 +43,30 @@ const telemetryDeployPolicy = new aws.iam.RolePolicy("github-deploy-telemetry", 
     ],
     resources: ["*"],
   }] }).json,
+});
+
+const lifecycleEmailIdentityArn = pulumi.interpolate`arn:aws:ses:${region}:${accountId}:identity/${domainName}`;
+const lifecycleEmailPolicy = aws.iam.getPolicyDocumentOutput({ statements: [{
+  effect: "Allow",
+  actions: ["ses:SendEmail"],
+  resources: [lifecycleEmailIdentityArn],
+}] }).json;
+
+function existingRole(namePrefix: string): pulumi.Output<string> {
+  const roles = aws.iam.getRolesOutput({ nameRegex: `^${namePrefix}-[A-Za-z0-9]+$` });
+  return roles.names.apply(names => {
+    if (names.length !== 1) throw new Error(`Expected one ${namePrefix} role, found ${names.length}`);
+    return names[0];
+  });
+}
+
+new aws.iam.RolePolicy("control-plane-lifecycle-email", {
+  role: existingRole("control-plane-api"),
+  policy: lifecycleEmailPolicy,
+});
+new aws.iam.RolePolicy("ingest-lifecycle-email", {
+  role: existingRole("ingest-task"),
+  policy: lifecycleEmailPolicy,
 });
 
 const telemetryIdentityPool = new aws.cognito.IdentityPool("error-telemetry", {
