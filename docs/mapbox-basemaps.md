@@ -2,9 +2,9 @@
 
 Squiggles uses MapLibre GL JS for the 3D map and a non-interactive MapLibre raster map beneath deck.gl in 2D. Providing Mapbox tiles does not change the rendering engine.
 
-When `VITE_MAPBOX_ACCESS_TOKEN` is set, the Imagery basemap uses Mapbox Satellite `@2x` JPEG tiles and 3D terrain uses Mapbox Terrain-RGB `@2x` DEM tiles. Both sources use 512-pixel tiles. Mapbox Terrain-DEM is newer, but Mapbox restricts that tileset to its own SDKs; Terrain-RGB is the raster endpoint available to MapLibre.
+The 3D view uses Mapterhorn's public TileJSON source. It provides 512-pixel, Terrarium-encoded WebP terrain tiles built for MapLibre, including global coverage and higher-resolution regional data.
 
-When the token is absent, Imagery falls back to Esri World Imagery and terrain falls back to the AWS Terrarium tiles. The other basemap choices are unchanged.
+When `VITE_MAPBOX_ACCESS_TOKEN` is set, the Imagery basemap uses Mapbox Satellite `@2x` JPEG tiles. When the token is absent, Imagery falls back to Esri World Imagery. The other basemap choices are unchanged.
 
 The browser token must be public and URL restricted. Production injects `VITE_MAPBOX_ACCESS_TOKEN` from the GitHub `production` environment during the Vite build. Local browser testing also requires the localhost origin to be allowed by that token.
 

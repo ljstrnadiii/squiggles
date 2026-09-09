@@ -11,11 +11,7 @@ export type RasterBasemapSource = {
 
 export type TerrainDemSource = {
   type: "raster-dem";
-  tiles: string[];
-  tileSize: number;
-  maxzoom: number;
-  encoding: "mapbox" | "terrarium";
-  attribution: string;
+  url: string;
 };
 
 const MAPBOX_ATTRIBUTION = '<a href="https://www.mapbox.com/about/maps/" target="_blank">© Mapbox</a> <a href="https://www.openstreetmap.org/copyright/" target="_blank">© OpenStreetMap</a> <a href="https://www.mapbox.com/contribute/" target="_blank">Improve this map</a>';
@@ -45,25 +41,9 @@ export function rasterBasemapSources(mapboxToken?: string, cartoKey?: string): R
   };
 }
 
-export function terrainDemSource(mapboxToken?: string): TerrainDemSource {
-  return mapboxToken
-    ? {
-        type: "raster-dem",
-        tiles: [`https://api.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}@2x.pngraw?access_token=${encodeURIComponent(mapboxToken)}`],
-        tileSize: 512,
-        maxzoom: 14,
-        encoding: "mapbox",
-        attribution: MAPBOX_ATTRIBUTION,
-      }
-    : {
-        type: "raster-dem",
-        tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
-        tileSize: 256,
-        maxzoom: 14,
-        encoding: "terrarium",
-        attribution: "Elevation tiles © AWS Open Data",
-      };
+export function terrainDemSource(): TerrainDemSource {
+  return { type: "raster-dem", url: "https://tiles.mapterhorn.com/tilejson.json" };
 }
 
 export const rasterStyles = rasterBasemapSources(import.meta.env.VITE_MAPBOX_ACCESS_TOKEN, import.meta.env.VITE_CARTO_API_KEY);
-export const terrainSource = terrainDemSource(import.meta.env.VITE_MAPBOX_ACCESS_TOKEN) satisfies maplibregl.RasterDEMSourceSpecification;
+export const terrainSource = terrainDemSource() satisfies maplibregl.RasterDEMSourceSpecification;
