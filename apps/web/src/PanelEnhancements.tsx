@@ -7,6 +7,8 @@ type PanelTargets = {
   toolbar: HTMLElement | null;
   logoMenu: HTMLElement | null;
   queryMenu: HTMLElement | null;
+  detail: HTMLElement | null;
+  systemSettings: HTMLElement | null;
 };
 
 type NetworkInformation = {
@@ -28,6 +30,8 @@ function targets(): PanelTargets {
     queryMenu: document.querySelector<HTMLElement>(
       'nav.mobile-menu[aria-label="Query navigation"]',
     ),
+    detail: document.querySelector<HTMLElement>('aside.detail[aria-label="Activity detail"]'),
+    systemSettings: document.querySelector<HTMLElement>('section.system-settings[aria-label="System settings"]'),
   };
 }
 
@@ -39,6 +43,18 @@ function bytes(value: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KiB`;
   return `${(value / 1024 ** 2).toFixed(1)} MiB`;
+}
+
+function isMobilePanelLayout() {
+  return window.matchMedia?.("(max-width: 700px)").matches ?? window.innerWidth <= 700;
+}
+
+function closeActivityDetail() {
+  document.querySelector<HTMLButtonElement>('aside.detail button[aria-label="Close detail"]')?.click();
+}
+
+function closeSystemSettings() {
+  document.querySelector<HTMLButtonElement>('section.system-settings button[aria-label="Close system settings"]')?.click();
 }
 
 function diagnosticSnapshot() {
@@ -221,6 +237,7 @@ export function PanelEnhancements() {
   const openDiagnostics = () => {
     window.dispatchEvent(new Event("squiggles:close-system-settings"));
     document.querySelector<HTMLButtonElement>('section.toolbar button[aria-label="Close query settings"]')?.click();
+    if (isMobilePanelLayout()) closeActivityDetail();
     setDiagnosticsOpen(true);
   };
 
@@ -240,6 +257,19 @@ export function PanelEnhancements() {
   }, [diagnosticsOpen, panels.toolbar]);
 
   useEffect(() => {
+    if (!isMobilePanelLayout()) return;
+    if (panels.systemSettings) {
+      setDiagnosticsOpen(false);
+      if (panels.detail) closeActivityDetail();
+      return;
+    }
+    if (panels.detail) {
+      setDiagnosticsOpen(false);
+      closeSystemSettings();
+    }
+  }, [panels.detail, panels.systemSettings]);
+
+  useEffect(() => {
     const update = () =>
       setPanels((previous) => {
         const next = targets();
@@ -247,7 +277,9 @@ export function PanelEnhancements() {
           previous.table === next.table &&
           previous.toolbar === next.toolbar &&
           previous.logoMenu === next.logoMenu &&
-          previous.queryMenu === next.queryMenu;
+          previous.queryMenu === next.queryMenu &&
+          previous.detail === next.detail &&
+          previous.systemSettings === next.systemSettings;
         return unchanged ? previous : next;
       });
 
