@@ -2,8 +2,8 @@ import {useEffect, useMemo, useRef} from "react";
 import * as maplibregl from "maplibre-gl";
 
 import type {Basemap, BinaryRouteBatch, MapState, RouteMetadata, ViewportBounds, ViewportSize} from "./contracts";
+import {rasterStyles, terrainSource} from "./mapSources";
 
-const DEM = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 const RTT_SIZE = 512;
 const PICK_GRID_SCALE = 2 ** 15;
 const PICK_TOLERANCE_PX = 14;
@@ -16,22 +16,12 @@ export type TerrainCamera = {view: MapState; bounds: ViewportBounds; size: Viewp
 export type TerrainPick = {activity: RouteMetadata; x: number; y: number};
 type PickingIndex = {cells: Map<number, number[]>; data: SegmentBatch};
 
-const cartoKey = import.meta.env.VITE_CARTO_API_KEY;
-const cartoQuery = cartoKey ? `?key=${encodeURIComponent(cartoKey)}` : "";
-const rasterStyles: Record<Exclude<Basemap, "blank">, {tiles: string[]; attribution: string; maxzoom: number}> = {
-  "carto-light": {tiles: [`https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png${cartoQuery}`], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20},
-  "carto-dark": {tiles: [`https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png${cartoQuery}`], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20},
-  streets: {tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors", maxzoom: 19},
-  topo: {tiles: ["https://tile.opentopomap.org/{z}/{x}/{y}.png"], attribution: "Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)", maxzoom: 17},
-  imagery: {tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], attribution: "Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community", maxzoom: 19},
-};
-
 function terrainStyle(basemap: Basemap, dark: boolean, exaggeration: number): maplibregl.StyleSpecification {
-  const sources: maplibregl.StyleSpecification["sources"] = {terrain: {type: "raster-dem", tiles: [DEM], tileSize: 256, maxzoom: 14, encoding: "terrarium"}};
+  const sources: maplibregl.StyleSpecification["sources"] = {terrain: terrainSource};
   const layers: maplibregl.LayerSpecification[] = [{id: "background", type: "background", paint: {"background-color": dark ? "#07100e" : "#edf2ef"}}];
   if (basemap !== "blank") {
     const source = rasterStyles[basemap];
-    sources.basemap = {type: "raster", tiles: source.tiles, tileSize: 256, maxzoom: source.maxzoom, attribution: source.attribution};
+    sources.basemap = {type: "raster", tiles: source.tiles, tileSize: source.tileSize, maxzoom: source.maxzoom, attribution: source.attribution};
     layers.push({id: "basemap", type: "raster", source: "basemap"});
   }
   return {version: 8, sources, layers, terrain: {source: "terrain", exaggeration}};
@@ -165,6 +155,7 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
   view: MapState; basemap: Basemap; dark: boolean; exaggeration: number; batches: BinaryRouteBatch[]; colors: Uint8Array[]; widthPx: number; profilePosition?: [number, number]; highlightActivityId?: string; isolateActivityId?: string; onView: (camera: TerrainCamera) => void; onInteraction: (active: boolean) => void; onHover?: (pick: TerrainPick | null) => void; onClick?: (activity: RouteMetadata) => void; onBackgroundClick?: () => void;
 }) {
   const container = useRef<HTMLDivElement>(null), mapRef = useRef<maplibregl.Map | null>(null), layerRef = useRef<BinaryTerrainLayer | null>(null), highlightLayerRef = useRef<BinaryTerrainLayer | null>(null), profileMarkerRef = useRef<maplibregl.Marker | null>(null), indexRef = useRef<PickingIndex | null>(null);
+  const appliedStyleRef = useRef(`${basemap}:${dark}`);
   const callbacks = useRef({onView, onInteraction, onHover, onClick, onBackgroundClick}); callbacks.current = {onView, onInteraction, onHover, onClick, onBackgroundClick};
   const exaggerationRef = useRef(exaggeration); exaggerationRef.current = exaggeration;
   const data = useMemo(() => terrainSegmentBatch(batches, colors, isolateActivityId), [batches, colors, isolateActivityId]);
@@ -197,7 +188,12 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
   useEffect(() => { layerRef.current?.setData(data, widthPx); }, [data, widthPx]);
   useEffect(() => { highlightLayerRef.current?.setData(highlightData ?? {...data, segmentCount: 0}, widthPx * 1.8); }, [data, highlightData, widthPx]);
   useEffect(() => { const map = mapRef.current; if (!map) return; const center = map.getCenter(); if (Math.abs(center.lng - view.longitude) > 1e-7 || Math.abs(center.lat - view.latitude) > 1e-7 || Math.abs(map.getZoom() - view.zoom) > 1e-4 || Math.abs(map.getPitch() - view.pitch) > 1e-4 || Math.abs(map.getBearing() - view.bearing) > 1e-4) map.jumpTo({center: [view.longitude, view.latitude], zoom: view.zoom, pitch: view.pitch, bearing: view.bearing}); }, [view]);
-  useEffect(() => { const map = mapRef.current; if (map) map.setStyle(terrainStyle(basemap, dark, exaggerationRef.current)); }, [basemap, dark]);
+  useEffect(() => {
+    const key = `${basemap}:${dark}`;
+    if (appliedStyleRef.current === key) return;
+    appliedStyleRef.current = key;
+    mapRef.current?.setStyle(terrainStyle(basemap, dark, exaggerationRef.current));
+  }, [basemap, dark]);
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;

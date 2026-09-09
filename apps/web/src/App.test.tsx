@@ -1,12 +1,18 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const engineCalls = vi.hoisted(() => ({ execute: vi.fn(), getSummary: vi.fn(), mapOptions: vi.fn() }));
+const engineCalls = vi.hoisted(() => ({
+  execute: vi.fn<() => Promise<void> | undefined>(),
+  getSummary: vi.fn(),
+  mapOptions: vi.fn(),
+  maps: [] as Array<{ camera: { center: [number, number]; zoom: number; pitch?: number; bearing?: number }; emit(name: string): void }>,
+}));
 
 vi.mock("maplibre-gl", () => ({ Map: class {
-  constructor(private camera: { center: [number, number]; zoom: number; pitch?: number; bearing?: number }) { engineCalls.mapOptions(camera); }
+  constructor(public camera: { center: [number, number]; zoom: number; pitch?: number; bearing?: number }) { engineCalls.mapOptions(camera); engineCalls.maps.push(this); }
   handlers = new Map<string, ((...args: unknown[]) => void)[]>();
   on(name: string, handler: (...args: unknown[]) => void) { this.handlers.set(name, [...(this.handlers.get(name) ?? []), handler]); if (name === "load") handler(); return this; }
+  emit(name: string) { for (const handler of this.handlers.get(name) ?? []) handler(); }
   getCenter() { return { lng: this.camera.center[0], lat: this.camera.center[1] }; }
   getBounds() { return { getWest: () => -107, getSouth: () => 38, getEast: () => -105, getNorth: () => 41 }; }
   getCanvas() { return { clientWidth: 1200, clientHeight: 800, style: { cursor: "" } }; }
@@ -29,7 +35,7 @@ vi.mock("./engine", () => ({
       return { id: source.name ?? "synthetic", name: source.name ?? "synthetic", manifest: { schema_version: "1.0.0", activity_count: 1, rejection_count: 0, bbox: [-105, 39, -104, 40], shards: [] } };
     }
     async execute() {
-      engineCalls.execute();
+      await engineCalls.execute();
       return { queryId: "1", selectedCount: 1, lod: 1, vertexCount: 2, geometryBufferBytes: 32, activityCount: 1, plannedVertexEstimate: 2, rawVertexEstimate: 2, vertexBudget: 1000, cache: { hit: false, bytes: 48, budgetBytes: 1024, entries: 1, evictions: 0 }, scan: { candidateFragmentCount: 1, totalFragmentCount: 2, candidateBytes: 1024, totalBytes: 4096, expectedRowGroupCount: 1, candidateRowGroupCount: 2, totalRowGroupCount: 4, expectedRowCount: 3, keptRowCount: 1 }, summary: { activityCount: 1, distanceM: 5000, elapsedSeconds: 2100, movingSeconds: 1800, elevationGainM: 100, elevationLossM: 90, minElevationM: 1400, maxElevationM: 1600, maxDistanceM: 5000, activeDays: 1, droppedJumpPoints: 1, droppedElevationPoints: 2, sportCounts: [{ sport: "ride", count: 1 }], firstActivity: "2025-01-01", lastActivity: "2025-01-01" }, renderPlan: { type: "arrow", activityIds: ["synthetic-1"] }, batches: [{ activities: [{ activityId: "synthetic-1", name: "Synthetic route", sportType: "Ride", startTime: "2025-01-01", distanceM: 5000, elevationGainM: 100, maxElevationM: 1600, sourceUrl: null }], positions: new Float64Array([-105, 39, -104, 40]), startIndices: new Uint32Array([0, 2]), segmentActivityIndices: new Uint32Array([0]) }] };
     }
     async renderViewport() { return { lod: 1, vertexCount: 0, geometryBufferBytes: 0, activityCount: 0, plannedVertexEstimate: 0, rawVertexEstimate: 0, vertexBudget: 1000, cache: { hit: false, bytes: 48, budgetBytes: 1024, entries: 1, evictions: 0 }, scan: { candidateFragmentCount: 1, totalFragmentCount: 2, candidateBytes: 1024, totalBytes: 4096, expectedRowGroupCount: 1, candidateRowGroupCount: 2, totalRowGroupCount: 4, expectedRowCount: 3, keptRowCount: 0 }, batches: [] }; }
@@ -40,7 +46,7 @@ vi.mock("./engine", () => ({
   },
 }));
 
-afterEach(() => { cleanup(); localStorage.clear(); engineCalls.execute.mockClear(); engineCalls.getSummary.mockClear(); engineCalls.mapOptions.mockClear(); });
+afterEach(() => { cleanup(); localStorage.clear(); engineCalls.execute.mockReset(); engineCalls.getSummary.mockClear(); engineCalls.mapOptions.mockClear(); engineCalls.maps.length = 0; });
 import { App } from "./App";
 
 describe("App", () => {
@@ -225,5 +231,27 @@ describe("App", () => {
     expect(new URL(window.location.href).searchParams.get("zoom")).toBe("11.25");
     const stored = JSON.parse(localStorage.getItem("activity-map.tabs.v1") ?? "[]") as { title: string; mapState: { longitude: number; latitude: number; zoom: number }; style: { basemap: string; viewMode: string } }[];
     expect(stored.find(item => item.title === "New Query")).toMatchObject({ mapState: { longitude: -106.25, latitude: 39.5, zoom: 11.25 }, style: { basemap: "carto-dark", viewMode: "3d" } });
+  });
+
+  it("keeps a camera move made while a query is running", async () => {
+    window.history.replaceState({}, "", "/?dataset=synthetic&tab=all&lng=-106.25&lat=39.5&zoom=11.25&pitch=43.5&bearing=-22&view=3d");
+    render(<App />);
+    expect(await screen.findByRole("status", { name: "1 routes selected" })).toBeInTheDocument();
+
+    let finishQuery!: () => void;
+    engineCalls.execute.mockImplementationOnce(() => new Promise<void>(resolve => { finishQuery = resolve; }));
+    openQuerySettings();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Clean" }));
+    await waitFor(() => expect(engineCalls.execute).toHaveBeenCalledTimes(2));
+
+    const map = engineCalls.maps[0];
+    map.camera = { center: [-110.5, 42.25], zoom: 9.75, pitch: 58, bearing: 17 };
+    map.emit("moveend");
+    finishQuery();
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem("activity-map.tabs.v1") ?? "[]") as Array<{ id: string; mapState: { longitude: number; latitude: number; zoom: number; pitch: number; bearing: number } }>;
+      expect(stored.find(item => item.id === "all")?.mapState).toEqual({ longitude: -110.5, latitude: 42.25, zoom: 9.75, pitch: 58, bearing: 17 });
+    });
   });
 });

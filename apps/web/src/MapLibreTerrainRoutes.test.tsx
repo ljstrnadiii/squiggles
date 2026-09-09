@@ -1,7 +1,8 @@
 import { render } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const markerCalls = vi.hoisted(() => ({ addTo: vi.fn(), remove: vi.fn(), setLngLat: vi.fn() }));
+const mapCalls = vi.hoisted(() => ({ setStyle: vi.fn() }));
 
 vi.mock("maplibre-gl", () => ({
   Map: class {
@@ -16,7 +17,7 @@ vi.mock("maplibre-gl", () => ({
     getLayer() { return undefined; }
     addLayer() {}
     jumpTo() {}
-    setStyle() {}
+    setStyle(style: unknown) { mapCalls.setStyle(style); }
     setTerrain() {}
     isStyleLoaded() { return true; }
     remove() {}
@@ -29,6 +30,10 @@ vi.mock("maplibre-gl", () => ({
 }));
 
 import { MapLibreTerrainRoutes } from "./MapLibreTerrainRoutes";
+
+afterEach(() => {
+  markerCalls.addTo.mockClear(); markerCalls.remove.mockClear(); markerCalls.setLngLat.mockClear(); mapCalls.setStyle.mockClear();
+});
 
 describe("terrain profile marker", () => {
   it("places a terrain-aware MapLibre marker at the hovered profile position", () => {
@@ -49,5 +54,24 @@ describe("terrain profile marker", () => {
 
     expect(markerCalls.setLngLat).toHaveBeenLastCalledWith([-105.1, 40.1]);
     expect(markerCalls.addTo).toHaveBeenCalledOnce();
+  });
+
+  it("does not rebuild the identical terrain style immediately after map creation", () => {
+    const properties = {
+      view: { longitude: -105, latitude: 40, zoom: 12, pitch: 55, bearing: -20 },
+      basemap: "imagery" as const,
+      dark: false,
+      exaggeration: 1,
+      batches: [],
+      colors: [],
+      widthPx: 4,
+      onView: vi.fn(),
+      onInteraction: vi.fn(),
+    };
+    const result = render(<MapLibreTerrainRoutes {...properties} />);
+
+    expect(mapCalls.setStyle).not.toHaveBeenCalled();
+    result.rerender(<MapLibreTerrainRoutes {...properties} dark />);
+    expect(mapCalls.setStyle).toHaveBeenCalledOnce();
   });
 });

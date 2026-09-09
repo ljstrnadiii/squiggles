@@ -22,17 +22,9 @@ import { loadRuntimeConfig } from "./auth";
 import { MapLibreTerrainRoutes, type TerrainCamera } from "./MapLibreTerrainRoutes";
 import { loadPublishedView, publishView } from "./publishing";
 import { loadSystemResolution, saveSystemResolution } from "./resolution";
+import { rasterStyles } from "./mapSources";
 
 const blankStyle: maplibregl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
-const cartoKey = import.meta.env.VITE_CARTO_API_KEY;
-const cartoQuery = cartoKey ? `?key=${encodeURIComponent(cartoKey)}` : "";
-const rasterStyles: Record<Exclude<Basemap, "blank">, { tiles: string[]; attribution: string; maxzoom: number }> = {
-  "carto-light": { tiles: [`https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png${cartoQuery}`], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
-  "carto-dark": { tiles: [`https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png${cartoQuery}`], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
-  streets: { tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors", maxzoom: 19 },
-  topo: { tiles: ["https://tile.opentopomap.org/{z}/{x}/{y}.png"], attribution: "Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)", maxzoom: 17 },
-  imagery: { tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], attribution: "Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community", maxzoom: 19 },
-};
 const empty: SummaryStats = { activityCount: 0, distanceM: 0, elapsedSeconds: 0, movingSeconds: 0, elevationGainM: 0, elevationLossM: 0, minElevationM: null, maxElevationM: null, maxDistanceM: null, activeDays: 0, droppedJumpPoints: 0, droppedElevationPoints: 0, sportCounts: [], firstActivity: null, lastActivity: null };
 const integer = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 const emptyScan: ScanMetrics = { candidateFragmentCount: 0, totalFragmentCount: 0, candidateBytes: 0, totalBytes: 0, expectedRowGroupCount: 0, candidateRowGroupCount: 0, totalRowGroupCount: 0, expectedRowCount: 0, keptRowCount: 0 };
@@ -96,6 +88,14 @@ function hasUrlCamera() {
   return finiteParameter(parameters, "lng", -180, 180) !== undefined
     && finiteParameter(parameters, "lat", -85, 85) !== undefined
     && finiteParameter(parameters, "zoom", 0, 24) !== undefined;
+}
+
+function sameCamera(left: MapState, right: MapState) {
+  return left.longitude === right.longitude
+    && left.latitude === right.latitude
+    && left.zoom === right.zoom
+    && left.pitch === right.pitch
+    && left.bearing === right.bearing;
 }
 
 function sharedDatasetId(pathname = window.location.pathname) {
@@ -166,7 +166,7 @@ type TableSort = "name" | "sport" | "date" | "distance" | "gain" | "maximum";
 function mapStyle(basemap: Basemap, theme: "light" | "dark"): maplibregl.StyleSpecification {
   if (basemap === "blank") return { ...blankStyle, layers: [{ id: "background", type: "background", paint: { "background-color": theme === "dark" ? "#07100e" : "#edf2ef" } }] };
   const source = rasterStyles[basemap];
-  return { version: 8, sources: { basemap: { type: "raster", tiles: source.tiles, tileSize: 256, maxzoom: source.maxzoom, attribution: source.attribution } }, layers: [{ id: "basemap", type: "raster", source: "basemap" }] };
+  return { version: 8, sources: { basemap: { type: "raster", tiles: source.tiles, tileSize: source.tileSize, maxzoom: source.maxzoom, attribution: source.attribution } }, layers: [{ id: "basemap", type: "raster", source: "basemap" }] };
 }
 
 function BaseMap({ view, basemap, theme }: { view: MapState; basemap: Basemap; theme: "light" | "dark" }) {
@@ -279,12 +279,23 @@ export function App() {
   const autoOpened = useRef(false);
   const initialUrlCamera = useRef(hasUrlCamera());
   const viewRef = useRef(view);
+  const tabsRef = useRef(tabs);
+  const activeRef = useRef(active);
+  const terrainCameraRef = useRef(terrainCamera);
   viewRef.current = view;
+  tabsRef.current = tabs;
+  activeRef.current = active;
+  terrainCameraRef.current = terrainCamera;
   const effectiveTheme = themeMode === "system" ? (systemDark ? "dark" : "light") : themeMode;
   const logoUrl = effectiveTheme === "dark" ? "/logo-dark.png" : "/logo-light.png";
   const refreshIdentity = useCallback(() => setSessionIdentity(identityFromSession(loadSession())), []);
   const distance = (meters: number) => `${integer.format(distanceValue(meters, units))} ${distanceUnit(units)}`;
   const elevation = (meters: number) => `${integer.format(elevationValue(meters, units))} ${elevationUnit(units)}`;
+
+  function updateView(next: MapState) {
+    viewRef.current = next;
+    setView(next);
+  }
 
   useEffect(() => {
     const element = mapElement.current;
@@ -333,30 +344,44 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [tab, units, view]);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setTabs(previous => {
+        const stored = previous.find(item => item.id === active);
+        if (!stored || sameCamera(stored.mapState, view)) return previous;
+        const updated = previous.map(item => item.id === active ? { ...item, mapState: { ...view } } : item);
+        tabsRef.current = updated;
+        saveTabs(updated);
+        return updated;
+      });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [active, view]);
+
   async function run(queryTab = tab, mapState = view, sql = queryTab.id === tab.id ? draft : queryTab.sql) {
     const selection = ++selectionRequest.current;
     try {
       if (!ready.current) throw new Error("Open a dataset first");
       viewportRequest.current += 1;
       selectionReady.current = false;
-      setRouteBatches([]);
       setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false);
       setTableOpen(false); setTableActivities([]);
       setBusy(true); setStatus("Running DuckDB SQL…"); setError("");
       const current = { ...queryTab, sql, mapState };
       const renderStarted = performance.now();
-      const activeTerrainCamera = terrainEnabled && terrainCamera && Math.abs(terrainCamera.view.zoom - mapState.zoom) < 0.01 ? terrainCamera : null;
+      const capturedTerrainCamera = terrainCameraRef.current;
+      const activeTerrainCamera = queryTab.style.viewMode === "3d" && capturedTerrainCamera && Math.abs(capturedTerrainCamera.view.zoom - mapState.zoom) < 0.01 ? capturedTerrainCamera : null;
       const result = await engine.execute(current, mapState.zoom, activeTerrainCamera?.bounds ?? viewportBounds(mapState, mapElement.current), activeTerrainCamera?.size);
       if (selection !== selectionRequest.current) return;
 
       selectionReady.current = true;
       const latestView = viewRef.current;
-      const cameraUnchanged = latestView.longitude === mapState.longitude && latestView.latitude === mapState.latitude && latestView.zoom === mapState.zoom;
+      const cameraUnchanged = sameCamera(latestView, mapState);
       if (cameraUnchanged) {
         setRouteBatches(result.batches); setRenderedView(mapState);
         setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
       } else {
-        const latestCamera = terrainEnabled && terrainCamera ? terrainCamera : null;
+        const latestCamera = queryTab.style.viewMode === "3d" ? terrainCameraRef.current : null;
         const bounds = latestCamera?.bounds ?? viewportBounds(latestView, mapElement.current);
         if (bounds) {
           const request = ++viewportRequest.current;
@@ -371,7 +396,11 @@ export function App() {
       if (selection !== selectionRequest.current) return;
       setStatus(`${result.selectedCount.toLocaleString()} routes selected`);
       setTabs(previous => {
-        const updated = previous.map(item => item.id === queryTab.id ? current : item);
+        const latestMapState = activeRef.current === queryTab.id
+          ? viewRef.current
+          : tabsRef.current.find(item => item.id === queryTab.id)?.mapState ?? mapState;
+        const updated = previous.map(item => item.id === queryTab.id ? { ...current, mapState: { ...latestMapState } } : item);
+        tabsRef.current = updated;
         saveTabs(updated); return updated;
       });
     } catch (reason) {
@@ -389,7 +418,7 @@ export function App() {
       const dataset = await engine.openDataset(source, (completed, total) => setStatus(`Opening dataset · ${completed.toLocaleString()} / ${total.toLocaleString()} files`));
       ready.current = true; setDatasetName(dataset.name);
       const initialView = requestedView ?? { ...fitBounds(dataset.manifest.bbox), pitch: initialTab.mapState.pitch, bearing: initialTab.mapState.bearing };
-      setView(initialView);
+      updateView(initialView);
       setStatus("Running initial query…"); await run(initialTab, initialView, initialTab.sql);
     } catch (reason) {
       ready.current = false; setError(reason instanceof Error ? reason.message : String(reason));
@@ -428,6 +457,7 @@ export function App() {
           if (!config) throw new Error("Published maps are unavailable.");
           const saved = await loadPublishedView(config, published);
           const selected = saved.tabs.find(item => item.id === saved.active) ?? saved.tabs[0];
+          tabsRef.current = saved.tabs; activeRef.current = selected.id; viewRef.current = selected.mapState;
           setTabs(saved.tabs); setActive(selected.id); setDraft(selected.sql); setView(selected.mapState);
           if (saved.datasetId) {
             const hostedDatasetRoot = (import.meta.env.VITE_DATASET_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/datasets";
@@ -494,46 +524,46 @@ export function App() {
     setSpatialDrawing(false); setSpatialDraft([]);
     if (isCurrent) setToolbarOpen(open => !open);
     else {
-      setTabs(previous => {
-        const updated = previous.map(item => item.id === tab.id ? { ...item, mapState: { ...view } } : item);
-        saveTabs(updated);
-        return updated;
-      });
-      setActive(next.id); setDraft(next.sql); setView(next.mapState); setRenderedView(next.mapState); setTerrainCamera(null); setToolbarOpen(openQuery);
+      const updated = tabsRef.current.map(item => item.id === activeRef.current ? { ...item, mapState: { ...viewRef.current } } : item);
+      const destination = updated.find(item => item.id === next.id) ?? next;
+      tabsRef.current = updated; activeRef.current = destination.id; viewRef.current = destination.mapState; terrainCameraRef.current = null;
+      setTabs(updated); saveTabs(updated);
+      setActive(destination.id); setDraft(destination.sql); setView(destination.mapState); setRenderedView(destination.mapState); setTerrainCamera(null); setToolbarOpen(openQuery);
+      next = destination;
     }
     replaceUrlSettings(next, next.mapState, units); setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false);
     if (ready.current && !isCurrent) void run(next, next.mapState, next.sql);
   }
   function add() {
     const next = { ...defaultTab, mapState: { ...view }, style: { ...tab.style }, id: crypto.randomUUID(), title: "New Query" };
-    const updated = [...tabs, next]; setTabs(updated); saveTabs(updated); choose(next, true);
+    const updated = [...tabs, next]; tabsRef.current = updated; setTabs(updated); saveTabs(updated); choose(next, true);
   }
   function duplicate() {
     const next = { ...tab, style: { ...tab.style }, spatialFilter: tab.spatialFilter ? { ...tab.spatialFilter, polygon: [...tab.spatialFilter.polygon] } : undefined, id: crypto.randomUUID(), title: `${tab.title} copy`, sql: draft };
-    const updated = [...tabs, next]; setTabs(updated); saveTabs(updated); choose(next, true);
+    const updated = [...tabs, next]; tabsRef.current = updated; setTabs(updated); saveTabs(updated); choose(next, true);
   }
   function remove() {
     if (tabs.length === 1) return;
-    const updated = tabs.filter(item => item.id !== tab.id); setTabs(updated); saveTabs(updated); choose(updated[0]);
+    const updated = tabs.filter(item => item.id !== tab.id); tabsRef.current = updated; setTabs(updated); saveTabs(updated); choose(updated[0]);
   }
-  function rename(title: string) { const updated = tabs.map(item => item.id === tab.id ? { ...item, title } : item); setTabs(updated); saveTabs(updated); }
+  function rename(title: string) { const updated = tabs.map(item => item.id === tab.id ? { ...item, title } : item); tabsRef.current = updated; setTabs(updated); saveTabs(updated); }
   function changeStyle(style: Partial<QueryTab["style"]>, requestedView?: MapState) {
     const nextView = requestedView ?? (style.viewMode === "3d" && tab.style.viewMode !== "3d" && view.pitch === 0 ? { ...view, pitch: 60 } : view);
     const nextTab = { ...tab, mapState: nextView, style: { ...tab.style, ...style } };
-    if (nextView !== view) setView(nextView);
+    if (nextView !== view) updateView(nextView);
     const updated = tabs.map(item => item.id === tab.id ? nextTab : item);
-    setTabs(updated); saveTabs(updated);
-    if (style.viewMode !== undefined && style.viewMode !== tab.style.viewMode) { setTerrainCamera(null); setMapInteracting(false); replaceUrlSettings(nextTab, nextView, units); }
+    tabsRef.current = updated; setTabs(updated); saveTabs(updated);
+    if (style.viewMode !== undefined && style.viewMode !== tab.style.viewMode) { terrainCameraRef.current = null; setTerrainCamera(null); setMapInteracting(false); replaceUrlSettings(nextTab, nextView, units); }
     if (style.cleanEnabled !== undefined && style.cleanEnabled !== tab.style.cleanEnabled && ready.current) void run(nextTab, view, tab.sql);
   }
   const pitchGesture = usePitchGesture(!terrainEnabled && !spatialDrawing, view, nextView => {
-    setView(nextView);
+    updateView(nextView);
     if (!terrainEnabled) changeStyle({ viewMode: "3d" }, nextView);
   });
   function saveSpatialFilter(spatialFilter: QueryTab["spatialFilter"], rerun: boolean) {
     const nextTab = { ...tab, spatialFilter };
     const updated = tabs.map(item => item.id === tab.id ? nextTab : item);
-    setTabs(updated); saveTabs(updated);
+    tabsRef.current = updated; setTabs(updated); saveTabs(updated);
     if (rerun && ready.current) void run(nextTab, view, tab.sql);
   }
   function changeSpatialPredicate(predicate: SpatialPredicate) {
@@ -567,7 +597,7 @@ export function App() {
   }, [engine]);
   async function openTableActivity(activity: ActivityListItem) {
     setTableOpen(false); setSelected(null); setProfileHover(null);
-    setView({ ...fitBounds(activity.bounds, 16, mapElement.current), pitch: view.pitch, bearing: view.bearing });
+    updateView({ ...fitBounds(activity.bounds, 16, mapElement.current), pitch: view.pitch, bearing: view.bearing });
     try {
       const detail = await engine.getActivity(activity.activityId);
       if (detail) setSelected(detail);
@@ -579,7 +609,7 @@ export function App() {
     if (!selected?.fullPath.length) return;
     const longitudes = selected.fullPath.map(point => point[0]);
     const latitudes = selected.fullPath.map(point => point[1]);
-    setView({ ...fitBounds([Math.min(...longitudes), Math.min(...latitudes), Math.max(...longitudes), Math.max(...latitudes)], 16, mapElement.current), pitch: view.pitch, bearing: view.bearing });
+    updateView({ ...fitBounds([Math.min(...longitudes), Math.min(...latitudes), Math.max(...longitudes), Math.max(...latitudes)], 16, mapElement.current), pitch: view.pitch, bearing: view.bearing });
   }
   async function copySchema() {
     await navigator.clipboard.writeText(QUERY_SCHEMA);
@@ -757,7 +787,7 @@ export function App() {
         highlightActivityId={terrainHighlightActivityId}
         isolateActivityId={isolateSelected ? selected?.activityId : undefined}
         onInteraction={setMapInteracting}
-        onView={camera => { setTerrainCamera(camera); setView(camera.view); }}
+        onView={camera => { terrainCameraRef.current = camera; setTerrainCamera(camera); updateView(camera.view); }}
         onHover={pick => {
           if (!pick) { setHover(current => current?.origin === "map" ? null : current); return; }
           const {activity, x, y} = pick;
@@ -770,7 +800,7 @@ export function App() {
         <DeckGL controller={spatialDrawing ? false : { dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: 0 }} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
           if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isZooming) return;
           const next = viewState as MapState;
-          setView({ ...view, longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });
+          updateView({ ...viewRef.current, longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });
         }} onClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) { const longitude = coordinate[0], latitude = coordinate[1]; if (longitude !== undefined && latitude !== undefined) setSpatialDraft(previous => [...previous, [longitude, latitude]]); } return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />
       </>}
       {spatialDrawing && <><div className="spatial-draw-tools" role="group" aria-label="Polygon drawing controls"><button aria-label="Undo last polygon vertex" title="Undo last point" disabled={spatialDraft.length === 0} onClick={() => setSpatialDraft(previous => previous.slice(0, -1))}>↶</button><button className="accept" aria-label="Accept polygon" title="Accept polygon" disabled={spatialDraft.length < 3} onClick={acceptSpatialDraw}>✓</button></div><div className="spatial-draw-hint">Tap the map to add polygon vertices · ↶ undo · ✓ apply</div></>}
