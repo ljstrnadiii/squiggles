@@ -16,7 +16,7 @@ import type {
   ViewportSize,
 } from "./contracts";
 import { assertSupportedDatasetSchema } from "./datasetSchema";
-import { lodForMetersPerPixel, metersPerPixel, type Lod } from "./lod";
+import { lodForMetersPerPixel, metersPerPixel, scheduledVertexBudget, type Lod } from "./lod";
 import { normalizeSelectionSql } from "./querySql";
 import {
   activateRenderTab,
@@ -204,15 +204,23 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     return Math.max(0, Math.min(7, base + this.renderSettings.lodBias)) as Lod;
   }
 
+  private effectiveRenderSettings(zoom: number, viewportSize?: ViewportSize): RenderSettings {
+    if (this.renderSettings.vertexBudget != null) return this.renderSettings;
+    return {
+      ...this.renderSettings,
+      vertexBudget: scheduledVertexBudget(this.resolution, zoom, viewportSize?.threeD ?? false),
+    };
+  }
+
   private startingLod(tab: QueryTab): Lod | undefined {
     if (this.consumedPublishedPlans.has(tab.id)) return undefined;
     this.consumedPublishedPlans.add(tab.id);
     return tab.startingPlans?.[this.resolution]?.lod;
   }
 
-  private cacheKey(requestedLod: Lod, bounds: ViewportBounds | undefined) {
+  private cacheKey(requestedLod: Lod, bounds: ViewportBounds | undefined, vertexBudget: number) {
     const serializedBounds = bounds?.map((value) => value.toFixed(6)).join(",") ?? "all";
-    return `${this.selectionKey}|${requestedLod}|${serializedBounds}`;
+    return `${this.selectionKey}|${requestedLod}|${vertexBudget}|${serializedBounds}`;
   }
 
   private cacheResult(
@@ -229,6 +237,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
         for (const [cachedKey, entry] of this.cache) {
           if (
             entry.requestedLod === requestedLod &&
+            entry.result.vertexBudget === result.vertexBudget &&
             bounds &&
             entry.bounds &&
             boundsContains(bounds, entry.bounds)
@@ -264,6 +273,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     key: string,
     bounds: ViewportBounds,
     requestedLod: Lod,
+    vertexBudget: number,
   ): ViewportResult | undefined {
     let matchedKey = key;
     let entry = this.cache.get(key);
@@ -272,6 +282,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
         if (
           candidateKey.startsWith(`${this.selectionKey}|`) &&
           candidate.requestedLod === requestedLod &&
+          candidate.result.vertexBudget === vertexBudget &&
           candidate.bounds &&
           boundsContains(candidate.bounds, bounds)
         ) {
@@ -441,12 +452,13 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     const sql = applySpatialFilterSql(baseSql, tab.spatialFilter);
     const size = this.viewportSize(viewportSize);
     const fidelityLod = this.requestedLod(zoom, size);
+    const renderSettings = this.effectiveRenderSettings(zoom, size);
     const result = await this.networkRequest<QueryResult & WorkerViewportResult>({
       type: "execute",
       sql,
       lod: fidelityLod,
       resolution: this.resolution,
-      renderSettings: this.renderSettings,
+      renderSettings,
       bounds,
       visibleBounds: bounds,
       viewportSize: size,
@@ -466,6 +478,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       zoom: Number(zoom.toFixed(2)),
       requestedLod: fidelityLod,
       plannedLod: result.lod,
+      vertexBudget: result.vertexBudget,
       selected: result.selectedCount,
       rendered: result.activityCount,
       vertices: result.vertexCount,
@@ -473,7 +486,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       candidateBytes: result.scan.candidateBytes,
       expectedRowGroups: result.scan.expectedRowGroupCount,
     });
-    const cacheKey = this.cacheKey(fidelityLod, bounds);
+    const cacheKey = this.cacheKey(fidelityLod, bounds, result.vertexBudget);
     return {
       ...result,
       ...this.cacheResult(result, cacheKey, false, bounds, fidelityLod, renderRevision === this.renderRevision),
@@ -487,13 +500,16 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   ): Promise<ViewportResult> {
     const size = this.viewportSize(viewportSize);
     const fidelityLod = this.requestedLod(zoom, size);
-    const requestedKey = this.cacheKey(fidelityLod, bounds);
-    const cached = this.cached(requestedKey, bounds, fidelityLod);
+    const renderSettings = this.effectiveRenderSettings(zoom, size);
+    const vertexBudget = renderSettings.vertexBudget!;
+    const requestedKey = this.cacheKey(fidelityLod, bounds, vertexBudget);
+    const cached = this.cached(requestedKey, bounds, fidelityLod, vertexBudget);
     if (cached) {
       recordActiveRenderPlan({ plans: cached.resolutionPlans, bounds });
       perf("viewport-cache-hit", {
         zoom: Number(zoom.toFixed(2)),
         lod: cached.lod,
+        vertexBudget: cached.vertexBudget,
         vertices: cached.vertexCount,
       });
       return cached;
@@ -506,7 +522,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       type: "render",
       lod: fidelityLod,
       resolution: this.resolution,
-      renderSettings: this.renderSettings,
+      renderSettings,
       bounds: fetchBounds,
       visibleBounds: bounds,
       viewportSize: size,
@@ -518,6 +534,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       zoom: Number(zoom.toFixed(2)),
       requestedLod: fidelityLod,
       plannedLod: result.lod,
+      vertexBudget: result.vertexBudget,
       vertices: result.vertexCount,
       geometryBytes: result.geometryBufferBytes,
       candidateBytes: result.scan.candidateBytes,
