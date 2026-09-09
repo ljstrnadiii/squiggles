@@ -21,6 +21,7 @@ vi.mock("maplibre-gl", () => ({
     jumpTo() {}
     setStyle(style: unknown) { mapCalls.setStyle(style); }
     setTerrain() {}
+    isMoving() { return false; }
     isStyleLoaded() { return true; }
     remove() {}
   },
@@ -39,7 +40,7 @@ afterEach(() => {
 });
 
 describe("terrain profile marker", () => {
-  it("submits the highlighted route after other routes", () => {
+  it("submits the highlighted route after other routes without changing its color", () => {
     const batch: BinaryRouteBatch = {
       activities: [
         { activityId: "background", name: "Background", sportType: "Run", startTime: null, distanceM: null, elevationGainM: null, maxElevationM: null, sourceUrl: null },
@@ -49,8 +50,14 @@ describe("terrain profile marker", () => {
       startIndices: new Uint32Array([0, 2, 4]),
       segmentActivityIndices: new Uint32Array([0, 1]),
     };
-    const result = terrainSegmentBatch([batch], [new Uint8Array(16)], undefined, "highlight");
+    const colors = new Uint8Array([
+      10, 20, 30, 255, 10, 20, 30, 255,
+      40, 50, 60, 255, 40, 50, 60, 255,
+    ]);
+    const result = terrainSegmentBatch([batch], [colors], undefined, "highlight");
     expect([...result.owners]).toEqual([0, 1]);
+    expect([...result.colors.slice(4, 8)]).toEqual([40, 50, 60, 255]);
+    expect([...result.widths!]).toEqual([1, 1.350000023841858]);
   });
 
   it("places a terrain-aware MapLibre marker at the hovered profile position", () => {
