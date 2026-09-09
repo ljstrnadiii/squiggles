@@ -6,6 +6,7 @@ import * as maplibregl from "maplibre-gl";
 
 import type {Basemap, BinaryRouteBatch, MapState, RouteMetadata, ViewportBounds, ViewportSize} from "./contracts";
 import {rasterStyles, terrainSource} from "./mapSources";
+import {loadTabs} from "./storage";
 
 const RTT_SIZE = 512;
 const PICK_GRID_SCALE = 2 ** 15;
@@ -37,7 +38,21 @@ function mercator(lng: number, rawLat: number): [number, number] {
   return [(lng + 180) / 360, 0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)];
 }
 
-export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Array[], onlyActivityId?: string, priorityActivityId?: string, highlight?: { activity: RouteMetadata; path: [number, number][] }): SegmentBatch {
+function configuredRouteColor(): Uint8Array {
+  const tabs = loadTabs();
+  const requested = new URLSearchParams(window.location.search).get("tab");
+  const value = (tabs.find(tab => tab.id === requested) ?? tabs[0])?.style.color ?? "#476bcc";
+  const match = /^#([0-9a-f]{6})$/i.exec(value);
+  if (!match) return new Uint8Array([71, 107, 204, 255]);
+  return new Uint8Array([
+    Number.parseInt(match[1].slice(0, 2), 16),
+    Number.parseInt(match[1].slice(2, 4), 16),
+    Number.parseInt(match[1].slice(4, 6), 16),
+    255,
+  ]);
+}
+
+export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Array[], onlyActivityId?: string, priorityActivityId?: string, highlight?: { activity: RouteMetadata; path: [number, number][] }, priorityColor?: Uint8Array): SegmentBatch {
   let candidateCount = 0;
   const activities: RouteMetadata[] = [];
   const activityOffsets: number[] = [];
@@ -75,7 +90,7 @@ export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Ar
           if (!Number.isFinite(lng0) || !Number.isFinite(lat0) || !Number.isFinite(lng1) || !Number.isFinite(lat1)) continue;
           const [x0, y0] = mercator(lng0, lat0), [x1, y1] = mercator(lng1, lat1);
           endpoints.set([x0, y0, x1, y1], segment * 4);
-          segmentColors.set(vertexColors.subarray(point * 4, point * 4 + 4), segment * 4);
+          segmentColors.set(isPriority && priorityColor ? priorityColor : vertexColors.subarray(point * 4, point * 4 + 4), segment * 4);
           widths[segment] = isPriority ? HIGHLIGHT_WIDTH_SCALE : 1;
           owners[segment] = activityOffset + activityIndex;
           segment++;
@@ -86,7 +101,7 @@ export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Ar
   if (highlight && (!onlyActivityId || onlyActivityId === highlight.activity.activityId)) {
     const owner = activities.length;
     activities.push(highlight.activity);
-    const fallback = (() => {
+    const fallback = priorityColor ?? (() => {
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
         const batch = batches[batchIndex];
         for (let route = 0; route < batch.segmentActivityIndices.length; route += 1) {
@@ -223,7 +238,9 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
   const callbacks = useRef({onDiagnostics, onView, onInteraction, onHover, onClick, onBackgroundClick}); callbacks.current = {onDiagnostics, onView, onInteraction, onHover, onClick, onBackgroundClick};
   const detailRef = useRef({ imageryDetail, terrainDetail }); detailRef.current = { imageryDetail, terrainDetail };
   const exaggerationRef = useRef(exaggeration); exaggerationRef.current = exaggeration;
-  const data = useMemo(() => terrainSegmentBatch(batches, colors, isolateActivityId, highlightActivityId), [batches, colors, highlightActivityId, isolateActivityId]);
+  const priorityColor = configuredRouteColor();
+  const priorityColorKey = [...priorityColor].join(",");
+  const data = useMemo(() => terrainSegmentBatch(batches, colors, isolateActivityId, highlightActivityId, undefined, priorityColor), [batches, colors, highlightActivityId, isolateActivityId, priorityColorKey]);
   const index = useMemo(() => pickingIndex(data), [data]); indexRef.current = index;
 
   useEffect(() => {
