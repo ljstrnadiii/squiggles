@@ -16,12 +16,12 @@ describe("map navigation enhancements", () => {
     expect(source).toContain('button.addEventListener("click", reopenAfterSwitch)');
   });
 
-  it("moves rendering out of current-map tools and into Diagnostics", () => {
+  it("keeps rendering metrics in the combined Diagnostics panel", () => {
     expect(disclosure).toContain(".mobile-menu section:nth-child(2) > button:nth-child(4)");
     expect(disclosure).toContain("display: none");
-    expect(source).toContain("Rendering diagnostics");
-    expect(source).toContain("openRenderingDiagnostics");
-    expect(source).toContain('button.textContent?.trim() === "Rendering"');
+    expect(source).toContain(">Copy</button>");
+    expect(source).not.toContain("openRenderingDiagnostics");
+    expect(source).not.toContain('button.textContent?.trim() === "Rendering"');
   });
 
   it("anchors normal mobile query settings at the bottom", () => {

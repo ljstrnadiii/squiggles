@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { renderingDiagnostics, subscribeRenderingDiagnostics, type RenderingDiagnosticState } from "./diagnosticState";
 
 type PanelTargets = {
   table: HTMLElement | null;
@@ -76,31 +77,14 @@ function diagnosticSnapshot() {
   };
 }
 
-function openRenderingDiagnostics() {
-  const title = document.querySelector<HTMLButtonElement>("button.mobile-query-title");
-  if (!title) return;
-  if (title.getAttribute("aria-expanded") !== "true") title.click();
-  window.setTimeout(() => {
-    const queryMenu = document.querySelector<HTMLElement>(
-      'nav.mobile-menu[aria-label="Query navigation"]',
-    );
-    const rendering = [...(queryMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
-      (button) => button.textContent?.trim() === "Rendering",
-    );
-    rendering?.click();
-  }, 0);
-}
-
 function Diagnostics({ onClose }: { onClose: () => void }) {
   const snapshot = diagnosticSnapshot();
+  const [rendering, setRendering] = useState<RenderingDiagnosticState | null>(renderingDiagnostics);
+
+  useEffect(() => subscribeRenderingDiagnostics(setRendering), []);
 
   const copy = async () => {
-    await navigator.clipboard?.writeText(JSON.stringify(snapshot, null, 2));
-  };
-
-  const openRendering = () => {
-    onClose();
-    openRenderingDiagnostics();
+    await navigator.clipboard?.writeText(JSON.stringify({ startup: snapshot, rendering }, null, 2));
   };
 
   return (
@@ -108,7 +92,7 @@ function Diagnostics({ onClose }: { onClose: () => void }) {
       <header>
         <div>
           <span>DIAGNOSTICS</span>
-          <strong>Startup and device</strong>
+          <strong>Startup, device, and rendering</strong>
         </div>
         <button aria-label="Close diagnostics" onClick={onClose}>
           ×
@@ -182,14 +166,46 @@ function Diagnostics({ onClose }: { onClose: () => void }) {
           </tr>
         </tbody>
       </table>
-      <p>
-        Open the rendering view for LOD, row-group, vertex-budget, GeoArrow, and cache metrics.
-      </p>
+      <h3>Rendering</h3>
+      <table>
+        <tbody>
+          <tr><th>LOD</th><td>{rendering?.lod == null ? "—" : rendering.lod}</td></tr>
+          <tr><th>Requested LOD</th><td>{rendering?.diagnostics?.requestedLod ?? "—"}</td></tr>
+          <tr><th>Vertices</th><td>{rendering ? `${rendering.vertexCount.toLocaleString()} / ${rendering.vertexBudget.toLocaleString()}` : "—"}</td></tr>
+          <tr><th>Visible routes</th><td>{rendering?.visibleCount.toLocaleString() ?? "—"}</td></tr>
+          <tr><th>Selected routes</th><td>{rendering?.selectedRoutes.toLocaleString() ?? "—"}</td></tr>
+          <tr><th>Budget utilization</th><td>{rendering ? `${rendering.vertexBudget ? (rendering.vertexCount / rendering.vertexBudget * 100).toFixed(1) : 0}%` : "—"}</td></tr>
+          <tr><th>Parquet bytes</th><td>{rendering ? `${bytes(rendering.scan.candidateBytes)} / ${bytes(rendering.scan.totalBytes)}` : "—"}</td></tr>
+          <tr><th>Fragment bytes avoided</th><td>{rendering ? `${rendering.scan.totalBytes ? ((rendering.scan.totalBytes - rendering.scan.candidateBytes) / rendering.scan.totalBytes * 100).toFixed(1) : 0}%` : "—"}</td></tr>
+          <tr><th>Row groups</th><td>{rendering ? `${rendering.scan.expectedRowGroupCount} expected / ${rendering.scan.candidateRowGroupCount} candidate / ${rendering.scan.totalRowGroupCount} total` : "—"}</td></tr>
+          <tr><th>Row groups filtered</th><td>{rendering ? (rendering.scan.totalRowGroupCount - rendering.scan.expectedRowGroupCount).toLocaleString() : "—"}</td></tr>
+          <tr><th>Activity rows kept</th><td>{rendering ? `${rendering.scan.keptRowCount.toLocaleString()} / ${rendering.scan.expectedRowCount.toLocaleString()}` : "—"}</td></tr>
+          <tr><th>Read-to-kept efficiency</th><td>{rendering ? `${rendering.scan.expectedRowCount ? (rendering.scan.keptRowCount / rendering.scan.expectedRowCount * 100).toFixed(1) : 0}%` : "—"}</td></tr>
+          <tr><th>GeoArrow buffers</th><td>{rendering ? bytes(rendering.geometryBufferBytes) : "—"}</td></tr>
+          <tr><th>Raw vertex estimate</th><td>{rendering?.rawVertexEstimate.toLocaleString() ?? "—"}</td></tr>
+          <tr><th>Planned vertex estimate</th><td>{rendering ? `${rendering.plannedVertexEstimate.toLocaleString()} / ${rendering.vertexBudget.toLocaleString()}` : "—"}</td></tr>
+          <tr><th>Coordinate objects</th><td>0</td></tr>
+          <tr><th>Render time</th><td>{rendering ? milliseconds(rendering.durationMs) : "—"}</td></tr>
+          <tr><th>Cache</th><td>{rendering ? `${rendering.cache.hit ? "hit" : "miss"} · ${bytes(rendering.cache.bytes)}` : "—"}</td></tr>
+          <tr><th>Cache batches</th><td>{rendering ? `${rendering.cache.entries} · ${rendering.cache.evictions} evicted` : "—"}</td></tr>
+          <tr><th>Terrain segments</th><td>{rendering ? `${rendering.terrain.submittedSegments.toLocaleString()} / ${rendering.terrain.loadedSegments.toLocaleString()}` : "—"}</td></tr>
+          <tr><th>Terrain tiles</th><td>{rendering?.terrain.tileCount.toLocaleString() ?? "—"}</td></tr>
+          <tr><th>Segments avoided</th><td>{rendering ? `${rendering.terrain.loadedSegments * rendering.terrain.tileCount ? ((rendering.terrain.loadedSegments * rendering.terrain.tileCount - rendering.terrain.submittedSegments) / (rendering.terrain.loadedSegments * rendering.terrain.tileCount) * 100).toFixed(1) : 0}%` : "—"}</td></tr>
+          <tr><th>Map view</th><td>{rendering?.mapView ?? "—"}</td></tr>
+          <tr><th>Thickness</th><td>{rendering?.thickness ?? "—"}</td></tr>
+          <tr><th>Route width</th><td>{rendering?.routeWidth ?? "—"}</td></tr>
+          <tr><th>Selected width</th><td>{rendering?.selectedWidth ?? "—"}</td></tr>
+          <tr><th>Heat vertices</th><td>{rendering?.heat.sourceVertices.toLocaleString() ?? "—"}</td></tr>
+          <tr><th>Heat-colored routes</th><td>{rendering?.heat.scores.toLocaleString() ?? "—"}</td></tr>
+          <tr><th>Heat cells</th><td>{rendering?.heat.cellCount.toLocaleString() ?? "—"}</td></tr>
+          <tr><th>Heat preparation</th><td>{rendering ? milliseconds(rendering.heat.durationMs) : "—"}</td></tr>
+          <tr><th>Heat UI slices</th><td>{rendering ? `${rendering.heat.slices} · ${rendering.heat.maxSliceMs.toFixed(1)} ms max` : "—"}</td></tr>
+          <tr><th>Data view</th><td>{rendering?.dataView ?? "—"}</td></tr>
+          <tr><th>Basemap</th><td>{rendering?.basemap ?? "—"}</td></tr>
+        </tbody>
+      </table>
       <div className="diagnostics-actions">
-        <button onClick={openRendering}>Rendering diagnostics</button>
-        <button className="diagnostics-copy" onClick={() => void copy()}>
-          Copy diagnostics
-        </button>
+        <button className="diagnostics-copy" onClick={() => void copy()}>Copy</button>
       </div>
     </section>
   );
@@ -201,6 +217,22 @@ export function PanelEnhancements() {
   const [toolbarExpanded, setToolbarExpanded] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const logoClicks = useRef<number[]>([]);
+
+  const openDiagnostics = () => {
+    window.dispatchEvent(new Event("squiggles:close-system-settings"));
+    setDiagnosticsOpen(true);
+  };
+
+  useEffect(() => {
+    document.querySelector(".app")?.classList.toggle("with-side-panel", diagnosticsOpen);
+    return () => document.querySelector(".app")?.classList.remove("with-side-panel");
+  }, [diagnosticsOpen]);
+
+  useEffect(() => {
+    const close = () => setDiagnosticsOpen(false);
+    window.addEventListener("squiggles:close-diagnostics", close);
+    return () => window.removeEventListener("squiggles:close-diagnostics", close);
+  }, []);
 
   useEffect(() => {
     const update = () =>
@@ -230,7 +262,7 @@ export function PanelEnhancements() {
       logoClicks.current = [...logoClicks.current.filter((time) => now - time < 2500), now];
       if (logoClicks.current.length < 5) return;
       logoClicks.current = [];
-      setDiagnosticsOpen(true);
+      openDiagnostics();
     };
 
     logo.addEventListener("click", openAfterFiveTaps);
@@ -309,7 +341,7 @@ export function PanelEnhancements() {
         )}
       {panels.logoMenu &&
         createPortal(
-          <button onClick={() => setDiagnosticsOpen(true)}>Diagnostics</button>,
+          <button onClick={openDiagnostics}>Diagnostics</button>,
           panels.logoMenu,
         )}
       {diagnosticsOpen &&

@@ -13,6 +13,8 @@ vi.mock("maplibre-gl", () => ({ Map: class {
   handlers = new Map<string, ((...args: unknown[]) => void)[]>();
   on(name: string, handler: (...args: unknown[]) => void) { this.handlers.set(name, [...(this.handlers.get(name) ?? []), handler]); if (name === "load") handler(); return this; }
   emit(name: string) { for (const handler of this.handlers.get(name) ?? []) handler(); }
+  getSource() { return undefined; }
+  unproject(point: [number, number]) { return { lng: -105 + point[0] / 10000, lat: 40 - point[1] / 10000 }; }
   getCenter() { return { lng: this.camera.center[0], lat: this.camera.center[1] }; }
   getBounds() { return { getWest: () => -107, getSouth: () => 38, getEast: () => -105, getNorth: () => 41 }; }
   getCanvas() { return { clientWidth: 1200, clientHeight: 800, style: { cursor: "" } }; }
@@ -31,6 +33,7 @@ vi.mock("maplibre-gl", () => ({ Map: class {
 vi.mock("./engine", () => ({
   BrowserDuckDBEngine: class {
     setResolution() {}
+    setRenderSettings() {}
     async openDataset(source: { name?: string }) {
       return { id: source.name ?? "synthetic", name: source.name ?? "synthetic", manifest: { schema_version: "1.0.0", activity_count: 1, rejection_count: 0, bbox: [-105, 39, -104, 40], shards: [] } };
     }
@@ -96,7 +99,7 @@ describe("App", () => {
     const starter = await screen.findByRole("combobox", { name: "SQL starter query" });
     fireEvent.change(starter, { target: { value: "rides" } });
     openQueryMenu();
-    expect(screen.getByRole("button", { name: "Rendering" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rendering" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Runs above 12k ft" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "AI Skills" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close query menu" }));
@@ -142,17 +145,6 @@ describe("App", () => {
     render(<App />);
     expect(await screen.findByRole("status", { name: "1 routes selected" })).toBeInTheDocument();
     expect(engineCalls.getSummary).not.toHaveBeenCalled();
-    openQueryMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Rendering" }));
-    expect(screen.getByRole("region", { name: "Rendering diagnostics" })).toBeInTheDocument();
-    expect(screen.queryByRole("slider", { name: "Panel size" })).not.toBeInTheDocument();
-    expect(screen.getByText("LOD 1 · simplified overview")).toBeInTheDocument();
-    expect(screen.getByText("Fragments read")).toBeInTheDocument();
-    expect(screen.getByText("Row groups expected read")).toBeInTheDocument();
-    expect(screen.getByText("GeoArrow buffers")).toBeInTheDocument();
-    expect(screen.getByText("Coordinate objects created")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Close rendering diagnostics" }));
-    expect(screen.queryByRole("region", { name: "Selection summary" })).not.toBeInTheDocument();
     expect(screen.queryByText("3 mi")).not.toBeInTheDocument();
     openQueryMenu();
     fireEvent.click(screen.getByRole("button", { name: "Statistics" }));
@@ -194,10 +186,7 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Zoom to route" })).toBeInTheDocument();
     expect(screen.getByText("3 mi")).toBeInTheDocument();
     await waitFor(() => expect(new URL(window.location.href).searchParams.get("units")).toBe("imperial"));
-    openQueryMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Rendering" }));
-    expect(screen.queryByRole("complementary", { name: "Activity detail" })).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Rendering diagnostics" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Activity detail" })).toBeInTheDocument();
   });
 
   it("restores map settings from the URL and keeps changes shareable", async () => {

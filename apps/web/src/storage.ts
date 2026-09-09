@@ -10,7 +10,7 @@ const legacyBasemaps: Record<string, Basemap> = {
   "mapbox-satellite-clean": "imagery",
   "mapbox-outdoors": "topo",
 };
-const defaultStyle = { color: ELECTRIC_BLUE, lineWidthScale: 1, basemap: "streets" as const, viewMode: "2d" as const, terrainExaggeration: 1, heatEnabled: true, heatPalette: "sunset" as const, heatTemperature: 1.7, cleanEnabled: false };
+const defaultStyle = { color: ELECTRIC_BLUE, lineWidthScale: 1, basemap: "streets" as const, viewMode: "2d" as const, terrainExaggeration: 2.5, heatEnabled: true, heatPalette: "sunset" as const, heatTemperature: 1.7, cleanEnabled: false };
 
 export const defaultTab: QueryTab = {
   id: "all",
@@ -44,7 +44,7 @@ export function normalizeTab(tab: QueryTab & { style: QueryTab["style"] & { line
   const style = {
     ...merged,
     lineWidthScale: Math.max(0.25, Math.min(4, merged.lineWidthScale)),
-    terrainExaggeration: Math.max(0.25, Math.min(3, Number.isFinite(merged.terrainExaggeration) ? merged.terrainExaggeration : 1)),
+    terrainExaggeration: Math.max(0.25, Math.min(3, Number.isFinite(merged.terrainExaggeration) ? merged.terrainExaggeration : 2.5)),
     viewMode: merged.viewMode === "3d" ? "3d" as const : "2d" as const,
   };
   return {

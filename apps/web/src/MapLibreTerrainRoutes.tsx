@@ -1,3 +1,6 @@
+import { SegmentIndex } from "./segmentIndex";
+import { perspectivePixelMeters } from "./perspectiveResolution";
+import { applyTileDetail } from "./tileDetail";
 import {useEffect, useMemo, useRef} from "react";
 import * as maplibregl from "maplibre-gl";
 
@@ -11,7 +14,7 @@ const PICK_TOLERANCE_PX = 14;
 type TileID = {wrap?: number; canonical: {x: number; y: number; z: number}};
 type TerrainInput = maplibregl.CustomRenderMethodInput & {tileID: TileID | null};
 type TerrainLayer = maplibregl.CustomLayerInterface & {renderToTile(gl: WebGL2RenderingContext, options: TerrainInput): void};
-export type SegmentBatch = {endpoints: Float32Array; colors: Uint8Array; owners: Uint32Array; activities: RouteMetadata[]; segmentCount: number};
+export type SegmentBatch = {endpoints: Float32Array; colors: Uint8Array; widths?: Float32Array; owners: Uint32Array; activities: RouteMetadata[]; segmentCount: number};
 export type TerrainCamera = {view: MapState; bounds: ViewportBounds; size: ViewportSize};
 export type TerrainPick = {activity: RouteMetadata; x: number; y: number};
 type PickingIndex = {cells: Map<number, number[]>; data: SegmentBatch};
@@ -33,7 +36,7 @@ function mercator(lng: number, rawLat: number): [number, number] {
   return [(lng + 180) / 360, 0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)];
 }
 
-export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Array[], onlyActivityId?: string): SegmentBatch {
+export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Array[], onlyActivityId?: string, priorityActivityId?: string, highlight?: { activity: RouteMetadata; path: [number, number][] }): SegmentBatch {
   let candidateCount = 0;
   const activities: RouteMetadata[] = [];
   const activityOffsets: number[] = [];
@@ -41,20 +44,26 @@ export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Ar
     if (batch.startIndices.length !== batch.segmentActivityIndices.length + 1) throw new Error(`Invalid BinaryRouteBatch: ${batch.startIndices.length} start indices for ${batch.segmentActivityIndices.length} segments`);
     activityOffsets.push(activities.length);
     activities.push(...batch.activities);
-    for (let route = 0; route < batch.segmentActivityIndices.length; route++) {
+    const routes = Array.from({ length: batch.segmentActivityIndices.length }, (_, route) => route)
+      .sort((left, right) => Number(batch.activities[batch.segmentActivityIndices[left]]?.activityId === priorityActivityId) - Number(batch.activities[batch.segmentActivityIndices[right]]?.activityId === priorityActivityId));
+    for (const route of routes) {
       const activity = batch.activities[batch.segmentActivityIndices[route]];
       if (onlyActivityId && activity?.activityId !== onlyActivityId) continue;
       candidateCount += Math.max(0, batch.startIndices[route + 1] - batch.startIndices[route] - 1);
     }
   }
+  if (highlight && (!onlyActivityId || onlyActivityId === highlight.activity.activityId)) candidateCount += Math.max(0, highlight.path.length - 1);
   const endpoints = new Float32Array(candidateCount * 4);
   const segmentColors = new Uint8Array(candidateCount * 4);
+  const widths = new Float32Array(candidateCount);
   const owners = new Uint32Array(candidateCount);
   let segment = 0;
   batches.forEach((batch, batchIndex) => {
     const vertexColors = colors[batchIndex];
     const activityOffset = activityOffsets[batchIndex];
-    for (let route = 0; route < batch.segmentActivityIndices.length; route++) {
+    const routes = Array.from({ length: batch.segmentActivityIndices.length }, (_, route) => route)
+      .sort((left, right) => Number(batch.activities[batch.segmentActivityIndices[left]]?.activityId === priorityActivityId) - Number(batch.activities[batch.segmentActivityIndices[right]]?.activityId === priorityActivityId));
+    for (const route of routes) {
       const activityIndex = batch.segmentActivityIndices[route];
       const activity = batch.activities[activityIndex];
       if (onlyActivityId && activity?.activityId !== onlyActivityId) continue;
@@ -66,12 +75,26 @@ export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Ar
         const [x0, y0] = mercator(lng0, lat0), [x1, y1] = mercator(lng1, lat1);
         endpoints.set([x0, y0, x1, y1], segment * 4);
         segmentColors.set(vertexColors.subarray(point * 4, point * 4 + 4), segment * 4);
+        widths[segment] = activity?.activityId === priorityActivityId ? 1.35 : 1;
         owners[segment] = activityOffset + activityIndex;
         segment++;
       }
     }
   });
-  return {endpoints: endpoints.subarray(0, segment * 4), colors: segmentColors.subarray(0, segment * 4), owners: owners.subarray(0, segment), activities, segmentCount: segment};
+  if (highlight && (!onlyActivityId || onlyActivityId === highlight.activity.activityId)) {
+    const owner = activities.length;
+    activities.push(highlight.activity);
+    for (let point = 0; point + 1 < highlight.path.length; point += 1) {
+      const [x0, y0] = mercator(...highlight.path[point]);
+      const [x1, y1] = mercator(...highlight.path[point + 1]);
+      endpoints.set([x0, y0, x1, y1], segment * 4);
+      segmentColors.set([255, 255, 255, 255], segment * 4);
+      widths[segment] = 1.35;
+      owners[segment] = owner;
+      segment += 1;
+    }
+  }
+  return {endpoints: endpoints.subarray(0, segment * 4), colors: segmentColors.subarray(0, segment * 4), widths: widths.subarray(0, segment), owners: owners.subarray(0, segment), activities, segmentCount: segment};
 }
 
 function compile(gl: WebGL2RenderingContext, type: number, source: string) {
@@ -81,45 +104,72 @@ function compile(gl: WebGL2RenderingContext, type: number, source: string) {
   return shader;
 }
 
-class BinaryTerrainLayer implements TerrainLayer {
+export class BinaryTerrainLayer implements TerrainLayer {
   id: string;
   type = "custom" as const;
   renderingMode = "2d" as const;
   private gl: WebGL2RenderingContext | null = null;
   private map: maplibregl.Map | null = null;
   private program: WebGLProgram | null = null;
-  private endpointBuffer: WebGLBuffer | null = null;
-  private colorBuffer: WebGLBuffer | null = null;
+  private spatial = new SegmentIndex(new Float32Array());
+  private tiles = new Map<string, { endpoints: WebGLBuffer; colors: WebGLBuffer; widths: WebGLBuffer; count: number; bytes: number }>();
+  private tileBytes = 0;
+  private submissions = new Map<string, number>();
+  diagnostics() { return { loadedSegments: this.segmentCount, submittedSegments: [...this.submissions.values()].reduce((a, b) => a + b, 0), tileCount: this.submissions.size }; }
+  private clearTiles() {
+    if (this.gl) for (const tile of this.tiles.values()) { this.gl.deleteBuffer(tile.endpoints); this.gl.deleteBuffer(tile.colors); this.gl.deleteBuffer(tile.widths); }
+    this.tiles.clear(); this.tileBytes = 0; this.submissions.clear();
+  }
   private segmentCount = 0;
   private widthPx = 2;
-  private pending: SegmentBatch = {endpoints: new Float32Array(), colors: new Uint8Array(), owners: new Uint32Array(), activities: [], segmentCount: 0};
+  private pending: SegmentBatch = {endpoints: new Float32Array(), colors: new Uint8Array(), widths: new Float32Array(), owners: new Uint32Array(), activities: [], segmentCount: 0};
   constructor(id = "squiggles-binary-terrain") { this.id = id; }
-  setData(data: SegmentBatch, widthPx: number) { this.pending = data; this.segmentCount = data.segmentCount; this.widthPx = widthPx; if (this.gl) { this.upload(this.gl); this.map?.triggerRepaint(); } }
+  setData(data: SegmentBatch, widthPx: number) { this.pending = data; this.segmentCount = data.segmentCount; this.widthPx = widthPx; this.spatial = new SegmentIndex(data.endpoints); this.clearTiles(); this.map?.triggerRepaint(); }
   onAdd(map: maplibregl.Map, gl: WebGL2RenderingContext) {
     this.gl = gl; this.map = map;
-    const vs = compile(gl, gl.VERTEX_SHADER, `#version 300 es\nprecision highp float; uniform vec2 u_tile_origin; uniform float u_tile_scale; uniform float u_half_width; in vec2 a_start; in vec2 a_end; in vec4 a_color; out vec4 v_color;\nvoid main(){bool atEnd=gl_VertexID==2||gl_VertexID==3||gl_VertexID==5; float side=(gl_VertexID==1||gl_VertexID==4||gl_VertexID==5)?1.0:-1.0; vec2 s=a_start*u_tile_scale-u_tile_origin; vec2 e=a_end*u_tile_scale-u_tile_origin; vec2 d=e-s; vec2 normal=vec2(-d.y,d.x)/max(length(d),1e-9); vec2 p=(atEnd?e:s)+normal*side*u_half_width; gl_Position=vec4(p.x*2.0-1.0,1.0-p.y*2.0,0.0,1.0); v_color=a_color;}`);
+    const vs = compile(gl, gl.VERTEX_SHADER, `#version 300 es\nprecision highp float; uniform vec2 u_tile_origin; uniform float u_tile_scale; uniform float u_half_width; in vec2 a_start; in vec2 a_end; in vec4 a_color; in float a_width; out vec4 v_color;\nvoid main(){bool atEnd=gl_VertexID==2||gl_VertexID==3||gl_VertexID==5; float side=(gl_VertexID==1||gl_VertexID==4||gl_VertexID==5)?1.0:-1.0; vec2 s=a_start*u_tile_scale-u_tile_origin; vec2 e=a_end*u_tile_scale-u_tile_origin; vec2 d=e-s; vec2 normal=vec2(-d.y,d.x)/max(length(d),1e-9); vec2 p=(atEnd?e:s)+normal*side*u_half_width*a_width; gl_Position=vec4(p.x*2.0-1.0,1.0-p.y*2.0,0.0,1.0); v_color=a_color;}`);
     const fs = compile(gl, gl.FRAGMENT_SHADER, `#version 300 es\nprecision highp float; in vec4 v_color; out vec4 fragColor; void main(){fragColor=v_color;}`);
     this.program = gl.createProgram()!; gl.attachShader(this.program, vs); gl.attachShader(this.program, fs); gl.linkProgram(this.program); gl.deleteShader(vs); gl.deleteShader(fs);
     if (!gl.getProgramParameter(this.program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(this.program) ?? "program link failed");
-    this.endpointBuffer = gl.createBuffer(); this.colorBuffer = gl.createBuffer(); this.upload(gl); map.triggerRepaint();
+    map.triggerRepaint();
   }
-  private upload(gl: WebGL2RenderingContext) { if (!this.endpointBuffer || !this.colorBuffer) return; gl.bindBuffer(gl.ARRAY_BUFFER, this.endpointBuffer); gl.bufferData(gl.ARRAY_BUFFER, this.pending.endpoints, gl.STATIC_DRAW); gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer); gl.bufferData(gl.ARRAY_BUFFER, this.pending.colors, gl.STATIC_DRAW); }
   render() {}
   renderToTile(gl: WebGL2RenderingContext, options: TerrainInput) {
-    if (!this.program || !this.endpointBuffer || !this.colorBuffer || !options.tileID || !this.segmentCount) return;
-    const tile = options.tileID, scale = 2 ** tile.canonical.z, ox = tile.canonical.x + (tile.wrap ?? 0) * scale;
+    if (!this.program || !options.tileID || !this.segmentCount) return;
+    const tile = options.tileID, scale = 2 ** tile.canonical.z, ox = tile.canonical.x;
+    const key = `${tile.canonical.z}/${tile.canonical.x}/${tile.canonical.y}`;
+    let buffers = this.tiles.get(key);
+    if (!buffers) {
+      const margin = this.widthPx / RTT_SIZE / scale;
+      const ids = this.spatial.query([ox / scale - margin, tile.canonical.y / scale - margin, (ox + 1) / scale + margin, (tile.canonical.y + 1) / scale + margin]);
+        const endpoints = new Float32Array(ids.length * 4), colors = new Uint8Array(ids.length * 4), widths = new Float32Array(ids.length);
+        ids.forEach((id, i) => { endpoints.set(this.pending.endpoints.subarray(id * 4, id * 4 + 4), i * 4); colors.set(this.pending.colors.subarray(id * 4, id * 4 + 4), i * 4); widths[i] = this.pending.widths?.[id] ?? 1; });
+        const bytes = endpoints.byteLength + colors.byteLength + widths.byteLength;
+      while (this.tileBytes + bytes > 32 * 1024 ** 2 && this.tiles.size) {
+        const [oldKey, old] = this.tiles.entries().next().value!;
+        gl.deleteBuffer(old.endpoints); gl.deleteBuffer(old.colors); gl.deleteBuffer(old.widths); this.tiles.delete(oldKey); this.tileBytes -= old.bytes;
+      }
+      buffers = { endpoints: gl.createBuffer()!, colors: gl.createBuffer()!, widths: gl.createBuffer()!, count: ids.length, bytes };
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.endpoints); gl.bufferData(gl.ARRAY_BUFFER, endpoints, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.colors); gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.widths); gl.bufferData(gl.ARRAY_BUFFER, widths, gl.STATIC_DRAW);
+      this.tiles.set(key, buffers); this.tileBytes += bytes;
+    } else { this.tiles.delete(key); this.tiles.set(key, buffers); }
+    this.submissions.set(key, buffers.count);
+    if (!buffers.count) return;
     gl.useProgram(this.program); gl.uniform2f(gl.getUniformLocation(this.program, "u_tile_origin"), ox, tile.canonical.y); gl.uniform1f(gl.getUniformLocation(this.program, "u_tile_scale"), scale); gl.uniform1f(gl.getUniformLocation(this.program, "u_half_width"), this.widthPx / RTT_SIZE / 2);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.endpointBuffer);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.endpoints);
     const s = gl.getAttribLocation(this.program, "a_start"), e = gl.getAttribLocation(this.program, "a_end"); gl.enableVertexAttribArray(s); gl.vertexAttribPointer(s, 2, gl.FLOAT, false, 16, 0); gl.vertexAttribDivisor(s, 1); gl.enableVertexAttribArray(e); gl.vertexAttribPointer(e, 2, gl.FLOAT, false, 16, 8); gl.vertexAttribDivisor(e, 1);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer); const c = gl.getAttribLocation(this.program, "a_color"); gl.enableVertexAttribArray(c); gl.vertexAttribPointer(c, 4, gl.UNSIGNED_BYTE, true, 4, 0); gl.vertexAttribDivisor(c, 1);
-    gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, this.segmentCount);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.colors); const c = gl.getAttribLocation(this.program, "a_color"); gl.enableVertexAttribArray(c); gl.vertexAttribPointer(c, 4, gl.UNSIGNED_BYTE, true, 4, 0); gl.vertexAttribDivisor(c, 1);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.widths); const w = gl.getAttribLocation(this.program, "a_width"); gl.enableVertexAttribArray(w); gl.vertexAttribPointer(w, 1, gl.FLOAT, false, 4, 0); gl.vertexAttribDivisor(w, 1);
+    gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, buffers.count);
   }
-  onRemove(_map: maplibregl.Map, gl: WebGL2RenderingContext) { this.gl = null; this.map = null; if (this.endpointBuffer) gl.deleteBuffer(this.endpointBuffer); if (this.colorBuffer) gl.deleteBuffer(this.colorBuffer); if (this.program) gl.deleteProgram(this.program); }
+  onRemove(_map: maplibregl.Map, gl: WebGL2RenderingContext) { this.clearTiles(); this.gl = null; this.map = null; if (this.program) gl.deleteProgram(this.program); }
 }
 
 function cameraSnapshot(map: maplibregl.Map): TerrainCamera {
   const center = map.getCenter(), bounds = map.getBounds(), canvas = map.getCanvas();
-  return {view: {longitude: center.lng, latitude: center.lat, zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing()}, bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()], size: {width: canvas.clientWidth, height: canvas.clientHeight}};
+  return {view: {longitude: center.lng, latitude: center.lat, zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing()}, bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()], size: {width: canvas.clientWidth, height: canvas.clientHeight, pixelMeters: perspectivePixelMeters(canvas.clientWidth, canvas.clientHeight, point => map.unproject(point)), threeD: true}};
 }
 
 function cellKey(x: number, y: number) { return y * PICK_GRID_SCALE + x; }
@@ -151,12 +201,13 @@ function pick(index: PickingIndex, map: maplibregl.Map, lng: number, lat: number
   if (best < 0) return null; const activity = index.data.activities[index.data.owners[best]]; return activity ? {activity, x, y} : null;
 }
 
-export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batches, colors, widthPx, profilePosition, highlightActivityId, isolateActivityId, onView, onInteraction, onHover, onClick, onBackgroundClick}: {
-  view: MapState; basemap: Basemap; dark: boolean; exaggeration: number; batches: BinaryRouteBatch[]; colors: Uint8Array[]; widthPx: number; profilePosition?: [number, number]; highlightActivityId?: string; isolateActivityId?: string; onView: (camera: TerrainCamera) => void; onInteraction: (active: boolean) => void; onHover?: (pick: TerrainPick | null) => void; onClick?: (activity: RouteMetadata) => void; onBackgroundClick?: () => void;
+export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batches, colors, widthPx, imageryDetail = 0, terrainDetail = 0, onDiagnostics, profilePosition, highlightActivityId, isolateActivityId, onView, onInteraction, onHover, onClick, onBackgroundClick}: {
+  view: MapState; basemap: Basemap; dark: boolean; exaggeration: number; batches: BinaryRouteBatch[]; colors: Uint8Array[]; widthPx: number; imageryDetail?: number; terrainDetail?: number; onDiagnostics?: (metrics: { loadedSegments: number; submittedSegments: number; tileCount: number }) => void; profilePosition?: [number, number]; highlightActivityId?: string; isolateActivityId?: string; onView: (camera: TerrainCamera) => void; onInteraction: (active: boolean) => void; onHover?: (pick: TerrainPick | null) => void; onClick?: (activity: RouteMetadata) => void; onBackgroundClick?: () => void;
 }) {
   const container = useRef<HTMLDivElement>(null), mapRef = useRef<maplibregl.Map | null>(null), layerRef = useRef<BinaryTerrainLayer | null>(null), profileMarkerRef = useRef<maplibregl.Marker | null>(null), indexRef = useRef<PickingIndex | null>(null);
   const appliedStyleRef = useRef(`${basemap}:${dark}`);
-  const callbacks = useRef({onView, onInteraction, onHover, onClick, onBackgroundClick}); callbacks.current = {onView, onInteraction, onHover, onClick, onBackgroundClick};
+  const callbacks = useRef({onDiagnostics, onView, onInteraction, onHover, onClick, onBackgroundClick}); callbacks.current = {onDiagnostics, onView, onInteraction, onHover, onClick, onBackgroundClick};
+  const detailRef = useRef({ imageryDetail, terrainDetail }); detailRef.current = { imageryDetail, terrainDetail };
   const exaggerationRef = useRef(exaggeration); exaggerationRef.current = exaggeration;
   const displayColors = useMemo(() => {
     if (!highlightActivityId) return colors;
@@ -171,7 +222,7 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
       return highlighted;
     });
   }, [batches, colors, highlightActivityId]);
-  const data = useMemo(() => terrainSegmentBatch(batches, displayColors, isolateActivityId), [batches, displayColors, isolateActivityId]);
+  const data = useMemo(() => terrainSegmentBatch(batches, displayColors, isolateActivityId, highlightActivityId), [batches, displayColors, highlightActivityId, isolateActivityId]);
   const index = useMemo(() => pickingIndex(data), [data]); indexRef.current = index;
 
   useEffect(() => {
@@ -180,8 +231,13 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
     mapRef.current = map;
     const layer = new BinaryTerrainLayer();
     layer.setData(data, widthPx); layerRef.current = layer;
-    const addLayers = () => { if (!map.getLayer(layer.id)) map.addLayer(layer as maplibregl.CustomLayerInterface); };
+    const addLayers = () => {
+      if (!map.getLayer(layer.id)) map.addLayer(layer as maplibregl.CustomLayerInterface);
+      applyTileDetail(map, "basemap", detailRef.current.imageryDetail);
+      applyTileDetail(map, "terrain", detailRef.current.terrainDetail);
+    };
     const load = () => { addLayers(); callbacks.current.onView(cameraSnapshot(map)); };
+    map.on("idle", () => callbacks.current.onDiagnostics?.(layer.diagnostics()));
     map.on("load", load); map.on("style.load", addLayers);
     const start = () => callbacks.current.onInteraction(true), end = () => { callbacks.current.onInteraction(false); callbacks.current.onView(cameraSnapshot(map)); };
     map.on("movestart", start); map.on("moveend", end);
@@ -195,6 +251,13 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
   // Initial map construction intentionally happens only once; prop updates are applied by effects below.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map?.isStyleLoaded()) return;
+    applyTileDetail(map, "basemap", imageryDetail);
+    applyTileDetail(map, "terrain", terrainDetail);
+  }, [imageryDetail, terrainDetail]);
 
   useEffect(() => { layerRef.current?.setData(data, widthPx); }, [data, widthPx]);
   useEffect(() => { const map = mapRef.current; if (!map) return; const center = map.getCenter(); if (Math.abs(center.lng - view.longitude) > 1e-7 || Math.abs(center.lat - view.latitude) > 1e-7 || Math.abs(map.getZoom() - view.zoom) > 1e-4 || Math.abs(map.getPitch() - view.pitch) > 1e-4 || Math.abs(map.getBearing() - view.bearing) > 1e-4) map.jumpTo({center: [view.longitude, view.latitude], zoom: view.zoom, pitch: view.pitch, bearing: view.bearing}); }, [view]);
