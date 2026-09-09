@@ -1,17 +1,50 @@
+import type { SystemResolution } from "./contracts";
+
 export type Lod = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export const LOD_COUNT = 8;
 export const MAX_LOD: Lod = 7;
 export const RESOLUTION_VERTEX_BUDGETS = {
-  low: 750_000,
-  medium: 1_250_000,
-  high: 1_750_000,
+  low: 500_000,
+  medium: 750_000,
+  high: 1_000_000,
 } as const;
 export const THREE_D_VERTEX_BUDGETS = {
-  low: 100_000,
-  medium: 250_000,
-  high: 750_000,
+  low: 325_000,
+  medium: 500_000,
+  high: 650_000,
 } as const;
+export const MIN_VERTEX_BUDGETS = {
+  low: 100_000,
+  medium: 200_000,
+  high: 300_000,
+} as const;
+export const MIN_THREE_D_VERTEX_BUDGETS = {
+  low: 75_000,
+  medium: 125_000,
+  high: 200_000,
+} as const;
+
+const BUDGET_ZOOM_MIN = 7;
+const BUDGET_ZOOM_MAX = 13;
+const BUDGET_QUANTUM = 50_000;
+
+function smoothstep(value: number) {
+  const t = Math.max(0, Math.min(1, value));
+  return t * t * (3 - 2 * t);
+}
+
+export function scheduledVertexBudget(
+  resolution: SystemResolution,
+  zoom: number,
+  threeD = false,
+): number {
+  const minimums = threeD ? MIN_THREE_D_VERTEX_BUDGETS : MIN_VERTEX_BUDGETS;
+  const maximums = threeD ? THREE_D_VERTEX_BUDGETS : RESOLUTION_VERTEX_BUDGETS;
+  const progress = smoothstep((zoom - BUDGET_ZOOM_MIN) / (BUDGET_ZOOM_MAX - BUDGET_ZOOM_MIN));
+  const target = minimums[resolution] + (maximums[resolution] - minimums[resolution]) * progress;
+  return Math.round(target / BUDGET_QUANTUM) * BUDGET_QUANTUM;
+}
 
 // Fixed simplification tolerances emitted by the compiler. `null` means full geometry.
 export const LOD_TOLERANCES_METERS = [2048, 512, 128, 32, 8, 2, 0.5, null] as const;
