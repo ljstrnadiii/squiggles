@@ -1,19 +1,18 @@
 /// <reference lib="webworker" />
 import * as duckdb from "@duckdb/duckdb-wasm";
 
-import {
-  activitySampleFraction,
-  activitySamplePredicate,
-  activitySampleThreshold,
-  boostedSampleLod,
-} from "./activitySampling";
+import { boostedSampleLod } from "./activitySampling";
 import { canonicalSourceSql, targetedCanonicalSourceSql } from "./canonicalSource";
 import type {
   BinaryRouteBatch,
+  MapState,
   ResolutionRenderPlans,
   RouteMetadata,
   SystemResolution,
+  ViewportSize,
 } from "./contracts";
+import { buildBinaryHeatDataCooperative } from "./heat";
+import { heatBudgetActivityIds } from "./heatSampling";
 import { RESOLUTION_VERTEX_BUDGETS, type Lod } from "./lod";
 import { materializeMetadataSql, residentMetadataRelation } from "./metadataCacheSql";
 import { isUniversalSelectionSql } from "./selection";
@@ -65,6 +64,10 @@ type Request =
       lod: Lod;
       resolution: SystemResolution;
       bounds?: Bounds;
+      visibleBounds?: Bounds;
+      zoom: number;
+      viewportSize?: ViewportSize;
+      skipHeatViewportClip?: boolean;
       clean: boolean;
       startingVertexEstimate?: number;
       needsCanonicalGeometry: boolean;
@@ -75,6 +78,10 @@ type Request =
       lod: Lod;
       resolution: SystemResolution;
       bounds: Bounds;
+      visibleBounds: Bounds;
+      zoom: number;
+      viewportSize?: ViewportSize;
+      skipHeatViewportClip?: boolean;
       clean: boolean;
     }
   | { id: number; type: "summary"; bounds?: Bounds; clean: boolean }
@@ -545,34 +552,160 @@ async function rawVertexEstimate(bounds: Bounds | undefined, fallback: number): 
   return Number(scalar(row.total));
 }
 
+function activityIdPredicate(alias: string, activityIds?: ReadonlySet<string>): string {
+  if (activityIds == null) return "TRUE";
+  if (activityIds.size === 0) return "FALSE";
+  const values = [...activityIds]
+    .map((activityId) => `'${activityId.replaceAll("'", "''")}'`)
+    .join(",");
+  return `${alias}.activity_id IN (${values})`;
+}
+
+async function queryRenderBatches(
+  level: Lod,
+  bounds: Bounds | undefined,
+  clean: boolean,
+  activityIds?: ReadonlySet<string>,
+) {
+  const scan = viewportScan(bounds, renderFiles(level));
+  const relation = parquetRelation(scan.files, false);
+  if (!relation) return { batches: [] as BinaryRouteBatch[], scan };
+  const geometry = clean ? "geometry_clean" : "geometry";
+  const result = await connection!.query(
+    `SELECT a.activity_id,a.${geometry} FROM ${relation} a${selectionJoin()} WHERE (${viewportPredicate(bounds, clean)}) AND ${activityIdPredicate("a", activityIds)}`,
+  );
+  return { batches: binaryRouteBatches(result, geometry), scan };
+}
+
+async function activityVertexCounts(
+  level: Lod,
+  bounds: Bounds | undefined,
+  clean: boolean,
+): Promise<Map<string, number>> {
+  const { files } = viewportScan(bounds, renderFiles(level));
+  const relation = parquetRelation(files, false);
+  if (!relation) return new Map();
+  const geometryCount = clean ? "clean_vertex_count" : "vertex_count";
+  const table = await connection!.query(
+    `SELECT CAST(a.activity_id AS VARCHAR) activity_id,coalesce(sum(a.${geometryCount}),0) vertex_count FROM ${relation} a${selectionJoin()} WHERE ${viewportPredicate(bounds, clean)} GROUP BY a.activity_id`,
+  );
+  return new Map(
+    table.toArray().map((value) => {
+      const row = value as unknown as Record<string, unknown>;
+      return [String(scalar(row.activity_id)), Number(scalar(row.vertex_count))];
+    }),
+  );
+}
+
+function heatView(bounds: Bounds | undefined, zoom: number): MapState {
+  if (!bounds) return { longitude: 0, latitude: 0, zoom, pitch: 0, bearing: 0 };
+  const [west, south, east, north] = bounds;
+  const longitude = west <= east
+    ? (west + east) / 2
+    : ((((west + (east + 360)) / 2) + 540) % 360) - 180;
+  const clampLatitude = (value: number) => Math.max(-85.051129, Math.min(85.051129, value));
+  const mercatorY = (latitude: number) => {
+    const radians = clampLatitude(latitude) * Math.PI / 180;
+    return (1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2;
+  };
+  const y = (mercatorY(south) + mercatorY(north)) / 2;
+  const latitude = Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI;
+  return { longitude, latitude, zoom, pitch: 0, bearing: 0 };
+}
+
+async function heatRetainedActivityIds(
+  scoringLod: Lod,
+  targetLod: Lod,
+  visibleBounds: Bounds | undefined,
+  clean: boolean,
+  zoom: number,
+  viewportSize: ViewportSize | undefined,
+  vertexBudget: number,
+  skipViewportClip: boolean,
+) {
+  const counts = await activityVertexCounts(targetLod, visibleBounds, clean);
+  const fullEstimate = [...counts.values()].reduce((total, value) => total + value, 0);
+  if (fullEstimate <= vertexBudget) {
+    return { activityIds: new Set(counts.keys()), vertexEstimate: fullEstimate };
+  }
+
+  const coarse = await queryRenderBatches(scoringLod, visibleBounds, clean);
+  const size = viewportSize?.width && viewportSize.height
+    ? viewportSize
+    : { width: 1024, height: 768 };
+  const heat = await buildBinaryHeatDataCooperative(
+    coarse.batches,
+    heatView(visibleBounds, zoom),
+    size.width,
+    size.height,
+    undefined,
+    8,
+    () => false,
+    8,
+    skipViewportClip,
+  );
+  const scores = heat?.scores ?? new Map<string, number>();
+  const targetBudget = Math.floor(vertexBudget * 0.9);
+  const activityIds = heatBudgetActivityIds(
+    [...counts].map(([activityId, vertexCount]) => ({
+      activityId,
+      vertexCount,
+      heatScore: scores.get(activityId) ?? 0,
+    })),
+    targetBudget,
+  );
+  const vertexEstimate = [...activityIds].reduce(
+    (total, activityId) => total + (counts.get(activityId) ?? 0),
+    0,
+  );
+  return { activityIds, vertexEstimate };
+}
+
 async function render(
   lod: Lod,
   resolution: SystemResolution,
   bounds?: Bounds,
   clean = false,
   startingEstimate?: number,
+  visibleBounds: Bounds | undefined = bounds,
+  zoom = 0,
+  viewportSize?: ViewportSize,
+  skipHeatViewportClip = false,
 ) {
-  const resolutionPlans = await planResolutionLods(lod, bounds, clean, startingEstimate);
+  const resolutionPlans = await planResolutionLods(lod, visibleBounds, clean, startingEstimate);
   const plan = resolutionPlans[resolution];
   const fidelityLod = clampAvailableLod(lod);
   const plannedLod = boostedSampleLod(availableRenderLods(), plan.lod, fidelityLod);
   const fullVertexEstimate =
-    plannedLod === plan.lod ? plan.vertexEstimate : await vertexEstimate(plannedLod, bounds, clean);
+    plannedLod === plan.lod ? plan.vertexEstimate : await vertexEstimate(plannedLod, visibleBounds, clean);
   const vertexBudget = RESOLUTION_VERTEX_BUDGETS[resolution];
-  const sampleThreshold = activitySampleThreshold(fullVertexEstimate, vertexBudget);
-  const sampleFraction = activitySampleFraction(sampleThreshold);
-  const plannedVertexEstimate = Math.ceil(fullVertexEstimate * sampleFraction);
-  const scan = viewportScan(bounds, renderFiles(plannedLod));
-  const rawEstimate = await rawVertexEstimate(bounds, plan.vertexEstimate);
+  let retainedActivityIds: Set<string> | undefined;
+  let plannedVertexEstimate = fullVertexEstimate;
+  if (fullVertexEstimate > vertexBudget) {
+    const retained = await heatRetainedActivityIds(
+      plan.lod,
+      plannedLod,
+      visibleBounds,
+      clean,
+      zoom,
+      viewportSize,
+      vertexBudget,
+      skipHeatViewportClip,
+    );
+    retainedActivityIds = retained.activityIds;
+    plannedVertexEstimate = retained.vertexEstimate;
+  }
 
-  if (scan.files.length === 0) {
+  const rawEstimate = await rawVertexEstimate(visibleBounds, plan.vertexEstimate);
+  const { batches, scan } = await queryRenderBatches(plannedLod, bounds, clean, retainedActivityIds);
+  if (scan.files.length === 0 || batches.length === 0) {
     return {
       lod: plannedLod,
       batches: [],
       activityCount: 0,
       geometryBufferBytes: 0,
       vertexCount: 0,
-      plannedVertexEstimate,
+      plannedVertexEstimate: scan.files.length === 0 ? 0 : plannedVertexEstimate,
       resolutionPlans,
       rawVertexEstimate: rawEstimate,
       vertexBudget,
@@ -580,28 +713,6 @@ async function render(
     };
   }
 
-  const relation = parquetRelation(scan.files, false);
-  if (!relation) {
-    return {
-      lod: plannedLod,
-      batches: [],
-      activityCount: 0,
-      geometryBufferBytes: 0,
-      vertexCount: 0,
-      plannedVertexEstimate: 0,
-      resolutionPlans,
-      rawVertexEstimate: rawEstimate,
-      vertexBudget,
-      scan: scan.metrics,
-    };
-  }
-
-  const geometry = clean ? "geometry_clean" : "geometry";
-  const sample = activitySamplePredicate("a", sampleThreshold);
-  const result = await connection!.query(
-    `SELECT a.activity_id,a.${geometry} FROM ${relation} a${selectionJoin()} WHERE (${viewportPredicate(bounds, clean)}) AND ${sample}`,
-  );
-  const batches = binaryRouteBatches(result, geometry);
   const vertexCount = batches.reduce((total, batch) => total + batch.positions.length / 2, 0);
   const geometryBufferBytes = batches.reduce(
     (total, batch) =>
@@ -866,7 +977,17 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       }
       respond(
         request.id,
-        await render(request.lod, request.resolution, request.bounds, request.clean),
+        await render(
+          request.lod,
+          request.resolution,
+          request.bounds,
+          request.clean,
+          undefined,
+          request.visibleBounds,
+          request.zoom,
+          request.viewportSize,
+          request.skipHeatViewportClip,
+        ),
       );
       return;
     }
@@ -909,6 +1030,10 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       request.bounds,
       clean,
       request.startingVertexEstimate,
+      request.visibleBounds,
+      request.zoom,
+      request.viewportSize,
+      request.skipHeatViewportClip,
     );
     respond(request.id, {
       queryId: String(request.id),
