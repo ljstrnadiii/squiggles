@@ -79,7 +79,7 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Medium" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "High" }));
     expect(screen.getByRole("button", { name: "High" })).toHaveAttribute("aria-pressed", "true");
-    expect(localStorage.getItem("activity-map.resolution.v1")).toBe("high");
+    expect(localStorage.getItem("activity-map.resolution.v2")).toBe("high");
     fireEvent.click(screen.getByRole("button", { name: "Use light theme" }));
     expect(screen.getByRole("button", { name: "Use light theme" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("img", { name: "Squiggles" })).toHaveAttribute("src", "/logo-light.png");
