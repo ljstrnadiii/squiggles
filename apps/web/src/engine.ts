@@ -59,7 +59,7 @@ type WorkerOpenTiming = {
 };
 
 const MEBIBYTE = 1024 ** 2;
-const VIEWPORT_PREFETCH_FRACTION = 0.2;
+const VIEWPORT_PREFETCH_FRACTION = 0.05;
 
 function perf(event: string, fields: Record<string, unknown>) {
   console.info("[squiggles:perf]", event, fields);
@@ -176,14 +176,18 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     }
   }
 
+  private viewportSize(viewportSize?: ViewportSize): ViewportSize | undefined {
+    if (viewportSize) return viewportSize;
+    const map = document.querySelector<HTMLElement>("section.map");
+    return map ? { width: map.clientWidth, height: map.clientHeight } : undefined;
+  }
+
   private requestedLod(
     zoom: number,
     bounds?: ViewportBounds,
     viewportSize?: ViewportSize,
   ): Lod {
-    const map = viewportSize ? null : document.querySelector<HTMLElement>("section.map");
-    const size = viewportSize ??
-      (map ? { width: map.clientWidth, height: map.clientHeight } : undefined);
+    const size = this.viewportSize(viewportSize);
     if (bounds && size?.width && size.height) {
       return lodForViewport(bounds, size.width, size.height);
     }
@@ -429,7 +433,8 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     const nextClean = tab.style.cleanEnabled;
     const baseSql = normalizeSelectionSql(tab.sql);
     const sql = applySpatialFilterSql(baseSql, tab.spatialFilter);
-    const fidelityLod = this.requestedLod(zoom, bounds, viewportSize);
+    const size = this.viewportSize(viewportSize);
+    const fidelityLod = this.requestedLod(zoom, bounds, size);
     const plan = this.initialPlan(tab, fidelityLod, bounds);
     const result = await this.networkRequest<QueryResult & WorkerViewportResult>({
       type: "execute",
@@ -437,6 +442,10 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       lod: plan.lod,
       resolution: this.resolution,
       bounds,
+      visibleBounds: bounds,
+      zoom,
+      viewportSize: size,
+      skipHeatViewportClip: viewportSize != null,
       clean: nextClean,
       startingVertexEstimate: plan.startingVertexEstimate,
       needsCanonicalGeometry: Boolean(tab.spatialFilter?.polygon.length && tab.spatialFilter.polygon.length >= 3),
@@ -472,7 +481,8 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     bounds: ViewportBounds,
     viewportSize?: ViewportSize,
   ): Promise<ViewportResult> {
-    const fidelityLod = this.requestedLod(zoom, bounds, viewportSize);
+    const size = this.viewportSize(viewportSize);
+    const fidelityLod = this.requestedLod(zoom, bounds, size);
     const requestedKey = this.cacheKey(fidelityLod, bounds);
     const cached = this.cached(requestedKey, bounds, fidelityLod);
     if (cached) {
@@ -492,9 +502,13 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       lod: fidelityLod,
       resolution: this.resolution,
       bounds: fetchBounds,
+      visibleBounds: bounds,
+      zoom,
+      viewportSize: size,
+      skipHeatViewportClip: viewportSize != null,
       clean: this.clean,
     });
-    recordActiveRenderPlan({ plans: result.resolutionPlans, bounds: fetchBounds });
+    recordActiveRenderPlan({ plans: result.resolutionPlans, bounds });
     perf("viewport-fetch", {
       totalMs: Math.round(performance.now() - started),
       zoom: Number(zoom.toFixed(2)),
