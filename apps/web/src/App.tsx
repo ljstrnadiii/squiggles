@@ -430,6 +430,16 @@ export function App() {
   }
 
   async function openSource(source: DatasetSource, requestedView?: MapState, initialTab = tab) {
+    selectionRequest.current += 1;
+    viewportRequest.current += 1;
+    panelRequest.current += 1;
+    selectionReady.current = false;
+    ready.current = false;
+    terrainCameraRef.current = null;
+    setRouteBatches([]); setHeat(emptyHeat);
+    setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false);
+    setStatsOpen(false); setTableOpen(false); setTableActivities([]);
+    setTerrainCamera(null); setMapInteracting(false);
     try {
       setBusy(true); setError(""); setStatus("Reading dataset manifest…");
       const dataset = await engine.openDataset(source, (completed, total) => setStatus(`Opening dataset · ${completed.toLocaleString()} / ${total.toLocaleString()} files`));

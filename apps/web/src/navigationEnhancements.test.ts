@@ -24,6 +24,16 @@ describe("map navigation enhancements", () => {
     expect(source).not.toContain('button.textContent?.trim() === "Rendering"');
   });
 
+  it("makes diagnostics, system settings, and activity detail replace each other on mobile", () => {
+    expect(source).toContain('window.matchMedia?.("(max-width: 700px)")');
+    expect(source).toContain('aside.detail[aria-label="Activity detail"]');
+    expect(source).toContain('section.system-settings[aria-label="System settings"]');
+    expect(source).toContain("if (isMobilePanelLayout()) closeActivityDetail()");
+    expect(source).toContain("if (panels.systemSettings)");
+    expect(source).toContain("if (panels.detail)");
+    expect(source).toContain("setDiagnosticsOpen(false)");
+  });
+
   it("anchors normal mobile query settings at the bottom", () => {
     expect(panelCss).toContain('section.toolbar[aria-label="Query and map settings"]:not([data-panel-expanded]) {\n    top: auto;');
   });
