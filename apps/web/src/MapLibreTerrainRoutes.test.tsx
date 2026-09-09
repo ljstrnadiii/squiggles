@@ -56,7 +56,33 @@ describe("terrain profile marker", () => {
     const result = terrainSegmentBatch([batch], [colors], undefined, "highlight");
     expect([...result.owners]).toEqual([0, 1]);
     expect([...result.colors.slice(4, 8)]).toEqual([40, 50, 60, 255]);
-    expect([...result.widths!]).toEqual([1, 1.350000023841858]);
+    expect(result.widths?.[0]).toBeCloseTo(1);
+    expect(result.widths?.[1]).toBeCloseTo(1.35);
+  });
+
+  it("submits a highlighted route after routes from later binary batches", () => {
+    const highlighted: BinaryRouteBatch = {
+      activities: [{ activityId: "highlight", name: "Highlight", sportType: "Run", startTime: null, distanceM: null, elevationGainM: null, maxElevationM: null, sourceUrl: null }],
+      positions: new Float64Array([-105, 40, -104, 41]),
+      startIndices: new Uint32Array([0, 2]),
+      segmentActivityIndices: new Uint32Array([0]),
+    };
+    const background: BinaryRouteBatch = {
+      activities: [{ activityId: "background", name: "Background", sportType: "Run", startTime: null, distanceM: null, elevationGainM: null, maxElevationM: null, sourceUrl: null }],
+      positions: new Float64Array([-105, 40, -104, 41]),
+      startIndices: new Uint32Array([0, 2]),
+      segmentActivityIndices: new Uint32Array([0]),
+    };
+    const result = terrainSegmentBatch(
+      [highlighted, background],
+      [new Uint8Array([40, 50, 60, 255, 40, 50, 60, 255]), new Uint8Array([10, 20, 30, 255, 10, 20, 30, 255])],
+      undefined,
+      "highlight",
+    );
+    expect([...result.owners]).toEqual([1, 0]);
+    expect([...result.colors.slice(4, 8)]).toEqual([40, 50, 60, 255]);
+    expect(result.widths?.[0]).toBeCloseTo(1);
+    expect(result.widths?.[1]).toBeCloseTo(1.35);
   });
 
   it("places a terrain-aware MapLibre marker at the hovered profile position", () => {
