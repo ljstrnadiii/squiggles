@@ -21,7 +21,6 @@ vi.mock("maplibre-gl", () => ({
     jumpTo() {}
     setStyle(style: unknown) { mapCalls.setStyle(style); }
     setTerrain() {}
-    isMoving() { return false; }
     isStyleLoaded() { return true; }
     remove() {}
   },
