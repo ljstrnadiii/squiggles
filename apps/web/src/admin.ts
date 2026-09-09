@@ -43,5 +43,9 @@ export async function setAdminUserAccess(config: RuntimeConfig, session: AuthSes
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ subject, status }),
   });
-  if (!response.ok) throw new Error("Could not update user access.");
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: string } | null;
+    const detail = body?.error ? ` (${body.error.replaceAll("_", " ")})` : "";
+    throw new Error(`Could not update user access${detail}.`);
+  }
 }
