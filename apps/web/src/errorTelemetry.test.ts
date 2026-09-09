@@ -30,4 +30,23 @@ describe("error telemetry", () => {
     expect(errorTelemetryTest.duckdbErrorKind("execute", new Error("Out of Memory Error"))).toBe("unexpected");
     expect(errorTelemetryTest.duckdbErrorKind("renderViewport", new Error("Binder Error"))).toBe("unexpected");
   });
+
+  it("strips the locally formatted SQL and file context from DuckDB telemetry", () => {
+    const summary = errorTelemetryTest.duckdbErrorSummary(new Error([
+      "Squiggles DuckDB failure",
+      "Request: execute",
+      "Files (1):",
+      "- private/activity.parquet",
+      "",
+      "SQL:",
+      "SELECT secret_column FROM activities",
+      "",
+      "DuckDB error:",
+      "Binder Error: Referenced column not found",
+      "LINE 1: SELECT secret_column FROM activities",
+    ].join("\n")));
+    expect(summary).toBe("Binder Error: Referenced column not found");
+    expect(summary).not.toContain("SELECT");
+    expect(summary).not.toContain("activity.parquet");
+  });
 });
