@@ -1,4 +1,5 @@
 name: activity-map-aws
+main: stack.ts
 runtime:
   name: nodejs
   options:
