@@ -7,6 +7,9 @@ const DEM = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}
 const RTT_SIZE = 512;
 const PICK_GRID_SCALE = 2 ** 15;
 const PICK_TOLERANCE_PX = 14;
+const BASEMAP_TILE_SIZE = 256;
+const BASEMAP_LOD_START_PITCH = 30;
+const BASEMAP_LOD_FULL_PITCH = 70;
 
 type TileID = {wrap?: number; canonical: {x: number; y: number; z: number}};
 type TerrainInput = maplibregl.CustomRenderMethodInput & {tileID: TileID | null};
@@ -25,12 +28,27 @@ const rasterStyles: Record<Exclude<Basemap, "blank">, {tiles: string[]; attribut
   imagery: {tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], attribution: "Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community", maxzoom: 19},
 };
 
+export function basemapTileSizeForPitch(pitch: number) {
+  const t = Math.max(0, Math.min(1, (pitch - BASEMAP_LOD_START_PITCH) / (BASEMAP_LOD_FULL_PITCH - BASEMAP_LOD_START_PITCH)));
+  const smooth = t * t * (3 - 2 * t);
+  return BASEMAP_TILE_SIZE / 2 ** smooth;
+}
+
+function updateBasemapLod(map: maplibregl.Map) {
+  const source = map.getSource("basemap");
+  if (!(source instanceof maplibregl.RasterTileSource)) return;
+  const tileSize = basemapTileSizeForPitch(map.getPitch());
+  if (Math.abs(source.tileSize - tileSize) < 0.25) return;
+  source.tileSize = tileSize;
+  map.triggerRepaint();
+}
+
 function terrainStyle(basemap: Basemap, dark: boolean, exaggeration: number): maplibregl.StyleSpecification {
   const sources: maplibregl.StyleSpecification["sources"] = {terrain: {type: "raster-dem", tiles: [DEM], tileSize: 256, maxzoom: 14, encoding: "terrarium"}};
   const layers: maplibregl.LayerSpecification[] = [{id: "background", type: "background", paint: {"background-color": dark ? "#07100e" : "#edf2ef"}}];
   if (basemap !== "blank") {
     const source = rasterStyles[basemap];
-    sources.basemap = {type: "raster", tiles: source.tiles, tileSize: 256, maxzoom: source.maxzoom, attribution: source.attribution};
+    sources.basemap = {type: "raster", tiles: source.tiles, tileSize: BASEMAP_TILE_SIZE, maxzoom: source.maxzoom, attribution: source.attribution};
     layers.push({id: "basemap", type: "raster", source: "basemap"});
   }
   return {version: 8, sources, layers, terrain: {source: "terrain", exaggeration}};
@@ -202,10 +220,10 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
     mapRef.current = map;
     const layer = new BinaryTerrainLayer(), highlightLayer = new BinaryTerrainLayer("squiggles-binary-terrain-highlight"), pointLayer = new BinaryTerrainPointLayer();
     layer.setData(data, widthPx); highlightLayer.setData(highlightData ?? {...data, segmentCount: 0}, widthPx * 1.8); layerRef.current = layer; highlightLayerRef.current = highlightLayer; pointLayerRef.current = pointLayer;
-    const addLayers = () => { if (!map.getLayer(layer.id)) map.addLayer(layer as maplibregl.CustomLayerInterface); if (!map.getLayer(highlightLayer.id)) map.addLayer(highlightLayer as maplibregl.CustomLayerInterface); if (!map.getLayer(pointLayer.id)) map.addLayer(pointLayer as maplibregl.CustomLayerInterface); };
+    const addLayers = () => { if (!map.getLayer(layer.id)) map.addLayer(layer as maplibregl.CustomLayerInterface); if (!map.getLayer(highlightLayer.id)) map.addLayer(highlightLayer as maplibregl.CustomLayerInterface); if (!map.getLayer(pointLayer.id)) map.addLayer(pointLayer as maplibregl.CustomLayerInterface); updateBasemapLod(map); };
     map.on("load", addLayers); map.on("style.load", addLayers);
-    const start = () => callbacks.current.onInteraction(true), end = () => { callbacks.current.onInteraction(false); callbacks.current.onView(cameraSnapshot(map)); };
-    map.on("movestart", start); map.on("moveend", end);
+    const start = () => callbacks.current.onInteraction(true), moveLod = () => updateBasemapLod(map), end = () => { callbacks.current.onInteraction(false); callbacks.current.onView(cameraSnapshot(map)); };
+    map.on("movestart", start); map.on("move", moveLod); map.on("moveend", end);
     let frame = 0, pending: maplibregl.MapMouseEvent | null = null;
     const flushHover = () => { frame = 0; const event = pending; pending = null; if (!event) return; const value = indexRef.current ? pick(indexRef.current, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y) : null; map.getCanvas().style.cursor = value ? "pointer" : ""; callbacks.current.onHover?.(value); };
     const move = (event: maplibregl.MapMouseEvent) => { pending = event; if (!frame) frame = requestAnimationFrame(flushHover); };
