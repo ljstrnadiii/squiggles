@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from activity_map_ingest.notifications import (
     ARCHIVE_READY_BODY,
     ARCHIVE_READY_SUBJECT,
