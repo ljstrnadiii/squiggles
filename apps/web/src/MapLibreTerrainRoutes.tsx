@@ -84,13 +84,14 @@ export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Ar
   if (highlight && (!onlyActivityId || onlyActivityId === highlight.activity.activityId)) {
     const owner = activities.length;
     activities.push(highlight.activity);
-    const fallbackColor = (() => {
-      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    const fallback = (() => {
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
         const batch = batches[batchIndex];
-        for (let route = 0; route < batch.segmentActivityIndices.length; route++) {
-          if (batch.activities[batch.segmentActivityIndices[route]]?.activityId !== highlight.activity.activityId) continue;
-          const point = batch.startIndices[route];
-          return colors[batchIndex].subarray(point * 4, point * 4 + 4);
+        for (let route = 0; route < batch.segmentActivityIndices.length; route += 1) {
+          const activity = batch.activities[batch.segmentActivityIndices[route]];
+          if (activity?.activityId !== highlight.activity.activityId) continue;
+          const start = batch.startIndices[route];
+          return colors[batchIndex]?.subarray(start * 4, start * 4 + 4) ?? new Uint8Array([255, 255, 255, 255]);
         }
       }
       return new Uint8Array([255, 255, 255, 255]);
@@ -99,7 +100,7 @@ export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Ar
       const [x0, y0] = mercator(...highlight.path[point]);
       const [x1, y1] = mercator(...highlight.path[point + 1]);
       endpoints.set([x0, y0, x1, y1], segment * 4);
-      segmentColors.set(fallbackColor, segment * 4);
+      segmentColors.set(fallback, segment * 4);
       widths[segment] = 1.35;
       owners[segment] = owner;
       segment += 1;
@@ -215,7 +216,7 @@ function pick(index: PickingIndex, map: maplibregl.Map, lng: number, lat: number
 export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batches, colors, widthPx, imageryDetail = 0, terrainDetail = 0, onDiagnostics, profilePosition, highlightActivityId, isolateActivityId, onView, onInteraction, onHover, onClick, onBackgroundClick}: {
   view: MapState; basemap: Basemap; dark: boolean; exaggeration: number; batches: BinaryRouteBatch[]; colors: Uint8Array[]; widthPx: number; imageryDetail?: number; terrainDetail?: number; onDiagnostics?: (metrics: { loadedSegments: number; submittedSegments: number; tileCount: number }) => void; profilePosition?: [number, number]; highlightActivityId?: string; isolateActivityId?: string; onView: (camera: TerrainCamera) => void; onInteraction: (active: boolean) => void; onHover?: (pick: TerrainPick | null) => void; onClick?: (activity: RouteMetadata) => void; onBackgroundClick?: () => void;
 }) {
-  const container = useRef<HTMLDivElement>(null), mapRef = useRef<maplibregl.Map | null>(null), layerRef = useRef<BinaryTerrainLayer | null>(null), profileMarkerRef = useRef<maplibregl.Marker | null>(null), indexRef = useRef<PickingIndex | null>(null);
+  const container = useRef<HTMLDivElement>(null), mapRef = useRef<maplibregl.Map | null>(null), layerRef = useRef<BinaryTerrainLayer | null>(null), profileMarkerRef = useRef<maplibregl.Marker | null>(null), indexRef = useRef<PickingIndex | null>(null), interactingRef = useRef(false);
   const appliedStyleRef = useRef(`${basemap}:${dark}`);
   const callbacks = useRef({onDiagnostics, onView, onInteraction, onHover, onClick, onBackgroundClick}); callbacks.current = {onDiagnostics, onView, onInteraction, onHover, onClick, onBackgroundClick};
   const detailRef = useRef({ imageryDetail, terrainDetail }); detailRef.current = { imageryDetail, terrainDetail };
@@ -237,14 +238,13 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
     const load = () => { addLayers(); callbacks.current.onView(cameraSnapshot(map)); };
     map.on("idle", () => callbacks.current.onDiagnostics?.(layer.diagnostics()));
     map.on("load", load); map.on("style.load", addLayers);
-    let frame = 0, pending: maplibregl.MapMouseEvent | null = null;
-    const clearHover = () => { pending = null; if (frame) cancelAnimationFrame(frame); frame = 0; map.getCanvas().style.cursor = ""; callbacks.current.onHover?.(null); };
-    const start = () => { clearHover(); callbacks.current.onInteraction(true); };
-    const end = () => { callbacks.current.onInteraction(false); callbacks.current.onView(cameraSnapshot(map)); };
+    const start = () => { interactingRef.current = true; map.getCanvas().style.cursor = ""; callbacks.current.onHover?.(null); callbacks.current.onInteraction(true); };
+    const end = () => { interactingRef.current = false; callbacks.current.onInteraction(false); callbacks.current.onView(cameraSnapshot(map)); };
     map.on("movestart", start); map.on("moveend", end);
-    const flushHover = () => { frame = 0; const event = pending; pending = null; if (!event || map.isMoving()) return; const value = indexRef.current ? pick(indexRef.current, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y) : null; map.getCanvas().style.cursor = value ? "pointer" : ""; callbacks.current.onHover?.(value); };
-    const move = (event: maplibregl.MapMouseEvent) => { if (map.isMoving()) return; pending = event; if (!frame) frame = requestAnimationFrame(flushHover); };
-    const leave = () => clearHover();
+    let frame = 0, pending: maplibregl.MapMouseEvent | null = null;
+    const flushHover = () => { frame = 0; const event = pending; pending = null; if (!event || interactingRef.current) return; const value = indexRef.current ? pick(indexRef.current, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y) : null; map.getCanvas().style.cursor = value ? "pointer" : ""; callbacks.current.onHover?.(value); };
+    const move = (event: maplibregl.MapMouseEvent) => { if (interactingRef.current) return; pending = event; if (!frame) frame = requestAnimationFrame(flushHover); };
+    const leave = () => { pending = null; if (frame) cancelAnimationFrame(frame); frame = 0; map.getCanvas().style.cursor = ""; callbacks.current.onHover?.(null); };
     const click = (event: maplibregl.MapMouseEvent) => { const value = indexRef.current ? pick(indexRef.current, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y) : null; if (value) callbacks.current.onClick?.(value.activity); else callbacks.current.onBackgroundClick?.(); };
     map.on("mousemove", move); map.on("mouseout", leave); map.on("click", click);
     return () => { if (frame) cancelAnimationFrame(frame); profileMarkerRef.current?.remove(); profileMarkerRef.current = null; map.remove(); mapRef.current = null; layerRef.current = null; };
