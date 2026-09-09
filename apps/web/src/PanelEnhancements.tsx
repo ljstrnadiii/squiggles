@@ -220,6 +220,7 @@ export function PanelEnhancements() {
 
   const openDiagnostics = () => {
     window.dispatchEvent(new Event("squiggles:close-system-settings"));
+    document.querySelector<HTMLButtonElement>('section.toolbar button[aria-label="Close query settings"]')?.click();
     setDiagnosticsOpen(true);
   };
 
@@ -233,6 +234,10 @@ export function PanelEnhancements() {
     window.addEventListener("squiggles:close-diagnostics", close);
     return () => window.removeEventListener("squiggles:close-diagnostics", close);
   }, []);
+
+  useEffect(() => {
+    if (panels.toolbar && diagnosticsOpen) setDiagnosticsOpen(false);
+  }, [diagnosticsOpen, panels.toolbar]);
 
   useEffect(() => {
     const update = () =>
