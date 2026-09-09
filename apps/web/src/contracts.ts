@@ -1,68 +1,53 @@
-export type Units = "metric" | "imperial";
+export type MapState = { longitude: number; latitude: number; zoom: number; pitch: number; bearing: number };
 export type Basemap = "carto-light" | "carto-dark" | "streets" | "topo" | "imagery" | "blank";
+export type MapViewMode = "2d" | "3d";
 export type HeatPalette = "sunset" | "viridis" | "fire" | "ice";
+export type ThemeMode = "system" | "light" | "dark";
+export type UnitSystem = "metric" | "imperial";
 export type SystemResolution = "low" | "medium" | "high";
-export type RenderLod = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
-export type MapState = {
-  longitude: number;
-  latitude: number;
-  zoom: number;
-  pitch: number;
-  bearing: number;
+export type MapStyle = {
+  color: string;
+  lineWidthScale: number;
+  basemap: Basemap;
+  viewMode: MapViewMode;
+  terrainExaggeration: number;
+  heatEnabled: boolean;
+  heatPalette: HeatPalette;
+  heatTemperature: number;
+  cleanEnabled: boolean;
 };
-export type QueryTab = {
-  id: string;
-  title: string;
-  sql: string;
-  mapState: MapState;
-  style: {
-    basemap: Basemap;
-    viewMode: "2d" | "3d";
-    terrainExaggeration: number;
-    routeWidth: number;
-    selectedRouteWidth: number;
-    heatEnabled: boolean;
-    heatPalette: HeatPalette;
-    heatIntensity: number;
-    cleanGeometry: boolean;
-  };
-  startingPlans?: ResolutionRenderPlans;
-};
-export type DatasetFileManifest = {
-  path: string;
-  byte_size: number;
-  row_count: number;
-  bbox?: ViewportBounds;
-  row_groups?: {
-    row_count: number;
-    bbox: ViewportBounds;
-    vertex_count?: { sum: number };
-    clean_vertex_count?: { sum: number };
-  }[];
-};
-export type DatasetManifest = {
-  schema_version: string;
-  activity_count: number;
-  rejection_count: number;
-  bbox?: ViewportBounds;
-  shards: DatasetFileManifest[];
-  metadata?: DatasetFileManifest[];
-  render_levels?: { lod: RenderLod; files: DatasetFileManifest[] }[];
-};
-export type DatasetSource =
-  | { kind: "directory"; handle: FileSystemDirectoryHandle }
-  | { kind: "url"; name: string; baseUrl: string };
-export type Dataset = { id: string; name: string; manifest: DatasetManifest };
-export type ViewportBounds = [number, number, number, number];
+export type ViewportBounds = [west: number, south: number, east: number, north: number];
 export type ViewportSize = {
   width: number;
   height: number;
   pixelMeters?: number;
   threeD?: boolean;
 };
-export type ResolutionRenderPlan = { lod: RenderLod; vertexEstimate: number };
-export type ResolutionRenderPlans = Record<SystemResolution, ResolutionRenderPlan>;
-export type QueryResult = { selectionCount: number };
+export type SpatialPredicate = "intersects" | "within";
+export type SpatialFilter = {
+  predicate: SpatialPredicate;
+  polygon: [number, number][];
+  visible: boolean;
+};
+export type RenderLod = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type RenderPlanChoice = { lod: RenderLod; vertexEstimate: number };
+export type ResolutionRenderPlans = Record<SystemResolution, RenderPlanChoice>;
+
+export type Dataset = { id: string; name: string; manifest: DatasetManifest };
+export type DatasetSource =
+  | { kind: "directory"; handle: FileSystemDirectoryHandle }
+  | { kind: "url"; baseUrl: string; name: string };
+export type Activity = { activityId: string; name: string; sportType: string };
+export type QueryTab = {
+  id: string;
+  title: string;
+  sql: string;
+  mapState: MapState;
+  style: MapStyle;
+  spatialFilter?: SpatialFilter;
+  startingPlans?: ResolutionRenderPlans;
+  startingBounds?: ViewportBounds;
+};
 export type SummaryStats = {
   activityCount: number;
   distanceM: number;
@@ -79,6 +64,47 @@ export type SummaryStats = {
   sportCounts: { sport: string; count: number }[];
   firstActivity: string | null;
   lastActivity: string | null;
+};
+export type RenderPlan = { type: "arrow"; activityIds: string[] };
+export type QueryResult = { queryId: string; selectedCount: number; renderPlan: RenderPlan };
+export type Share = { id: string; tabId: string; datasetId: string };
+
+export type VertexStats = { sum: number; min: number; max: number };
+export type RowGroupManifest = {
+  row_count: number;
+  bbox: ViewportBounds;
+  estimated_uncompressed_bytes?: number;
+  vertex_count?: VertexStats;
+  clean_vertex_count?: VertexStats;
+};
+export type DatasetFileManifest = {
+  path: string;
+  row_count: number;
+  byte_size: number;
+  sha256: string;
+  bbox?: ViewportBounds;
+  row_group_count?: number;
+  row_groups?: RowGroupManifest[];
+};
+export type RenderLevelManifest = {
+  lod: RenderLod;
+  tolerance_m: number | null;
+  spatial_layout?: "str";
+  row_count: number;
+  byte_size: number;
+  bbox: ViewportBounds;
+  file_count: number;
+  row_group_count: number;
+  files: DatasetFileManifest[];
+};
+export type DatasetManifest = {
+  schema_version: string;
+  activity_count: number;
+  rejection_count: number;
+  bbox: ViewportBounds;
+  metadata?: DatasetFileManifest[];
+  shards: DatasetFileManifest[];
+  render_levels?: RenderLevelManifest[];
 };
 export type ElevationSample = {
   distanceM: number;
