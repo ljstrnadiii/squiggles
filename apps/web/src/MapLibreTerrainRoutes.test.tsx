@@ -57,7 +57,7 @@ describe("terrain profile marker", () => {
     expect([...result.owners]).toEqual([0, 1]);
     expect([...result.colors.slice(4, 8)]).toEqual([40, 50, 60, 255]);
     expect(result.widths?.[0]).toBeCloseTo(1);
-    expect(result.widths?.[1]).toBeCloseTo(1.35);
+    expect(result.widths?.[1]).toBeCloseTo(1.8);
   });
 
   it("submits a highlighted route after routes from later binary batches", () => {
@@ -82,7 +82,7 @@ describe("terrain profile marker", () => {
     expect([...result.owners]).toEqual([1, 0]);
     expect([...result.colors.slice(4, 8)]).toEqual([40, 50, 60, 255]);
     expect(result.widths?.[0]).toBeCloseTo(1);
-    expect(result.widths?.[1]).toBeCloseTo(1.35);
+    expect(result.widths?.[1]).toBeCloseTo(1.8);
   });
 
   it("places a terrain-aware MapLibre marker at the hovered profile position", () => {
