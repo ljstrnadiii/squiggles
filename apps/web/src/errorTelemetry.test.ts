@@ -24,4 +24,10 @@ describe("error telemetry", () => {
     expect(normalized.message.length).toBeLessThanOrEqual(500);
     expect(normalized.stack?.length).toBeLessThanOrEqual(1800);
   });
+
+  it("marks ordinary SQL mistakes as query errors without downgrading runtime failures", () => {
+    expect(errorTelemetryTest.duckdbErrorKind("execute", new Error("Binder Error: column nope not found"))).toBe("query");
+    expect(errorTelemetryTest.duckdbErrorKind("execute", new Error("Out of Memory Error"))).toBe("unexpected");
+    expect(errorTelemetryTest.duckdbErrorKind("renderViewport", new Error("Binder Error"))).toBe("unexpected");
+  });
 });
