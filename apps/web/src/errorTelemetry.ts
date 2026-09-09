@@ -1,9 +1,12 @@
 import { renderingDiagnostics } from "./diagnosticState";
+import { BrowserDuckDBEngine } from "./engine";
 
 type ErrorSource = "window" | "promise" | "duckdb" | "duckdb-worker" | "application";
+type ErrorKind = "unexpected" | "query";
 
 type ErrorContext = {
   source: ErrorSource;
+  kind?: ErrorKind;
   operation?: string;
   requestType?: string;
   schemaVersion?: string;
@@ -35,8 +38,10 @@ const SECRET_PATTERN = /(authorization|bearer|token|secret|password|credential|a
 const URL_PATTERN = /https?:\/\/[^\s)]+/gi;
 const LOCAL_PATH_PATTERN = /(?:file:\/\/)?\/?(?:Users|home)\/[^\s)]+/gi;
 const queue: Array<{ type: string; data: Record<string, unknown> }> = [];
+const reportedObjects = new WeakSet<object>();
 let initialized = false;
 let ready = false;
+let duckdbInstrumented = false;
 
 function sanitize(value: string, limit: number) {
   return value
@@ -84,10 +89,15 @@ function emit(type: string, data: Record<string, unknown>) {
 }
 
 export function reportError(reason: unknown, context: ErrorContext) {
+  if (typeof reason === "object" && reason !== null) {
+    if (reportedObjects.has(reason)) return;
+    reportedObjects.add(reason);
+  }
   const error = normalizeError(reason);
   emit("squiggles_error", {
     error,
     source: context.source,
+    kind: context.kind ?? "unexpected",
     operation: context.operation,
     requestType: context.requestType,
     schemaVersion: context.schemaVersion,
@@ -131,9 +141,38 @@ function installRum(config: TelemetryConfig) {
   document.head.appendChild(script);
 }
 
+function duckdbErrorKind(operation: string, reason: unknown): ErrorKind {
+  if (operation !== "execute") return "unexpected";
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return /(Parser Error|Binder Error|Catalog Error|syntax error)/i.test(message) ? "query" : "unexpected";
+}
+
+function instrumentDuckDB() {
+  if (duckdbInstrumented) return;
+  duckdbInstrumented = true;
+  const methods = ["openDataset", "execute", "renderViewport", "getSummary", "getActivities", "getRouteMetadata", "getActivity"] as const;
+  const prototype = BrowserDuckDBEngine.prototype as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+  for (const operation of methods) {
+    const original = prototype[operation];
+    if (!original) continue;
+    prototype[operation] = function(this: BrowserDuckDBEngine, ...args: unknown[]) {
+      try {
+        return Promise.resolve(original.apply(this, args)).catch(reason => {
+          reportError(reason, { source: "duckdb", operation, requestType: operation, kind: duckdbErrorKind(operation, reason) });
+          throw reason;
+        });
+      } catch (reason) {
+        reportError(reason, { source: "duckdb", operation, requestType: operation, kind: duckdbErrorKind(operation, reason) });
+        throw reason;
+      }
+    };
+  }
+}
+
 export function initErrorTelemetry() {
   if (initialized) return;
   initialized = true;
+  instrumentDuckDB();
   window.addEventListener("error", event => reportError(event.error ?? event.message, { source: "window", operation: "window.error" }));
   window.addEventListener("unhandledrejection", event => reportError(event.reason, { source: "promise", operation: "unhandledrejection" }));
   void fetch("/telemetry-config.json", { cache: "no-store" })
@@ -142,4 +181,4 @@ export function initErrorTelemetry() {
     .catch(() => undefined);
 }
 
-export const errorTelemetryTest = { sanitize, normalizeError };
+export const errorTelemetryTest = { sanitize, normalizeError, duckdbErrorKind };
