@@ -14,7 +14,7 @@ function context() {
 }
 const data: SegmentBatch = {
   endpoints: new Float32Array([-0.1, 0.2, 0.6, 0.2, 0.8, 0.8, 0.9, 0.9]),
-  colors: new Uint8Array(8), owners: new Uint32Array(2), activities: [], segmentCount: 2,
+  colors: new Uint8Array(8), widths: new Float32Array([1, 1]), owners: new Uint32Array(2), activities: [], segmentCount: 2,
 };
 const tile = (x: number, y: number, wrap = 0) => ({ tileID: { canonical: { x, y, z: 1 }, wrap } }) as Parameters<BinaryTerrainLayer["renderToTile"]>[1];
 
@@ -39,10 +39,10 @@ describe("terrain GPU submissions", () => {
     layer.renderToTile(gl, tile(0, 0, 1));
     expect(calls.bufferData).toHaveBeenCalledTimes(uploads);
     layer.setData(data, 4);
-    expect(calls.deleteBuffer).toHaveBeenCalledTimes(2);
+    expect(calls.deleteBuffer).toHaveBeenCalledTimes(3);
     layer.renderToTile(gl, tile(0, 0));
-    expect(calls.bufferData).toHaveBeenCalledTimes(uploads + 2);
+    expect(calls.bufferData).toHaveBeenCalledTimes(uploads + 3);
     layer.onRemove({} as Map, gl);
-    expect(calls.deleteBuffer).toHaveBeenCalledTimes(4);
+    expect(calls.deleteBuffer).toHaveBeenCalledTimes(6);
   });
 });
