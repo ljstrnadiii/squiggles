@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import os
 from contextlib import suppress
 from datetime import UTC, datetime
-import os
 from typing import Any
 
 
