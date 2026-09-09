@@ -1,3 +1,4 @@
+import { normalizeCamera } from "./camera";
 import { authFetch, type AuthSession, type RuntimeConfig } from "./auth";
 import type { QueryTab } from "./contracts";
 import { renderPlanHint } from "./renderPlanHints";
@@ -23,11 +24,7 @@ export async function publishView(
     return {
       ...tab,
       ...(hint ? { startingPlans: hint.plans, startingBounds: hint.bounds } : {}),
-      mapState: {
-        longitude: tab.mapState.longitude,
-        latitude: tab.mapState.latitude,
-        zoom: tab.mapState.zoom,
-      },
+      mapState: normalizeCamera(tab.mapState),
     };
   });
 

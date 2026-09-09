@@ -1423,3 +1423,13 @@ button:disabled {
 .upload-row { display: flex; justify-content: space-between; gap: 1rem; font-size: .85rem; }
 .upload-row strong { color: var(--muted); text-transform: capitalize; }
 .upload-row small { display: block; color: var(--muted); margin-top: .2rem; }
+
+.terrain-profile-marker {
+  width: 18px;
+  height: 18px;
+  border: 3px solid white;
+  border-radius: 50%;
+  background: #476bcc;
+  box-shadow: 0 1px 4px #0008;
+  pointer-events: none;
+}

@@ -15,11 +15,12 @@ export type SegmentBatch = {endpoints: Float32Array; colors: Uint8Array; owners:
 export type TerrainCamera = {view: MapState; bounds: ViewportBounds; size: ViewportSize};
 export type TerrainPick = {activity: RouteMetadata; x: number; y: number};
 type PickingIndex = {cells: Map<number, number[]>; data: SegmentBatch};
-type PointData = {x: number; y: number} | null;
 
+const cartoKey = import.meta.env.VITE_CARTO_API_KEY;
+const cartoQuery = cartoKey ? `?key=${encodeURIComponent(cartoKey)}` : "";
 const rasterStyles: Record<Exclude<Basemap, "blank">, {tiles: string[]; attribution: string; maxzoom: number}> = {
-  "carto-light": {tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20},
-  "carto-dark": {tiles: ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20},
+  "carto-light": {tiles: [`https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png${cartoQuery}`], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20},
+  "carto-dark": {tiles: [`https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png${cartoQuery}`], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20},
   streets: {tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors", maxzoom: 19},
   topo: {tiles: ["https://tile.opentopomap.org/{z}/{x}/{y}.png"], attribution: "Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)", maxzoom: 17},
   imagery: {tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], attribution: "Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community", maxzoom: 19},
@@ -126,34 +127,9 @@ class BinaryTerrainLayer implements TerrainLayer {
   onRemove(_map: maplibregl.Map, gl: WebGL2RenderingContext) { this.gl = null; this.map = null; if (this.endpointBuffer) gl.deleteBuffer(this.endpointBuffer); if (this.colorBuffer) gl.deleteBuffer(this.colorBuffer); if (this.program) gl.deleteProgram(this.program); }
 }
 
-class BinaryTerrainPointLayer implements TerrainLayer {
-  id = "squiggles-binary-terrain-profile-point";
-  type = "custom" as const;
-  renderingMode = "2d" as const;
-  private map: maplibregl.Map | null = null;
-  private program: WebGLProgram | null = null;
-  private point: PointData = null;
-  setPoint(point: PointData) { this.point = point; this.map?.triggerRepaint(); }
-  onAdd(map: maplibregl.Map, gl: WebGL2RenderingContext) {
-    this.map = map;
-    const vs = compile(gl, gl.VERTEX_SHADER, `#version 300 es\nprecision highp float; uniform vec2 u_tile_origin; uniform float u_tile_scale; uniform vec2 u_point; void main(){vec2 p=u_point*u_tile_scale-u_tile_origin; gl_Position=vec4(p.x*2.0-1.0,1.0-p.y*2.0,0.0,1.0); gl_PointSize=14.0;}`);
-    const fs = compile(gl, gl.FRAGMENT_SHADER, `#version 300 es\nprecision highp float; out vec4 fragColor; void main(){vec2 d=gl_PointCoord-vec2(.5); if(length(d)>.5) discard; fragColor=vec4(.15,.42,1.0,1.0);}`);
-    this.program = gl.createProgram()!; gl.attachShader(this.program, vs); gl.attachShader(this.program, fs); gl.linkProgram(this.program); gl.deleteShader(vs); gl.deleteShader(fs);
-    if (!gl.getProgramParameter(this.program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(this.program) ?? "program link failed");
-  }
-  render() {}
-  renderToTile(gl: WebGL2RenderingContext, options: TerrainInput) {
-    if (!this.program || !this.point || !options.tileID) return;
-    const tile = options.tileID, scale = 2 ** tile.canonical.z, ox = tile.canonical.x + (tile.wrap ?? 0) * scale;
-    gl.useProgram(this.program); gl.uniform2f(gl.getUniformLocation(this.program, "u_tile_origin"), ox, tile.canonical.y); gl.uniform1f(gl.getUniformLocation(this.program, "u_tile_scale"), scale); gl.uniform2f(gl.getUniformLocation(this.program, "u_point"), this.point.x, this.point.y);
-    gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.drawArrays(gl.POINTS, 0, 1);
-  }
-  onRemove(_map: maplibregl.Map, gl: WebGL2RenderingContext) { this.map = null; if (this.program) gl.deleteProgram(this.program); }
-}
-
 function cameraSnapshot(map: maplibregl.Map): TerrainCamera {
   const center = map.getCenter(), bounds = map.getBounds(), canvas = map.getCanvas();
-  return {view: {longitude: center.lng, latitude: center.lat, zoom: map.getZoom()}, bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()], size: {width: canvas.clientWidth, height: canvas.clientHeight}};
+  return {view: {longitude: center.lng, latitude: center.lat, zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing()}, bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()], size: {width: canvas.clientWidth, height: canvas.clientHeight}};
 }
 
 function cellKey(x: number, y: number) { return y * PICK_GRID_SCALE + x; }
@@ -188,7 +164,7 @@ function pick(index: PickingIndex, map: maplibregl.Map, lng: number, lat: number
 export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batches, colors, widthPx, profilePosition, highlightActivityId, isolateActivityId, onView, onInteraction, onHover, onClick, onBackgroundClick}: {
   view: MapState; basemap: Basemap; dark: boolean; exaggeration: number; batches: BinaryRouteBatch[]; colors: Uint8Array[]; widthPx: number; profilePosition?: [number, number]; highlightActivityId?: string; isolateActivityId?: string; onView: (camera: TerrainCamera) => void; onInteraction: (active: boolean) => void; onHover?: (pick: TerrainPick | null) => void; onClick?: (activity: RouteMetadata) => void; onBackgroundClick?: () => void;
 }) {
-  const container = useRef<HTMLDivElement>(null), mapRef = useRef<maplibregl.Map | null>(null), layerRef = useRef<BinaryTerrainLayer | null>(null), highlightLayerRef = useRef<BinaryTerrainLayer | null>(null), pointLayerRef = useRef<BinaryTerrainPointLayer | null>(null), indexRef = useRef<PickingIndex | null>(null);
+  const container = useRef<HTMLDivElement>(null), mapRef = useRef<maplibregl.Map | null>(null), layerRef = useRef<BinaryTerrainLayer | null>(null), highlightLayerRef = useRef<BinaryTerrainLayer | null>(null), profileMarkerRef = useRef<maplibregl.Marker | null>(null), indexRef = useRef<PickingIndex | null>(null);
   const callbacks = useRef({onView, onInteraction, onHover, onClick, onBackgroundClick}); callbacks.current = {onView, onInteraction, onHover, onClick, onBackgroundClick};
   const exaggerationRef = useRef(exaggeration); exaggerationRef.current = exaggeration;
   const data = useMemo(() => terrainSegmentBatch(batches, colors, isolateActivityId), [batches, colors, isolateActivityId]);
@@ -198,11 +174,11 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
 
   useEffect(() => {
     if (!container.current) return;
-    const map = new maplibregl.Map({container: container.current, style: terrainStyle(basemap, dark, exaggerationRef.current), center: [view.longitude, view.latitude], zoom: view.zoom, pitch: 60, bearing: -20, maxPitch: 85, attributionControl: {compact: true}, canvasContextAttributes: {antialias: true}});
+    const map = new maplibregl.Map({container: container.current, style: terrainStyle(basemap, dark, exaggerationRef.current), center: [view.longitude, view.latitude], zoom: view.zoom, pitch: view.pitch, bearing: view.bearing, maxPitch: 85, attributionControl: {compact: true}, canvasContextAttributes: {antialias: true}});
     mapRef.current = map;
-    const layer = new BinaryTerrainLayer(), highlightLayer = new BinaryTerrainLayer("squiggles-binary-terrain-highlight"), pointLayer = new BinaryTerrainPointLayer();
-    layer.setData(data, widthPx); highlightLayer.setData(highlightData ?? {...data, segmentCount: 0}, widthPx * 1.8); layerRef.current = layer; highlightLayerRef.current = highlightLayer; pointLayerRef.current = pointLayer;
-    const addLayers = () => { if (!map.getLayer(layer.id)) map.addLayer(layer as maplibregl.CustomLayerInterface); if (!map.getLayer(highlightLayer.id)) map.addLayer(highlightLayer as maplibregl.CustomLayerInterface); if (!map.getLayer(pointLayer.id)) map.addLayer(pointLayer as maplibregl.CustomLayerInterface); };
+    const layer = new BinaryTerrainLayer(), highlightLayer = new BinaryTerrainLayer("squiggles-binary-terrain-highlight");
+    layer.setData(data, widthPx); highlightLayer.setData(highlightData ?? {...data, segmentCount: 0}, widthPx * 1.8); layerRef.current = layer; highlightLayerRef.current = highlightLayer;
+    const addLayers = () => { if (!map.getLayer(layer.id)) map.addLayer(layer as maplibregl.CustomLayerInterface); if (!map.getLayer(highlightLayer.id)) map.addLayer(highlightLayer as maplibregl.CustomLayerInterface); };
     const load = () => { addLayers(); callbacks.current.onView(cameraSnapshot(map)); };
     map.on("load", load); map.on("style.load", addLayers);
     const start = () => callbacks.current.onInteraction(true), end = () => { callbacks.current.onInteraction(false); callbacks.current.onView(cameraSnapshot(map)); };
@@ -213,14 +189,14 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
     const leave = () => { pending = null; if (frame) cancelAnimationFrame(frame); frame = 0; map.getCanvas().style.cursor = ""; callbacks.current.onHover?.(null); };
     const click = (event: maplibregl.MapMouseEvent) => { const value = indexRef.current ? pick(indexRef.current, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y) : null; if (value) callbacks.current.onClick?.(value.activity); else callbacks.current.onBackgroundClick?.(); };
     map.on("mousemove", move); map.on("mouseout", leave); map.on("click", click);
-    return () => { if (frame) cancelAnimationFrame(frame); map.remove(); mapRef.current = null; layerRef.current = null; highlightLayerRef.current = null; pointLayerRef.current = null; };
+    return () => { if (frame) cancelAnimationFrame(frame); profileMarkerRef.current?.remove(); profileMarkerRef.current = null; map.remove(); mapRef.current = null; layerRef.current = null; highlightLayerRef.current = null; };
   // Initial map construction intentionally happens only once; prop updates are applied by effects below.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => { layerRef.current?.setData(data, widthPx); }, [data, widthPx]);
   useEffect(() => { highlightLayerRef.current?.setData(highlightData ?? {...data, segmentCount: 0}, widthPx * 1.8); }, [data, highlightData, widthPx]);
-  useEffect(() => { const map = mapRef.current; if (!map) return; const center = map.getCenter(); if (Math.abs(center.lng - view.longitude) > 1e-7 || Math.abs(center.lat - view.latitude) > 1e-7 || Math.abs(map.getZoom() - view.zoom) > 1e-4) map.jumpTo({center: [view.longitude, view.latitude], zoom: view.zoom}); }, [view]);
+  useEffect(() => { const map = mapRef.current; if (!map) return; const center = map.getCenter(); if (Math.abs(center.lng - view.longitude) > 1e-7 || Math.abs(center.lat - view.latitude) > 1e-7 || Math.abs(map.getZoom() - view.zoom) > 1e-4 || Math.abs(map.getPitch() - view.pitch) > 1e-4 || Math.abs(map.getBearing() - view.bearing) > 1e-4) map.jumpTo({center: [view.longitude, view.latitude], zoom: view.zoom, pitch: view.pitch, bearing: view.bearing}); }, [view]);
   useEffect(() => { const map = mapRef.current; if (map) map.setStyle(terrainStyle(basemap, dark, exaggerationRef.current)); }, [basemap, dark]);
   useEffect(() => {
     const map = mapRef.current;
@@ -230,7 +206,25 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
     map.on("style.load", updateTerrain);
     return () => { map.off("style.load", updateTerrain); };
   }, [exaggeration]);
-  useEffect(() => { if (!profilePosition) { pointLayerRef.current?.setPoint(null); return; } const [x, y] = mercator(profilePosition[0], profilePosition[1]); pointLayerRef.current?.setPoint({x, y}); }, [profilePosition]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!profilePosition) {
+      profileMarkerRef.current?.remove();
+      profileMarkerRef.current = null;
+      return;
+    }
+    if (!profileMarkerRef.current) {
+      const element = document.createElement("div");
+      element.className = "terrain-profile-marker";
+      element.setAttribute("role", "img");
+      element.setAttribute("aria-label", "Elevation profile position");
+      profileMarkerRef.current = new maplibregl.Marker({ element, anchor: "center", opacityWhenCovered: 0, subpixelPositioning: true })
+        .setLngLat(profilePosition).addTo(map);
+    } else {
+      profileMarkerRef.current.setLngLat(profilePosition);
+    }
+  }, [profilePosition]);
 
   return <div className="maplibre-base" ref={container}/>;
 }

@@ -1,3 +1,4 @@
+import { normalizeCamera } from "./camera";
 import type { Basemap, QueryTab } from "./contracts";
 
 const KEY = "activity-map.tabs.v1";
@@ -15,7 +16,7 @@ export const defaultTab: QueryTab = {
   id: "all",
   title: "All Activities",
   sql: "SELECT activity_id FROM activities",
-  mapState: { longitude: -105, latitude: 39, zoom: 5 },
+  mapState: { longitude: -105, latitude: 39, zoom: 5, pitch: 0, bearing: 0 },
   style: defaultStyle,
 };
 
@@ -48,7 +49,7 @@ export function normalizeTab(tab: QueryTab & { style: QueryTab["style"] & { line
   };
   return {
     ...tab,
-    mapState: { longitude: tab.mapState.longitude, latitude: tab.mapState.latitude, zoom: tab.mapState.zoom },
+    mapState: normalizeCamera(tab.mapState, style.viewMode === "3d" ? 60 : 0),
     style: { ...style, color: normalizeRouteColor(style.color) },
   };
 }
