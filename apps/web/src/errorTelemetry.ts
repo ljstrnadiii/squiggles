@@ -118,7 +118,7 @@ function flush() {
 }
 
 function installRum(config: TelemetryConfig) {
-  const clientUrl = config.clientUrl ?? "https://client.rum.us-east-1.amazonaws.com/1.0.2/cwr.js";
+  const clientUrl = config.clientUrl ?? "https://client.rum.us-east-1.amazonaws.com/3.2.1/cwr.js";
   const rumConfig = {
     sessionSampleRate: 1,
     identityPoolId: config.identityPoolId,
