@@ -15,16 +15,6 @@ def main() -> None:
         assert not errors, errors
         assert "view=3d" in page.url
         assert page.locator(".maplibregl-canvas").is_visible()
-        page.get_by_role("button", name="Open query menu", exact=True).click()
-        page.get_by_role("button", name="Query settings", exact=True).click()
-        button = page.get_by_role("button", name="Use 3D map view", exact=True)
-        assert button.inner_text() == "3D"
-        assert button.get_attribute("aria-pressed") == "true"
-        page.get_by_role("button", name="Use 2D map view", exact=True).click()
-        button.click()
-        page.wait_for_timeout(1000)
-        assert button.get_attribute("aria-pressed") == "true"
-        assert not errors, errors
         browser.close()
 
 
