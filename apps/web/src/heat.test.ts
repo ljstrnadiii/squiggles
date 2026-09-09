@@ -4,7 +4,7 @@ import type { BinaryRouteBatch, MapState, RouteActivity } from "./contracts";
 import { buildBinaryHeatData, buildBinaryHeatDataCooperative, buildHeatData, colorForWeight } from "./heat";
 
 const route = (activityId: string, path: [number, number][]): RouteActivity => ({ activityId, path, fullPath: path, name: activityId, sportType: "Run", startTime: null, distanceM: null, elevationGainM: null, maxElevationM: null, sourceUrl: null, elevationProfile: [] });
-const camera = (longitude: number, latitude: number, zoom: number): MapState => ({ longitude, latitude, zoom });
+const camera = (longitude: number, latitude: number, zoom: number): MapState => ({ longitude, latitude, zoom, pitch: 0, bearing: 0 });
 
 describe("buildHeatData", () => {
   it("normalizes cross-activity overlap by each route's visible vertices", () => {

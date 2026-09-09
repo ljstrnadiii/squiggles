@@ -1,16 +1,18 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const engineCalls = vi.hoisted(() => ({ execute: vi.fn(), getSummary: vi.fn() }));
+const engineCalls = vi.hoisted(() => ({ execute: vi.fn(), getSummary: vi.fn(), mapOptions: vi.fn() }));
 
 vi.mock("maplibre-gl", () => ({ Map: class {
-  constructor(private camera: { center: [number, number]; zoom: number }) {}
+  constructor(private camera: { center: [number, number]; zoom: number; pitch?: number; bearing?: number }) { engineCalls.mapOptions(camera); }
   handlers = new Map<string, ((...args: unknown[]) => void)[]>();
   on(name: string, handler: (...args: unknown[]) => void) { this.handlers.set(name, [...(this.handlers.get(name) ?? []), handler]); if (name === "load") handler(); return this; }
   getCenter() { return { lng: this.camera.center[0], lat: this.camera.center[1] }; }
   getBounds() { return { getWest: () => -107, getSouth: () => 38, getEast: () => -105, getNorth: () => 41 }; }
   getCanvas() { return { clientWidth: 1200, clientHeight: 800, style: { cursor: "" } }; }
   getZoom() { return this.camera.zoom; }
+  getPitch() { return this.camera.pitch ?? 0; }
+  getBearing() { return this.camera.bearing ?? 0; }
   getLayer() { return undefined; }
   addLayer() {}
   jumpTo(camera: { center: [number, number]; zoom: number }) { this.camera = camera; }
@@ -38,7 +40,7 @@ vi.mock("./engine", () => ({
   },
 }));
 
-afterEach(() => { cleanup(); localStorage.clear(); engineCalls.execute.mockClear(); engineCalls.getSummary.mockClear(); });
+afterEach(() => { cleanup(); localStorage.clear(); engineCalls.execute.mockClear(); engineCalls.getSummary.mockClear(); engineCalls.mapOptions.mockClear(); });
 import { App } from "./App";
 
 describe("App", () => {
@@ -209,6 +211,7 @@ describe("App", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Basemap" }), { target: { value: "topo" } });
     await waitFor(() => expect(new URL(window.location.href).searchParams.get("basemap")).toBe("topo"));
     expect(new URL(window.location.href).searchParams.get("view")).toBe("3d");
+    expect(engineCalls.mapOptions).toHaveBeenLastCalledWith(expect.objectContaining({ pitch: 47, bearing: 31.5 }));
     expect(new URL(window.location.href).searchParams.get("lng")).toBe("-106.25000");
   });
 

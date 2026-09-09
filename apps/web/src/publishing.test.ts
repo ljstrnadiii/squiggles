@@ -16,10 +16,11 @@ describe("published maps", () => {
         status: 200,
       }),
     );
+    const terrainTab = { ...defaultTab, mapState: { ...defaultTab.mapState, pitch: 47, bearing: -31 }, style: { ...defaultTab.style, viewMode: "3d" as const } };
     const result = await publishView(
       { apiUrl: "https://api.example.com", cognitoDomain: "", cognitoClientId: "" },
       { accessToken: "access", idToken: "id" },
-      [defaultTab],
+      [terrainTab],
       "all",
       null,
     );
@@ -27,7 +28,7 @@ describe("published maps", () => {
     expect(JSON.parse(String(request.body))).toMatchObject({ active: "all", datasetId: null });
     expect(String(request.body)).not.toContain("theme");
     expect(String(request.body)).not.toContain("units");
-    expect(JSON.parse(String(request.body)).tabs[0].mapState).toEqual(defaultTab.mapState);
+    expect(JSON.parse(String(request.body)).tabs[0].mapState).toEqual(terrainTab.mapState);
     expect(result.url).toBe("/p/abcd1234");
   });
 
@@ -63,6 +64,8 @@ describe("published maps", () => {
       ...defaultTab,
       mapState: {
         ...defaultTab.mapState,
+        pitch: 47,
+        bearing: -31,
         width: 1440,
         maxBounds: [
           [null, -90],
@@ -87,6 +90,6 @@ describe("published maps", () => {
       "abcd1234",
     );
     expect(published.active).toBe("all");
-    expect(published.tabs[0].mapState).toEqual(defaultTab.mapState);
+    expect(published.tabs[0].mapState).toEqual({ ...defaultTab.mapState, pitch: 47, bearing: -31 });
   });
 });

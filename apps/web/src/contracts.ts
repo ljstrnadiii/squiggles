@@ -1,4 +1,4 @@
-export type MapState = { longitude: number; latitude: number; zoom: number };
+export type MapState = { longitude: number; latitude: number; zoom: number; pitch: number; bearing: number };
 export type Basemap = "carto-light" | "carto-dark" | "streets" | "topo" | "imagery" | "blank";
 export type MapViewMode = "2d" | "3d";
 export type HeatPalette = "sunset" | "viridis" | "fire" | "ice";

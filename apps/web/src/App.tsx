@@ -1,3 +1,5 @@
+import { usePitchGesture } from "./usePitchGesture";
+import { normalizeCamera } from "./camera";
 import { WebMercatorViewport, type PickingInfo } from "@deck.gl/core";
 import { PathLayer, ScatterplotLayer } from "@deck.gl/layers";
 import DeckGL from "@deck.gl/react";
@@ -22,9 +24,11 @@ import { loadPublishedView, publishView } from "./publishing";
 import { loadSystemResolution, saveSystemResolution } from "./resolution";
 
 const blankStyle: maplibregl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
+const cartoKey = import.meta.env.VITE_CARTO_API_KEY;
+const cartoQuery = cartoKey ? `?key=${encodeURIComponent(cartoKey)}` : "";
 const rasterStyles: Record<Exclude<Basemap, "blank">, { tiles: string[]; attribution: string; maxzoom: number }> = {
-  "carto-light": { tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
-  "carto-dark": { tiles: ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
+  "carto-light": { tiles: [`https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png${cartoQuery}`], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
+  "carto-dark": { tiles: [`https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png${cartoQuery}`], attribution: "© OpenStreetMap contributors © CARTO", maxzoom: 20 },
   streets: { tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], attribution: "© OpenStreetMap contributors", maxzoom: 19 },
   topo: { tiles: ["https://tile.opentopomap.org/{z}/{x}/{y}.png"], attribution: "Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)", maxzoom: 17 },
   imagery: { tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], attribution: "Sources: Esri, Maxar, Earthstar Geographics, and the GIS User Community", maxzoom: 19 },
@@ -53,6 +57,8 @@ function tabsWithUrlSettings(tabs: QueryTab[]) {
   const longitude = finiteParameter(parameters, "lng", -180, 180);
   const latitude = finiteParameter(parameters, "lat", -85, 85);
   const zoom = finiteParameter(parameters, "zoom", 0, 24);
+  const pitch = finiteParameter(parameters, "pitch", 0, 85);
+  const bearing = finiteParameter(parameters, "bearing", -180, 180);
   const basemap = parameters.get("basemap");
   const palette = parameters.get("palette");
   const temperature = finiteParameter(parameters, "temperature", 0.5, 3);
@@ -63,7 +69,12 @@ function tabsWithUrlSettings(tabs: QueryTab[]) {
   const color = parameters.get("color");
   const next: QueryTab = {
     ...target,
-    mapState: longitude === undefined || latitude === undefined || zoom === undefined ? target.mapState : { longitude, latitude, zoom },
+    mapState: normalizeCamera({
+      ...target.mapState,
+      ...(longitude === undefined || latitude === undefined || zoom === undefined ? {} : { longitude, latitude, zoom }),
+      ...(pitch === undefined ? ((requestedView === "3d" || legacyTerrain) && target.style.viewMode !== "3d" ? { pitch: 60 } : {}) : { pitch }),
+      ...(bearing === undefined ? {} : { bearing }),
+    }),
     style: {
       ...target.style,
       ...(basemap && basemaps.has(basemap as Basemap) ? { basemap: basemap as Basemap } : {}),
@@ -102,6 +113,8 @@ function replaceUrlSettings(tab: QueryTab, view: MapState, units: UnitSystem) {
   url.searchParams.set("lng", view.longitude.toFixed(5));
   url.searchParams.set("lat", view.latitude.toFixed(5));
   url.searchParams.set("zoom", view.zoom.toFixed(2));
+  url.searchParams.set("pitch", view.pitch.toFixed(2));
+  url.searchParams.set("bearing", view.bearing.toFixed(2));
   url.searchParams.set("basemap", tab.style.basemap);
   url.searchParams.set("view", tab.style.viewMode);
   url.searchParams.set("exaggeration", tab.style.terrainExaggeration.toFixed(2));
@@ -137,7 +150,7 @@ function viewportInsets(element: HTMLElement | null): ViewportInsets {
 function fitBounds([xmin, ymin, xmax, ymax]: [number, number, number, number], maximumZoom = 12, element: HTMLElement | null = null): MapState {
   if (!element?.clientWidth || !element.clientHeight) {
     const span = Math.max(xmax - xmin, (ymax - ymin) * 1.6, 0.001);
-    return { longitude: (xmin + xmax) / 2, latitude: (ymin + ymax) / 2, zoom: Math.max(1, Math.min(maximumZoom, Math.log2(360 / span) - 0.8)) };
+    return { longitude: (xmin + xmax) / 2, latitude: (ymin + ymax) / 2, zoom: Math.max(1, Math.min(maximumZoom, Math.log2(360 / span) - 0.8)), pitch: 0, bearing: 0 };
   }
   const occupied = viewportInsets(element);
   const viewport = new WebMercatorViewport({ width: element.clientWidth, height: element.clientHeight });
@@ -145,7 +158,7 @@ function fitBounds([xmin, ymin, xmax, ymax]: [number, number, number, number], m
     maxZoom: maximumZoom,
     padding: { top: 24 + occupied.top, right: 24 + occupied.right, bottom: 24 + occupied.bottom, left: 24 + occupied.left },
   });
-  return { longitude: fitted.longitude, latitude: fitted.latitude, zoom: fitted.zoom };
+  return { longitude: fitted.longitude, latitude: fitted.latitude, zoom: fitted.zoom, pitch: 0, bearing: 0 };
 }
 
 type TableSort = "name" | "sport" | "date" | "distance" | "gain" | "maximum";
@@ -375,7 +388,7 @@ export function App() {
       setBusy(true); setError(""); setStatus("Reading dataset manifest…");
       const dataset = await engine.openDataset(source, (completed, total) => setStatus(`Opening dataset · ${completed.toLocaleString()} / ${total.toLocaleString()} files`));
       ready.current = true; setDatasetName(dataset.name);
-      const initialView = requestedView ?? fitBounds(dataset.manifest.bbox);
+      const initialView = requestedView ?? { ...fitBounds(dataset.manifest.bbox), pitch: initialTab.mapState.pitch, bearing: initialTab.mapState.bearing };
       setView(initialView);
       setStatus("Running initial query…"); await run(initialTab, initialView, initialTab.sql);
     } catch (reason) {
@@ -504,13 +517,19 @@ export function App() {
     const updated = tabs.filter(item => item.id !== tab.id); setTabs(updated); saveTabs(updated); choose(updated[0]);
   }
   function rename(title: string) { const updated = tabs.map(item => item.id === tab.id ? { ...item, title } : item); setTabs(updated); saveTabs(updated); }
-  function changeStyle(style: Partial<QueryTab["style"]>) {
-    const nextTab = { ...tab, style: { ...tab.style, ...style } };
+  function changeStyle(style: Partial<QueryTab["style"]>, requestedView?: MapState) {
+    const nextView = requestedView ?? (style.viewMode === "3d" && tab.style.viewMode !== "3d" && view.pitch === 0 ? { ...view, pitch: 60 } : view);
+    const nextTab = { ...tab, mapState: nextView, style: { ...tab.style, ...style } };
+    if (nextView !== view) setView(nextView);
     const updated = tabs.map(item => item.id === tab.id ? nextTab : item);
     setTabs(updated); saveTabs(updated);
-    if (style.viewMode !== undefined && style.viewMode !== tab.style.viewMode) { setTerrainCamera(null); setMapInteracting(false); replaceUrlSettings(nextTab, view, units); }
+    if (style.viewMode !== undefined && style.viewMode !== tab.style.viewMode) { setTerrainCamera(null); setMapInteracting(false); replaceUrlSettings(nextTab, nextView, units); }
     if (style.cleanEnabled !== undefined && style.cleanEnabled !== tab.style.cleanEnabled && ready.current) void run(nextTab, view, tab.sql);
   }
+  const pitchGesture = usePitchGesture(!terrainEnabled && !spatialDrawing, view, nextView => {
+    setView(nextView);
+    if (!terrainEnabled) changeStyle({ viewMode: "3d" }, nextView);
+  });
   function saveSpatialFilter(spatialFilter: QueryTab["spatialFilter"], rerun: boolean) {
     const nextTab = { ...tab, spatialFilter };
     const updated = tabs.map(item => item.id === tab.id ? nextTab : item);
@@ -548,7 +567,7 @@ export function App() {
   }, [engine]);
   async function openTableActivity(activity: ActivityListItem) {
     setTableOpen(false); setSelected(null); setProfileHover(null);
-    setView(fitBounds(activity.bounds, 16, mapElement.current));
+    setView({ ...fitBounds(activity.bounds, 16, mapElement.current), pitch: view.pitch, bearing: view.bearing });
     try {
       const detail = await engine.getActivity(activity.activityId);
       if (detail) setSelected(detail);
@@ -560,7 +579,7 @@ export function App() {
     if (!selected?.fullPath.length) return;
     const longitudes = selected.fullPath.map(point => point[0]);
     const latitudes = selected.fullPath.map(point => point[1]);
-    setView(fitBounds([Math.min(...longitudes), Math.min(...latitudes), Math.max(...longitudes), Math.max(...latitudes)], 16, mapElement.current));
+    setView({ ...fitBounds([Math.min(...longitudes), Math.min(...latitudes), Math.max(...longitudes), Math.max(...latitudes)], 16, mapElement.current), pitch: view.pitch, bearing: view.bearing });
   }
   async function copySchema() {
     await navigator.clipboard.writeText(QUERY_SCHEMA);
@@ -708,7 +727,7 @@ export function App() {
       <header className="toolbar-header"><div><span className="eyebrow">QUERY TAB</span><input aria-label="Tab title" className="rename" title="Name this saved query tab" value={tab.title} onChange={event => rename(event.target.value)} /></div><button aria-label="Close query settings" onClick={() => setToolbarOpen(false)}>×</button></header>
       <section className="toolbar-section"><h3>Map</h3><div className="settings-grid">
         <label data-tooltip="Choose a subdued CARTO map for maximum route contrast, or switch to streets, topographic, imagery, or offline.">Basemap<select className="basemap-select" aria-label="Basemap" value={tab.style.basemap} onChange={event => changeStyle({ basemap: event.target.value as Basemap })}><option value="carto-light">CARTO Light</option><option value="carto-dark">CARTO Dark</option><option value="streets">Streets</option><option value="topo">Topographic</option><option value="imagery">Imagery</option><option value="blank">Blank / offline</option></select></label>
-        <label data-tooltip="Use the normal flat map or drape routes over MapLibre terrain."><span>View</span><div className="unit-control" role="group" aria-label="Map view"><button type="button" aria-label="Use 2D map view" aria-pressed={tab.style.viewMode === "2d"} onClick={() => changeStyle({ viewMode: "2d" })}>2D</button><button type="button" aria-label="Use 3D map view" aria-pressed={tab.style.viewMode === "3d"} onClick={() => changeStyle({ viewMode: "3d" })}>3D</button></div></label>
+        <label data-tooltip="Use the normal flat map or drape routes over MapLibre terrain. Ctrl-drag the map to enter 3D."><span>View</span><div className="unit-control" role="group" aria-label="Map view"><button type="button" aria-label="Use 2D map view" aria-pressed={tab.style.viewMode === "2d"} onClick={() => changeStyle({ viewMode: "2d" })}>2D</button><button type="button" aria-label="Use 3D map view" aria-pressed={tab.style.viewMode === "3d"} onClick={() => changeStyle({ viewMode: "3d" })}>3D</button></div></label>
         {terrainEnabled && <label className="temperature" data-tooltip="Scale terrain relief without changing route geometry."><span>Terrain</span><input aria-label="Terrain exaggeration" type="range" min="0.25" max="3" step="0.05" value={tab.style.terrainExaggeration} onChange={event => changeStyle({ terrainExaggeration: Number(event.target.value) })} /><output>{tab.style.terrainExaggeration.toFixed(2)}×</output></label>}
         <label data-tooltip="Choose the base route and hover-highlight color.">Route color<input aria-label="Route color" type="color" value={tab.style.color} onChange={event => changeStyle({ color: event.target.value })} /></label>
         <label className="temperature" data-tooltip="Multiply a route width equal to 0.15% of the map's shorter dimension. The width stays visually consistent at every zoom."><span>Thickness</span><input aria-label="Route thickness" type="range" min="0.25" max="4" step="0.05" value={tab.style.lineWidthScale} onChange={event => changeStyle({ lineWidthScale: Number(event.target.value) })} /><output>{tab.style.lineWidthScale.toFixed(2)}×</output></label>
@@ -725,7 +744,7 @@ export function App() {
     </section>}
     {error && <div className="error global-error" role="alert"><strong>Something needs attention</strong><span>{error}</span><button className="error-close" aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
 
-    <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement}>
+    <section className={`map ${spatialDrawing ? "spatial-drawing" : ""}`} ref={mapElement} {...pitchGesture}>
       {terrainEnabled && !spatialDrawing ? <MapLibreTerrainRoutes
         view={view}
         basemap={tab.style.basemap}
@@ -751,7 +770,7 @@ export function App() {
         <DeckGL controller={spatialDrawing ? false : { dragRotate: false, touchRotate: false }} layers={layers} viewState={{ ...view, bearing: 0, pitch: 0 }} onInteractionStateChange={interactionState => setMapInteracting(Boolean(interactionState.isDragging || interactionState.isPanning || interactionState.isZooming))} onViewStateChange={({ viewState, interactionState }) => {
           if (!interactionState.isDragging && !interactionState.isPanning && !interactionState.isZooming) return;
           const next = viewState as MapState;
-          setView({ longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });
+          setView({ ...view, longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });
         }} onClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) { const longitude = coordinate[0], latitude = coordinate[1]; if (longitude !== undefined && latitude !== undefined) setSpatialDraft(previous => [...previous, [longitude, latitude]]); } return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />
       </>}
       {spatialDrawing && <><div className="spatial-draw-tools" role="group" aria-label="Polygon drawing controls"><button aria-label="Undo last polygon vertex" title="Undo last point" disabled={spatialDraft.length === 0} onClick={() => setSpatialDraft(previous => previous.slice(0, -1))}>↶</button><button className="accept" aria-label="Accept polygon" title="Accept polygon" disabled={spatialDraft.length < 3} onClick={acceptSpatialDraw}>✓</button></div><div className="spatial-draw-hint">Tap the map to add polygon vertices · ↶ undo · ✓ apply</div></>}

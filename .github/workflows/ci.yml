@@ -73,6 +73,7 @@ jobs:
       - run: pnpm test
       - run: pnpm typecheck
       - run: pnpm build
+      - run: node scripts/check_maplibre_worker.mjs
       - run: pnpm --filter @squiggles/aws build
       - run: docker build -f Dockerfile.ingest -t squiggles-ingest:test .
 
