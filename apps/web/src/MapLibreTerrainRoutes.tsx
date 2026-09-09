@@ -84,11 +84,22 @@ export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Ar
   if (highlight && (!onlyActivityId || onlyActivityId === highlight.activity.activityId)) {
     const owner = activities.length;
     activities.push(highlight.activity);
+    const fallbackColor = (() => {
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        for (let route = 0; route < batch.segmentActivityIndices.length; route++) {
+          if (batch.activities[batch.segmentActivityIndices[route]]?.activityId !== highlight.activity.activityId) continue;
+          const point = batch.startIndices[route];
+          return colors[batchIndex].subarray(point * 4, point * 4 + 4);
+        }
+      }
+      return new Uint8Array([255, 255, 255, 255]);
+    })();
     for (let point = 0; point + 1 < highlight.path.length; point += 1) {
       const [x0, y0] = mercator(...highlight.path[point]);
       const [x1, y1] = mercator(...highlight.path[point + 1]);
       endpoints.set([x0, y0, x1, y1], segment * 4);
-      segmentColors.set([255, 255, 255, 255], segment * 4);
+      segmentColors.set(fallbackColor, segment * 4);
       widths[segment] = 1.35;
       owners[segment] = owner;
       segment += 1;
@@ -142,9 +153,9 @@ export class BinaryTerrainLayer implements TerrainLayer {
     if (!buffers) {
       const margin = this.widthPx / RTT_SIZE / scale;
       const ids = this.spatial.query([ox / scale - margin, tile.canonical.y / scale - margin, (ox + 1) / scale + margin, (tile.canonical.y + 1) / scale + margin]);
-        const endpoints = new Float32Array(ids.length * 4), colors = new Uint8Array(ids.length * 4), widths = new Float32Array(ids.length);
-        ids.forEach((id, i) => { endpoints.set(this.pending.endpoints.subarray(id * 4, id * 4 + 4), i * 4); colors.set(this.pending.colors.subarray(id * 4, id * 4 + 4), i * 4); widths[i] = this.pending.widths?.[id] ?? 1; });
-        const bytes = endpoints.byteLength + colors.byteLength + widths.byteLength;
+      const endpoints = new Float32Array(ids.length * 4), colors = new Uint8Array(ids.length * 4), widths = new Float32Array(ids.length);
+      ids.forEach((id, i) => { endpoints.set(this.pending.endpoints.subarray(id * 4, id * 4 + 4), i * 4); colors.set(this.pending.colors.subarray(id * 4, id * 4 + 4), i * 4); widths[i] = this.pending.widths?.[id] ?? 1; });
+      const bytes = endpoints.byteLength + colors.byteLength + widths.byteLength;
       while (this.tileBytes + bytes > 32 * 1024 ** 2 && this.tiles.size) {
         const [oldKey, old] = this.tiles.entries().next().value!;
         gl.deleteBuffer(old.endpoints); gl.deleteBuffer(old.colors); gl.deleteBuffer(old.widths); this.tiles.delete(oldKey); this.tileBytes -= old.bytes;
@@ -209,20 +220,7 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
   const callbacks = useRef({onDiagnostics, onView, onInteraction, onHover, onClick, onBackgroundClick}); callbacks.current = {onDiagnostics, onView, onInteraction, onHover, onClick, onBackgroundClick};
   const detailRef = useRef({ imageryDetail, terrainDetail }); detailRef.current = { imageryDetail, terrainDetail };
   const exaggerationRef = useRef(exaggeration); exaggerationRef.current = exaggeration;
-  const displayColors = useMemo(() => {
-    if (!highlightActivityId) return colors;
-    return batches.map((batch, batchIndex) => {
-      const highlighted = colors[batchIndex].slice();
-      for (let route = 0; route < batch.segmentActivityIndices.length; route++) {
-        const activity = batch.activities[batch.segmentActivityIndices[route]];
-        if (activity?.activityId !== highlightActivityId) continue;
-        const start = batch.startIndices[route], end = batch.startIndices[route + 1];
-        for (let point = start; point < end; point++) highlighted.set([255, 255, 255, 255], point * 4);
-      }
-      return highlighted;
-    });
-  }, [batches, colors, highlightActivityId]);
-  const data = useMemo(() => terrainSegmentBatch(batches, displayColors, isolateActivityId, highlightActivityId), [batches, displayColors, highlightActivityId, isolateActivityId]);
+  const data = useMemo(() => terrainSegmentBatch(batches, colors, isolateActivityId, highlightActivityId), [batches, colors, highlightActivityId, isolateActivityId]);
   const index = useMemo(() => pickingIndex(data), [data]); indexRef.current = index;
 
   useEffect(() => {
@@ -239,12 +237,14 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
     const load = () => { addLayers(); callbacks.current.onView(cameraSnapshot(map)); };
     map.on("idle", () => callbacks.current.onDiagnostics?.(layer.diagnostics()));
     map.on("load", load); map.on("style.load", addLayers);
-    const start = () => callbacks.current.onInteraction(true), end = () => { callbacks.current.onInteraction(false); callbacks.current.onView(cameraSnapshot(map)); };
-    map.on("movestart", start); map.on("moveend", end);
     let frame = 0, pending: maplibregl.MapMouseEvent | null = null;
-    const flushHover = () => { frame = 0; const event = pending; pending = null; if (!event) return; const value = indexRef.current ? pick(indexRef.current, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y) : null; map.getCanvas().style.cursor = value ? "pointer" : ""; callbacks.current.onHover?.(value); };
-    const move = (event: maplibregl.MapMouseEvent) => { pending = event; if (!frame) frame = requestAnimationFrame(flushHover); };
-    const leave = () => { pending = null; if (frame) cancelAnimationFrame(frame); frame = 0; map.getCanvas().style.cursor = ""; callbacks.current.onHover?.(null); };
+    const clearHover = () => { pending = null; if (frame) cancelAnimationFrame(frame); frame = 0; map.getCanvas().style.cursor = ""; callbacks.current.onHover?.(null); };
+    const start = () => { clearHover(); callbacks.current.onInteraction(true); };
+    const end = () => { callbacks.current.onInteraction(false); callbacks.current.onView(cameraSnapshot(map)); };
+    map.on("movestart", start); map.on("moveend", end);
+    const flushHover = () => { frame = 0; const event = pending; pending = null; if (!event || map.isMoving()) return; const value = indexRef.current ? pick(indexRef.current, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y) : null; map.getCanvas().style.cursor = value ? "pointer" : ""; callbacks.current.onHover?.(value); };
+    const move = (event: maplibregl.MapMouseEvent) => { if (map.isMoving()) return; pending = event; if (!frame) frame = requestAnimationFrame(flushHover); };
+    const leave = () => clearHover();
     const click = (event: maplibregl.MapMouseEvent) => { const value = indexRef.current ? pick(indexRef.current, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y) : null; if (value) callbacks.current.onClick?.(value.activity); else callbacks.current.onBackgroundClick?.(); };
     map.on("mousemove", move); map.on("mouseout", leave); map.on("click", click);
     return () => { if (frame) cancelAnimationFrame(frame); profileMarkerRef.current?.remove(); profileMarkerRef.current = null; map.remove(); mapRef.current = null; layerRef.current = null; };
