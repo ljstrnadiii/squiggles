@@ -16,6 +16,8 @@ vi.mock("maplibre-gl", () => ({ Map: class {
   jumpTo(camera: { center: [number, number]; zoom: number }) { this.camera = camera; }
   setStyle() {}
   setTerrain() {}
+  isStyleLoaded() { return true; }
+  off(name: string, handler: (...args: unknown[]) => void) { this.handlers.set(name, (this.handlers.get(name) ?? []).filter(item => item !== handler)); return this; }
   remove() {}
 } }));
 vi.mock("./engine", () => ({

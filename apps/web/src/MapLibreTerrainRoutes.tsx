@@ -222,7 +222,14 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
   useEffect(() => { highlightLayerRef.current?.setData(highlightData ?? {...data, segmentCount: 0}, widthPx * 1.8); }, [data, highlightData, widthPx]);
   useEffect(() => { const map = mapRef.current; if (!map) return; const center = map.getCenter(); if (Math.abs(center.lng - view.longitude) > 1e-7 || Math.abs(center.lat - view.latitude) > 1e-7 || Math.abs(map.getZoom() - view.zoom) > 1e-4) map.jumpTo({center: [view.longitude, view.latitude], zoom: view.zoom}); }, [view]);
   useEffect(() => { const map = mapRef.current; if (map) map.setStyle(terrainStyle(basemap, dark, exaggerationRef.current)); }, [basemap, dark]);
-  useEffect(() => { const map = mapRef.current; if (map) map.setTerrain({source: "terrain", exaggeration}); }, [exaggeration]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const updateTerrain = () => map.setTerrain({source: "terrain", exaggeration});
+    if (map.isStyleLoaded()) updateTerrain();
+    map.on("style.load", updateTerrain);
+    return () => { map.off("style.load", updateTerrain); };
+  }, [exaggeration]);
   useEffect(() => { if (!profilePosition) { pointLayerRef.current?.setPoint(null); return; } const [x, y] = mercator(profilePosition[0], profilePosition[1]); pointLayerRef.current?.setPoint({x, y}); }, [profilePosition]);
 
   return <div className="maplibre-base" ref={container}/>;
