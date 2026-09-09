@@ -41,9 +41,7 @@ def test_archive_ready_email_is_sent_once() -> None:
     dynamo = FakeDynamo()
     ses = FakeSes()
 
-    assert send_archive_ready_email(
-        dynamo, ses, table_name="metadata", subject="abc"
-    ) is True
+    assert send_archive_ready_email(dynamo, ses, table_name="metadata", subject="abc") is True
     assert len(ses.messages) == 1
     message = ses.messages[0]
     assert message["Destination"] == {"ToAddresses": ["runner@example.com"]}
@@ -59,9 +57,7 @@ def test_archive_ready_email_duplicate_is_suppressed() -> None:
     dynamo = FakeDynamo(duplicate=True)
     ses = FakeSes()
 
-    assert send_archive_ready_email(
-        dynamo, ses, table_name="metadata", subject="abc"
-    ) is False
+    assert send_archive_ready_email(dynamo, ses, table_name="metadata", subject="abc") is False
     assert ses.messages == []
 
 
