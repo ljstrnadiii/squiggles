@@ -1,6 +1,12 @@
 /// <reference lib="webworker" />
 import * as duckdb from "@duckdb/duckdb-wasm";
 
+import {
+  activitySampleFraction,
+  activitySamplePredicate,
+  activitySampleThreshold,
+  boostedSampleLod,
+} from "./activitySampling";
 import { canonicalSourceSql, targetedCanonicalSourceSql } from "./canonicalSource";
 import type {
   BinaryRouteBatch,
@@ -477,6 +483,17 @@ async function exactVertexEstimate(
   return Number(scalar(row.total));
 }
 
+async function vertexEstimate(
+  level: Lod,
+  bounds: Bounds | undefined,
+  clean: boolean,
+): Promise<number> {
+  const manifestEstimate = manifestVertexEstimate(level, bounds, clean);
+  return selectionAll && manifestEstimate != null
+    ? manifestEstimate
+    : exactVertexEstimate(level, bounds, clean);
+}
+
 async function planResolutionLods(
   requested: Lod,
   bounds: Bounds | undefined,
@@ -491,11 +508,7 @@ async function planResolutionLods(
   while (true) {
     let estimate = estimates.get(level);
     if (estimate == null) {
-      const manifestEstimate = manifestVertexEstimate(level, bounds, clean);
-      estimate =
-        selectionAll && manifestEstimate != null
-          ? manifestEstimate
-          : await exactVertexEstimate(level, bounds, clean);
+      estimate = await vertexEstimate(level, bounds, clean);
       estimates.set(level, estimate);
     }
 
@@ -541,10 +554,16 @@ async function render(
 ) {
   const resolutionPlans = await planResolutionLods(lod, bounds, clean, startingEstimate);
   const plan = resolutionPlans[resolution];
-  const plannedLod = plan.lod;
+  const fidelityLod = clampAvailableLod(lod);
+  const plannedLod = boostedSampleLod(availableRenderLods(), plan.lod, fidelityLod);
+  const fullVertexEstimate =
+    plannedLod === plan.lod ? plan.vertexEstimate : await vertexEstimate(plannedLod, bounds, clean);
+  const vertexBudget = RESOLUTION_VERTEX_BUDGETS[resolution];
+  const sampleThreshold = activitySampleThreshold(fullVertexEstimate, vertexBudget);
+  const sampleFraction = activitySampleFraction(sampleThreshold);
+  const plannedVertexEstimate = Math.ceil(fullVertexEstimate * sampleFraction);
   const scan = viewportScan(bounds, renderFiles(plannedLod));
   const rawEstimate = await rawVertexEstimate(bounds, plan.vertexEstimate);
-  const vertexBudget = RESOLUTION_VERTEX_BUDGETS[resolution];
 
   if (scan.files.length === 0) {
     return {
@@ -553,7 +572,7 @@ async function render(
       activityCount: 0,
       geometryBufferBytes: 0,
       vertexCount: 0,
-      plannedVertexEstimate: plan.vertexEstimate,
+      plannedVertexEstimate,
       resolutionPlans,
       rawVertexEstimate: rawEstimate,
       vertexBudget,
@@ -578,8 +597,9 @@ async function render(
   }
 
   const geometry = clean ? "geometry_clean" : "geometry";
+  const sample = activitySamplePredicate("a", sampleThreshold);
   const result = await connection!.query(
-    `SELECT a.activity_id,a.${geometry} FROM ${relation} a${selectionJoin()} WHERE ${viewportPredicate(bounds, clean)}`,
+    `SELECT a.activity_id,a.${geometry} FROM ${relation} a${selectionJoin()} WHERE (${viewportPredicate(bounds, clean)}) AND ${sample}`,
   );
   const batches = binaryRouteBatches(result, geometry);
   const vertexCount = batches.reduce((total, batch) => total + batch.positions.length / 2, 0);
@@ -598,7 +618,7 @@ async function render(
     activityCount,
     geometryBufferBytes,
     vertexCount,
-    plannedVertexEstimate: plan.vertexEstimate,
+    plannedVertexEstimate,
     resolutionPlans,
     rawVertexEstimate: rawEstimate,
     vertexBudget,
