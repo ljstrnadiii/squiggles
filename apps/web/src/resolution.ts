@@ -1,6 +1,6 @@
 import type { SystemResolution } from "./contracts";
 
-const KEY = "activity-map.resolution.v1";
+const KEY = "activity-map.resolution.v2";
 
 export function defaultSystemResolution(coarsePointer = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches): SystemResolution {
   return coarsePointer ? "low" : "medium";
