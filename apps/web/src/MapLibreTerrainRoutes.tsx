@@ -154,22 +154,33 @@ function pick(index: PickingIndex, map: maplibregl.Map, lng: number, lat: number
 export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batches, colors, widthPx, profilePosition, highlightActivityId, isolateActivityId, onView, onInteraction, onHover, onClick, onBackgroundClick}: {
   view: MapState; basemap: Basemap; dark: boolean; exaggeration: number; batches: BinaryRouteBatch[]; colors: Uint8Array[]; widthPx: number; profilePosition?: [number, number]; highlightActivityId?: string; isolateActivityId?: string; onView: (camera: TerrainCamera) => void; onInteraction: (active: boolean) => void; onHover?: (pick: TerrainPick | null) => void; onClick?: (activity: RouteMetadata) => void; onBackgroundClick?: () => void;
 }) {
-  const container = useRef<HTMLDivElement>(null), mapRef = useRef<maplibregl.Map | null>(null), layerRef = useRef<BinaryTerrainLayer | null>(null), highlightLayerRef = useRef<BinaryTerrainLayer | null>(null), profileMarkerRef = useRef<maplibregl.Marker | null>(null), indexRef = useRef<PickingIndex | null>(null);
+  const container = useRef<HTMLDivElement>(null), mapRef = useRef<maplibregl.Map | null>(null), layerRef = useRef<BinaryTerrainLayer | null>(null), profileMarkerRef = useRef<maplibregl.Marker | null>(null), indexRef = useRef<PickingIndex | null>(null);
   const appliedStyleRef = useRef(`${basemap}:${dark}`);
   const callbacks = useRef({onView, onInteraction, onHover, onClick, onBackgroundClick}); callbacks.current = {onView, onInteraction, onHover, onClick, onBackgroundClick};
   const exaggerationRef = useRef(exaggeration); exaggerationRef.current = exaggeration;
-  const data = useMemo(() => terrainSegmentBatch(batches, colors, isolateActivityId), [batches, colors, isolateActivityId]);
-  const highlightColors = useMemo(() => batches.map(batch => { const color = new Uint8Array(batch.positions.length / 2 * 4); color.fill(255); return color; }), [batches]);
-  const highlightData = useMemo(() => highlightActivityId ? terrainSegmentBatch(batches, highlightColors, highlightActivityId) : null, [batches, highlightActivityId, highlightColors]);
+  const displayColors = useMemo(() => {
+    if (!highlightActivityId) return colors;
+    return batches.map((batch, batchIndex) => {
+      const highlighted = colors[batchIndex].slice();
+      for (let route = 0; route < batch.segmentActivityIndices.length; route++) {
+        const activity = batch.activities[batch.segmentActivityIndices[route]];
+        if (activity?.activityId !== highlightActivityId) continue;
+        const start = batch.startIndices[route], end = batch.startIndices[route + 1];
+        for (let point = start; point < end; point++) highlighted.set([255, 255, 255, 255], point * 4);
+      }
+      return highlighted;
+    });
+  }, [batches, colors, highlightActivityId]);
+  const data = useMemo(() => terrainSegmentBatch(batches, displayColors, isolateActivityId), [batches, displayColors, isolateActivityId]);
   const index = useMemo(() => pickingIndex(data), [data]); indexRef.current = index;
 
   useEffect(() => {
     if (!container.current) return;
     const map = new maplibregl.Map({container: container.current, style: terrainStyle(basemap, dark, exaggerationRef.current), center: [view.longitude, view.latitude], zoom: view.zoom, pitch: view.pitch, bearing: view.bearing, maxPitch: 85, attributionControl: {compact: true}, canvasContextAttributes: {antialias: true}});
     mapRef.current = map;
-    const layer = new BinaryTerrainLayer(), highlightLayer = new BinaryTerrainLayer("squiggles-binary-terrain-highlight");
-    layer.setData(data, widthPx); highlightLayer.setData(highlightData ?? {...data, segmentCount: 0}, widthPx * 1.8); layerRef.current = layer; highlightLayerRef.current = highlightLayer;
-    const addLayers = () => { if (!map.getLayer(layer.id)) map.addLayer(layer as maplibregl.CustomLayerInterface); if (!map.getLayer(highlightLayer.id)) map.addLayer(highlightLayer as maplibregl.CustomLayerInterface); };
+    const layer = new BinaryTerrainLayer();
+    layer.setData(data, widthPx); layerRef.current = layer;
+    const addLayers = () => { if (!map.getLayer(layer.id)) map.addLayer(layer as maplibregl.CustomLayerInterface); };
     const load = () => { addLayers(); callbacks.current.onView(cameraSnapshot(map)); };
     map.on("load", load); map.on("style.load", addLayers);
     const start = () => callbacks.current.onInteraction(true), end = () => { callbacks.current.onInteraction(false); callbacks.current.onView(cameraSnapshot(map)); };
@@ -180,13 +191,12 @@ export function MapLibreTerrainRoutes({view, basemap, dark, exaggeration, batche
     const leave = () => { pending = null; if (frame) cancelAnimationFrame(frame); frame = 0; map.getCanvas().style.cursor = ""; callbacks.current.onHover?.(null); };
     const click = (event: maplibregl.MapMouseEvent) => { const value = indexRef.current ? pick(indexRef.current, map, event.lngLat.lng, event.lngLat.lat, event.point.x, event.point.y) : null; if (value) callbacks.current.onClick?.(value.activity); else callbacks.current.onBackgroundClick?.(); };
     map.on("mousemove", move); map.on("mouseout", leave); map.on("click", click);
-    return () => { if (frame) cancelAnimationFrame(frame); profileMarkerRef.current?.remove(); profileMarkerRef.current = null; map.remove(); mapRef.current = null; layerRef.current = null; highlightLayerRef.current = null; };
+    return () => { if (frame) cancelAnimationFrame(frame); profileMarkerRef.current?.remove(); profileMarkerRef.current = null; map.remove(); mapRef.current = null; layerRef.current = null; };
   // Initial map construction intentionally happens only once; prop updates are applied by effects below.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => { layerRef.current?.setData(data, widthPx); }, [data, widthPx]);
-  useEffect(() => { highlightLayerRef.current?.setData(highlightData ?? {...data, segmentCount: 0}, widthPx * 1.8); }, [data, highlightData, widthPx]);
   useEffect(() => { const map = mapRef.current; if (!map) return; const center = map.getCenter(); if (Math.abs(center.lng - view.longitude) > 1e-7 || Math.abs(center.lat - view.latitude) > 1e-7 || Math.abs(map.getZoom() - view.zoom) > 1e-4 || Math.abs(map.getPitch() - view.pitch) > 1e-4 || Math.abs(map.getBearing() - view.bearing) > 1e-4) map.jumpTo({center: [view.longitude, view.latitude], zoom: view.zoom, pitch: view.pitch, bearing: view.bearing}); }, [view]);
   useEffect(() => {
     const key = `${basemap}:${dark}`;
