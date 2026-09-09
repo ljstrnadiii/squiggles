@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 from typing import Any
-
-from botocore.exceptions import ClientError
 
 
 ARCHIVE_READY_SUBJECT = "Your Squiggles archive is ready"
@@ -14,6 +13,14 @@ ARCHIVE_READY_BODY = "\n".join(
         "This is the last automated email Squiggles sends. We do not send marketing or engagement email.",
     ]
 )
+
+
+def error_code(error: Exception) -> str | None:
+    response = getattr(error, "response", None)
+    if not isinstance(response, dict):
+        return None
+    details = response.get("Error")
+    return details.get("Code") if isinstance(details, dict) else None
 
 
 def send_archive_ready_email(
@@ -37,16 +44,20 @@ def send_archive_ready_email(
             ConditionExpression="attribute_not_exists(#marker)",
             UpdateExpression="SET #marker = :now",
             ExpressionAttributeNames={"#marker": marker},
-            ExpressionAttributeValues={":now": {"S": __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat().replace("+00:00", "Z")}},
+            ExpressionAttributeValues={
+                ":now": {"S": datetime.now(UTC).isoformat().replace("+00:00", "Z")}
+            },
         )
-    except ClientError as error:
-        if error.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+    except Exception as error:
+        if error_code(error) == "ConditionalCheckFailedException":
             return False
         raise
 
     try:
         ses.send_email(
-            FromEmailAddress=os.environ.get("NOTIFICATION_FROM_EMAIL", "notifications@squiggles.io"),
+            FromEmailAddress=os.environ.get(
+                "NOTIFICATION_FROM_EMAIL", "notifications@squiggles.io"
+            ),
             Destination={"ToAddresses": [email]},
             Content={
                 "Simple": {
