@@ -132,7 +132,7 @@ export type RenderCacheMetrics = {
   evictions: number;
 };
 export type ViewportResult = {
-  diagnostics?: { requestedLod: RenderLod };
+  diagnostics?: { requestedLod: RenderLod; candidateRoutes: number };
   batches: BinaryRouteBatch[];
   activityCount: number;
   geometryBufferBytes: number;
