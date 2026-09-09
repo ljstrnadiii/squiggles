@@ -7,7 +7,7 @@ export type RouteLineWidths = { route: number; heat: number; focus: number; casi
 export function lineWidthsForViewport(thicknessScale: number, width: number, height: number): RouteLineWidths {
   const viewportBasis = Math.max(320, Math.min(width, height));
   const route = viewportBasis * 0.0015 * thicknessScale;
-  const focus = Math.max(route * 1.6, route + 1.2);
+  const focus = Math.max(route * 1.8, route + 1.5);
   return {
     route,
     heat: route,

@@ -1,3 +1,4 @@
+import { DEFAULT_RENDER_SETTINGS, normalizeRenderSettings, type RenderSettings } from "./renderSettings";
 import type {
   ActivityListItem,
   BinaryRouteBatch,
@@ -15,7 +16,7 @@ import type {
   ViewportSize,
 } from "./contracts";
 import { assertSupportedDatasetSchema } from "./datasetSchema";
-import { lodForView, lodForViewport, type Lod } from "./lod";
+import { lodForMetersPerPixel, metersPerPixel, scheduledVertexBudget, type Lod } from "./lod";
 import { normalizeSelectionSql } from "./querySql";
 import {
   activateRenderTab,
@@ -59,7 +60,7 @@ type WorkerOpenTiming = {
 };
 
 const MEBIBYTE = 1024 ** 2;
-const VIEWPORT_PREFETCH_FRACTION = 0.2;
+const VIEWPORT_PREFETCH_FRACTION = 0.05;
 
 function perf(event: string, fields: Record<string, unknown>) {
   console.info("[squiggles:perf]", event, fields);
@@ -127,6 +128,8 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   private cacheBytes = 0;
   private cacheEvictions = 0;
   private resolution: SystemResolution = "medium";
+  private renderSettings = DEFAULT_RENDER_SETTINGS;
+  private renderRevision = 0;
   private consumedPublishedPlans = new Set<string>();
   private summaryCache = new Map<string, Promise<import("./contracts").SummaryStats>>();
   private tableCache = new Map<string, Promise<ActivityListItem[]>>();
@@ -149,6 +152,16 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   setResolution(resolution: SystemResolution) {
     if (this.resolution === resolution) return;
     this.resolution = resolution;
+    this.renderRevision++;
+    this.cache.clear();
+    this.cacheBytes = 0;
+  }
+
+  setRenderSettings(settings: RenderSettings) {
+    const next = normalizeRenderSettings(settings);
+    if (JSON.stringify(next) === JSON.stringify(this.renderSettings)) return;
+    this.renderSettings = next;
+    this.renderRevision++;
     this.cache.clear();
     this.cacheBytes = 0;
   }
@@ -176,37 +189,38 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     }
   }
 
+  private viewportSize(viewportSize?: ViewportSize): ViewportSize | undefined {
+    if (viewportSize) return viewportSize;
+    const map = document.querySelector<HTMLElement>("section.map");
+    return map ? { width: map.clientWidth, height: map.clientHeight } : undefined;
+  }
+
   private requestedLod(
     zoom: number,
-    bounds?: ViewportBounds,
     viewportSize?: ViewportSize,
   ): Lod {
-    const map = viewportSize ? null : document.querySelector<HTMLElement>("section.map");
-    const size = viewportSize ??
-      (map ? { width: map.clientWidth, height: map.clientHeight } : undefined);
-    if (bounds && size?.width && size.height) {
-      return lodForViewport(bounds, size.width, size.height);
-    }
-    return lodForView(zoom);
+    const pixelMeters = Math.min(metersPerPixel(zoom), viewportSize?.pixelMeters ?? Infinity);
+    const base = lodForMetersPerPixel(pixelMeters * this.renderSettings.pixelError);
+    return Math.max(0, Math.min(7, base + this.renderSettings.lodBias)) as Lod;
   }
 
-  private initialPlan(tab: QueryTab, fidelityLod: Lod, bounds?: ViewportBounds) {
-    const published = tab.startingPlans?.[this.resolution];
-    if (published && !this.consumedPublishedPlans.has(tab.id)) {
-      this.consumedPublishedPlans.add(tab.id);
-      const estimateIsSafe =
-        tab.startingBounds != null && bounds != null && boundsContains(tab.startingBounds, bounds);
-      return {
-        lod: published.lod,
-        startingVertexEstimate: estimateIsSafe ? published.vertexEstimate : undefined,
-      };
-    }
-    return { lod: fidelityLod, startingVertexEstimate: undefined };
+  private effectiveRenderSettings(zoom: number, viewportSize?: ViewportSize): RenderSettings {
+    if (this.renderSettings.vertexBudget != null) return this.renderSettings;
+    return {
+      ...this.renderSettings,
+      vertexBudget: scheduledVertexBudget(this.resolution, zoom, viewportSize?.threeD ?? false),
+    };
   }
 
-  private cacheKey(requestedLod: Lod, bounds: ViewportBounds | undefined) {
+  private startingLod(tab: QueryTab): Lod | undefined {
+    if (this.consumedPublishedPlans.has(tab.id)) return undefined;
+    this.consumedPublishedPlans.add(tab.id);
+    return tab.startingPlans?.[this.resolution]?.lod;
+  }
+
+  private cacheKey(requestedLod: Lod, bounds: ViewportBounds | undefined, vertexBudget: number) {
     const serializedBounds = bounds?.map((value) => value.toFixed(6)).join(",") ?? "all";
-    return `${this.selectionKey}|${requestedLod}|${serializedBounds}`;
+    return `${this.selectionKey}|${requestedLod}|${vertexBudget}|${serializedBounds}`;
   }
 
   private cacheResult(
@@ -215,13 +229,15 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     hit: boolean,
     bounds: ViewportBounds | undefined,
     requestedLod: Lod,
+    store = true,
   ): ViewportResult {
-    if (!hit && !this.cache.has(key)) {
+    if (store && !hit && !this.cache.has(key)) {
       const bytes = binaryBytes(result.batches);
       if (bytes <= this.cacheBudget) {
         for (const [cachedKey, entry] of this.cache) {
           if (
             entry.requestedLod === requestedLod &&
+            entry.result.vertexBudget === result.vertexBudget &&
             bounds &&
             entry.bounds &&
             boundsContains(bounds, entry.bounds)
@@ -257,13 +273,16 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     key: string,
     bounds: ViewportBounds,
     requestedLod: Lod,
+    vertexBudget: number,
   ): ViewportResult | undefined {
     let matchedKey = key;
     let entry = this.cache.get(key);
-    if (!entry) {
+    if (!entry && !this.renderSettings.fillBudget) {
       for (const [candidateKey, candidate] of this.cache) {
         if (
+          candidateKey.startsWith(`${this.selectionKey}|`) &&
           candidate.requestedLod === requestedLod &&
+          candidate.result.vertexBudget === vertexBudget &&
           candidate.bounds &&
           boundsContains(candidate.bounds, bounds)
         ) {
@@ -285,6 +304,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
   ): Promise<Dataset> {
     const started = performance.now();
     this.datasetRevision += 1;
+    this.renderRevision++;
     this.selectionKey = "";
     this.cache.clear();
     this.cacheBytes = 0;
@@ -426,19 +446,24 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     viewportSize?: ViewportSize,
   ): Promise<QueryResult & ViewportResult> {
     const started = performance.now();
+    const renderRevision = this.renderRevision;
     const nextClean = tab.style.cleanEnabled;
     const baseSql = normalizeSelectionSql(tab.sql);
     const sql = applySpatialFilterSql(baseSql, tab.spatialFilter);
-    const fidelityLod = this.requestedLod(zoom, bounds, viewportSize);
-    const plan = this.initialPlan(tab, fidelityLod, bounds);
+    const size = this.viewportSize(viewportSize);
+    const fidelityLod = this.requestedLod(zoom, size);
+    const renderSettings = this.effectiveRenderSettings(zoom, size);
     const result = await this.networkRequest<QueryResult & WorkerViewportResult>({
       type: "execute",
       sql,
-      lod: plan.lod,
+      lod: fidelityLod,
       resolution: this.resolution,
+      renderSettings,
       bounds,
+      visibleBounds: bounds,
+      viewportSize: size,
       clean: nextClean,
-      startingVertexEstimate: plan.startingVertexEstimate,
+      startingLod: this.startingLod(tab),
       needsCanonicalGeometry: Boolean(tab.spatialFilter?.polygon.length && tab.spatialFilter.polygon.length >= 3),
     });
 
@@ -451,8 +476,9 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     perf("selection-execute", {
       totalMs: Math.round(performance.now() - started),
       zoom: Number(zoom.toFixed(2)),
-      requestedLod: plan.lod,
+      requestedLod: fidelityLod,
       plannedLod: result.lod,
+      vertexBudget: result.vertexBudget,
       selected: result.selectedCount,
       rendered: result.activityCount,
       vertices: result.vertexCount,
@@ -460,10 +486,10 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       candidateBytes: result.scan.candidateBytes,
       expectedRowGroups: result.scan.expectedRowGroupCount,
     });
-    const cacheKey = this.cacheKey(fidelityLod, bounds);
+    const cacheKey = this.cacheKey(fidelityLod, bounds, result.vertexBudget);
     return {
       ...result,
-      ...this.cacheResult(result, cacheKey, false, bounds, fidelityLod),
+      ...this.cacheResult(result, cacheKey, false, bounds, fidelityLod, renderRevision === this.renderRevision),
     };
   }
 
@@ -472,34 +498,43 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     bounds: ViewportBounds,
     viewportSize?: ViewportSize,
   ): Promise<ViewportResult> {
-    const fidelityLod = this.requestedLod(zoom, bounds, viewportSize);
-    const requestedKey = this.cacheKey(fidelityLod, bounds);
-    const cached = this.cached(requestedKey, bounds, fidelityLod);
+    const size = this.viewportSize(viewportSize);
+    const fidelityLod = this.requestedLod(zoom, size);
+    const renderSettings = this.effectiveRenderSettings(zoom, size);
+    const vertexBudget = renderSettings.vertexBudget!;
+    const requestedKey = this.cacheKey(fidelityLod, bounds, vertexBudget);
+    const cached = this.cached(requestedKey, bounds, fidelityLod, vertexBudget);
     if (cached) {
       recordActiveRenderPlan({ plans: cached.resolutionPlans, bounds });
       perf("viewport-cache-hit", {
         zoom: Number(zoom.toFixed(2)),
         lod: cached.lod,
+        vertexBudget: cached.vertexBudget,
         vertices: cached.vertexCount,
       });
       return cached;
     }
 
+    const renderRevision = this.renderRevision;
     const fetchBounds = padViewportBounds(bounds, VIEWPORT_PREFETCH_FRACTION);
     const started = performance.now();
     const result = await this.networkRequest<WorkerViewportResult>({
       type: "render",
       lod: fidelityLod,
       resolution: this.resolution,
+      renderSettings,
       bounds: fetchBounds,
+      visibleBounds: bounds,
+      viewportSize: size,
       clean: this.clean,
     });
-    recordActiveRenderPlan({ plans: result.resolutionPlans, bounds: fetchBounds });
+    recordActiveRenderPlan({ plans: result.resolutionPlans, bounds });
     perf("viewport-fetch", {
       totalMs: Math.round(performance.now() - started),
       zoom: Number(zoom.toFixed(2)),
       requestedLod: fidelityLod,
       plannedLod: result.lod,
+      vertexBudget: result.vertexBudget,
       vertices: result.vertexCount,
       geometryBytes: result.geometryBufferBytes,
       candidateBytes: result.scan.candidateBytes,
@@ -508,10 +543,11 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     });
     return this.cacheResult(
       result,
-      this.cacheKey(fidelityLod, fetchBounds),
+      requestedKey,
       false,
-      fetchBounds,
+      bounds,
       fidelityLod,
+      renderRevision === this.renderRevision,
     );
   }
 

@@ -1,14 +1,17 @@
 /// <reference lib="webworker" />
 import * as duckdb from "@duckdb/duckdb-wasm";
 
+import { planRenderLod } from "./renderLodPlan";
+import { DEFAULT_RENDER_SETTINGS, type RenderSettings } from "./renderSettings";
 import { canonicalSourceSql, targetedCanonicalSourceSql } from "./canonicalSource";
 import type {
   BinaryRouteBatch,
   ResolutionRenderPlans,
   RouteMetadata,
   SystemResolution,
+  ViewportSize,
 } from "./contracts";
-import { RESOLUTION_VERTEX_BUDGETS, type Lod } from "./lod";
+import { RESOLUTION_VERTEX_BUDGETS, THREE_D_VERTEX_BUDGETS, type Lod } from "./lod";
 import { materializeMetadataSql, residentMetadataRelation } from "./metadataCacheSql";
 import { isUniversalSelectionSql } from "./selection";
 
@@ -58,9 +61,12 @@ type Request =
       sql: string;
       lod: Lod;
       resolution: SystemResolution;
+      renderSettings?: RenderSettings;
       bounds?: Bounds;
+      visibleBounds?: Bounds;
+      viewportSize?: ViewportSize;
       clean: boolean;
-      startingVertexEstimate?: number;
+      startingLod?: Lod;
       needsCanonicalGeometry: boolean;
     }
   | {
@@ -68,7 +74,10 @@ type Request =
       type: "render";
       lod: Lod;
       resolution: SystemResolution;
+      renderSettings?: RenderSettings;
       bounds: Bounds;
+      visibleBounds: Bounds;
+      viewportSize?: ViewportSize;
       clean: boolean;
     }
   | { id: number; type: "summary"; bounds?: Bounds; clean: boolean }
@@ -457,10 +466,6 @@ function clampAvailableLod(requested: Lod): Lod {
   return levels.filter((level) => level <= requested).at(-1) ?? levels[0];
 }
 
-function previousAvailableLod(current: Lod): Lod | null {
-  return availableRenderLods().filter((level) => level < current).at(-1) ?? null;
-}
-
 async function exactVertexEstimate(
   level: Lod,
   bounds: Bounds | undefined,
@@ -477,48 +482,6 @@ async function exactVertexEstimate(
   return Number(scalar(row.total));
 }
 
-async function planResolutionLods(
-  requested: Lod,
-  bounds: Bounds | undefined,
-  clean: boolean,
-  startingEstimate?: number,
-): Promise<ResolutionRenderPlans> {
-  const plans = {} as Partial<ResolutionRenderPlans>;
-  const estimates = new Map<Lod, number>();
-  let level = clampAvailableLod(requested);
-  if (startingEstimate != null) estimates.set(level, startingEstimate);
-
-  while (true) {
-    let estimate = estimates.get(level);
-    if (estimate == null) {
-      const manifestEstimate = manifestVertexEstimate(level, bounds, clean);
-      estimate =
-        selectionAll && manifestEstimate != null
-          ? manifestEstimate
-          : await exactVertexEstimate(level, bounds, clean);
-      estimates.set(level, estimate);
-    }
-
-    for (const resolution of ["high", "medium", "low"] as const) {
-      if (!plans[resolution] && estimate <= RESOLUTION_VERTEX_BUDGETS[resolution]) {
-        plans[resolution] = { lod: level, vertexEstimate: estimate };
-      }
-    }
-
-    if (plans.low && plans.medium && plans.high) break;
-    const previous = previousAvailableLod(level);
-    if (previous == null) {
-      for (const resolution of ["low", "medium", "high"] as const) {
-        plans[resolution] ??= { lod: level, vertexEstimate: estimate };
-      }
-      break;
-    }
-    level = previous;
-  }
-
-  return plans as ResolutionRenderPlans;
-}
-
 async function rawVertexEstimate(bounds: Bounds | undefined, fallback: number): Promise<number> {
   const full = availableRenderLods().at(-1);
   if (selectionAll && full != null) {
@@ -532,28 +495,95 @@ async function rawVertexEstimate(bounds: Bounds | undefined, fallback: number): 
   return Number(scalar(row.total));
 }
 
+async function queryRenderBatches(
+  level: Lod,
+  bounds: Bounds | undefined,
+  clean: boolean,
+) {
+  const scan = viewportScan(bounds, renderFiles(level));
+  const relation = parquetRelation(scan.files, false);
+  if (!relation) return { batches: [] as BinaryRouteBatch[], scan };
+  const geometry = clean ? "geometry_clean" : "geometry";
+  const result = await connection!.query(
+    `SELECT a.activity_id,a.${geometry} FROM ${relation} a${selectionJoin()} WHERE (${viewportPredicate(bounds, clean)})`,
+  );
+  return { batches: binaryRouteBatches(result, geometry), scan };
+}
+
+async function activityVertexCounts(
+  level: Lod,
+  bounds: Bounds | undefined,
+  clean: boolean,
+): Promise<Map<string, number>> {
+  const { files } = viewportScan(bounds, renderFiles(level));
+  const relation = parquetRelation(files, false);
+  if (!relation) return new Map();
+  const geometryCount = clean ? "clean_vertex_count" : "vertex_count";
+  const table = await connection!.query(
+    `SELECT CAST(a.activity_id AS VARCHAR) activity_id,coalesce(sum(a.${geometryCount}),0) vertex_count FROM ${relation} a${selectionJoin()} WHERE ${viewportPredicate(bounds, clean)} GROUP BY a.activity_id`,
+  );
+  return new Map(
+    table.toArray().map((value) => {
+      const row = value as unknown as Record<string, unknown>;
+      return [String(scalar(row.activity_id)), Number(scalar(row.vertex_count))];
+    }),
+  );
+}
+
 async function render(
   lod: Lod,
   resolution: SystemResolution,
   bounds?: Bounds,
   clean = false,
-  startingEstimate?: number,
+  visibleBounds: Bounds | undefined = bounds,
+  viewportSize?: ViewportSize,
+  settings: RenderSettings = DEFAULT_RENDER_SETTINGS,
+  startingLod?: Lod,
 ) {
-  const resolutionPlans = await planResolutionLods(lod, bounds, clean, startingEstimate);
-  const plan = resolutionPlans[resolution];
-  const plannedLod = plan.lod;
-  const scan = viewportScan(bounds, renderFiles(plannedLod));
-  const rawEstimate = await rawVertexEstimate(bounds, plan.vertexEstimate);
-  const vertexBudget = RESOLUTION_VERTEX_BUDGETS[resolution];
+  // Exact count-column scans avoid treating whole intersecting row groups as visible geometry.
+  // Use fetch bounds for allocation: prefetched routes consume buffers and GPU work too.
+  const estimates = new Map<Lod, number>();
+  const estimate = async (level: Lod) => {
+    if (!estimates.has(level)) estimates.set(level, await exactVertexEstimate(level, bounds, clean));
+    return estimates.get(level)!;
+  };
+  const fidelityLod = clampAvailableLod(lod);
+  const available = availableRenderLods();
+  const budgets = viewportSize?.threeD ? THREE_D_VERTEX_BUDGETS : RESOLUTION_VERTEX_BUDGETS;
+  const vertexBudget = settings.vertexBudget ?? budgets[resolution];
+  const plan = await planRenderLod(available, fidelityLod, vertexBudget, settings.fillBudget, estimate, startingLod);
+  let plannedLod = plan.lod;
+  const fullVertexEstimate = plan.vertexEstimate;
+  const resolutionPlans = {} as ResolutionRenderPlans;
+  for (const name of ["low", "medium", "high"] as const) {
+    resolutionPlans[name] = await planRenderLod(available, fidelityLod, budgets[name], settings.fillBudget, estimate);
+  }
 
-  if (scan.files.length === 0) {
+  let plannedVertexEstimate = fullVertexEstimate;
+  if (fullVertexEstimate > vertexBudget) {
+    const plannedIndex = available.indexOf(plannedLod);
+    const coarserLod = plannedIndex > 0 ? available[plannedIndex - 1] : undefined;
+    const coarserEstimate = coarserLod == null ? null : await estimate(coarserLod);
+    if (coarserLod != null && coarserEstimate != null && coarserEstimate <= vertexBudget) {
+      // Prefer one coarser complete representation over dropping whole routes.
+      plannedLod = coarserLod;
+      plannedVertexEstimate = coarserEstimate;
+    }
+  }
+
+  const candidateRoutes = (await activityVertexCounts(plannedLod, bounds, clean)).size;
+  const diagnostics = { requestedLod: fidelityLod, candidateRoutes };
+  const rawEstimate = await rawVertexEstimate(visibleBounds, plan.vertexEstimate);
+  const { batches, scan } = await queryRenderBatches(plannedLod, bounds, clean);
+  if (scan.files.length === 0 || batches.length === 0) {
     return {
+      diagnostics,
       lod: plannedLod,
       batches: [],
       activityCount: 0,
       geometryBufferBytes: 0,
       vertexCount: 0,
-      plannedVertexEstimate: plan.vertexEstimate,
+      plannedVertexEstimate: scan.files.length === 0 ? 0 : plannedVertexEstimate,
       resolutionPlans,
       rawVertexEstimate: rawEstimate,
       vertexBudget,
@@ -561,27 +591,6 @@ async function render(
     };
   }
 
-  const relation = parquetRelation(scan.files, false);
-  if (!relation) {
-    return {
-      lod: plannedLod,
-      batches: [],
-      activityCount: 0,
-      geometryBufferBytes: 0,
-      vertexCount: 0,
-      plannedVertexEstimate: 0,
-      resolutionPlans,
-      rawVertexEstimate: rawEstimate,
-      vertexBudget,
-      scan: scan.metrics,
-    };
-  }
-
-  const geometry = clean ? "geometry_clean" : "geometry";
-  const result = await connection!.query(
-    `SELECT a.activity_id,a.${geometry} FROM ${relation} a${selectionJoin()} WHERE ${viewportPredicate(bounds, clean)}`,
-  );
-  const batches = binaryRouteBatches(result, geometry);
   const vertexCount = batches.reduce((total, batch) => total + batch.positions.length / 2, 0);
   const geometryBufferBytes = batches.reduce(
     (total, batch) =>
@@ -593,12 +602,13 @@ async function render(
   );
   const activityCount = batches.reduce((total, batch) => total + batch.activities.length, 0);
   return {
+    diagnostics,
     lod: plannedLod,
     batches,
     activityCount,
     geometryBufferBytes,
     vertexCount,
-    plannedVertexEstimate: plan.vertexEstimate,
+    plannedVertexEstimate,
     resolutionPlans,
     rawVertexEstimate: rawEstimate,
     vertexBudget,
@@ -846,7 +856,15 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       }
       respond(
         request.id,
-        await render(request.lod, request.resolution, request.bounds, request.clean),
+        await render(
+          request.lod,
+          request.resolution,
+          request.bounds,
+          request.clean,
+          request.visibleBounds,
+          request.viewportSize,
+          request.renderSettings,
+        ),
       );
       return;
     }
@@ -888,7 +906,10 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       request.resolution,
       request.bounds,
       clean,
-      request.startingVertexEstimate,
+      request.visibleBounds,
+      request.viewportSize,
+      request.renderSettings,
+      request.startingLod,
     );
     respond(request.id, {
       queryId: String(request.id),

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { QueryTab, ViewportResult } from "./contracts";
 import { BrowserDuckDBEngine, cacheBudget, formatDuckDBDiagnostic } from "./engine";
+import { DEFAULT_RENDER_SETTINGS } from "./renderSettings";
 import { defaultTab } from "./storage";
 
 const resolutionPlans = {
@@ -104,6 +105,22 @@ function v3Manifest() {
 }
 
 describe("BrowserDuckDBEngine viewport cache", () => {
+  it("does not let a long horizon lower foreground route fidelity", async () => {
+    const posted: Record<string, unknown>[] = [];
+    const originalWorker = globalThis.Worker;
+    globalThis.Worker = class {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      postMessage(message: { id: number } & Record<string, unknown>) {
+        posted.push(message);
+        queueMicrotask(() => this.onmessage?.({ data: { id: message.id, ok: true, value: viewport() } } as MessageEvent));
+      }
+    } as unknown as typeof Worker;
+    try {
+      await new BrowserDuckDBEngine().renderViewport(14, [-110, 39, -100, 45], { width: 1200, height: 800 });
+      expect(posted[0].lod).toBeGreaterThanOrEqual(5);
+    } finally { globalThis.Worker = originalWorker; }
+  });
+
   it("registers v3 render files separately from canonical shards", async () => {
     const posted: Record<string, unknown>[] = [];
     const originalWorker = globalThis.Worker;
@@ -200,6 +217,7 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     const originalWorker = globalThis.Worker;
     globalThis.Worker = WorkerMock as unknown as typeof Worker;
     const engine = new BrowserDuckDBEngine();
+    engine.setRenderSettings({ ...DEFAULT_RENDER_SETTINGS, vertexBudget: 1_250_000 });
     const tab: QueryTab = {
       ...defaultTab,
       style: { ...defaultTab.style },
@@ -237,6 +255,7 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     const originalWorker = globalThis.Worker;
     globalThis.Worker = WorkerMock as unknown as typeof Worker;
     const engine = new BrowserDuckDBEngine();
+    engine.setRenderSettings({ ...DEFAULT_RENDER_SETTINGS, fillBudget: false, vertexBudget: 1_250_000 });
     const tab: QueryTab = {
       ...defaultTab,
       style: { ...defaultTab.style },

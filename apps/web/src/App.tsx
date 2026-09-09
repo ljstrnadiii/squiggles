@@ -1,3 +1,5 @@
+import { RenderSettingsControls } from "./RenderSettingsControls";
+import { loadRenderSettings, normalizeRenderSettings, saveRenderSettings, type RenderSettings } from "./renderSettings";
 import { usePitchGesture } from "./usePitchGesture";
 import { normalizeCamera } from "./camera";
 import { WebMercatorViewport, type PickingInfo } from "@deck.gl/core";
@@ -23,6 +25,7 @@ import { MapLibreTerrainRoutes, type TerrainCamera } from "./MapLibreTerrainRout
 import { loadPublishedView, publishView } from "./publishing";
 import { loadSystemResolution, saveSystemResolution } from "./resolution";
 import { rasterStyles } from "./mapSources";
+import { recordRenderingDiagnostics } from "./diagnosticState";
 
 const blankStyle: maplibregl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
 const empty: SummaryStats = { activityCount: 0, distanceM: 0, elapsedSeconds: 0, movingSeconds: 0, elevationGainM: 0, elevationLossM: 0, minElevationM: null, maxElevationM: null, maxDistanceM: null, activeDays: 0, droppedJumpPoints: 0, droppedElevationPoints: 0, sportCounts: [], firstActivity: null, lastActivity: null };
@@ -30,8 +33,6 @@ const integer = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 const emptyScan: ScanMetrics = { candidateFragmentCount: 0, totalFragmentCount: 0, candidateBytes: 0, totalBytes: 0, expectedRowGroupCount: 0, candidateRowGroupCount: 0, totalRowGroupCount: 0, expectedRowCount: 0, keptRowCount: 0 };
 const emptyCache: RenderCacheMetrics = { hit: false, bytes: 0, budgetBytes: 0, entries: 0, evictions: 0 };
 const emptyHeat: CooperativeHeatResult = { scores: new Map(), sourceVertices: 0, cellCount: 0, maxScore: 0, durationMs: 0, yieldCount: 0, maxSliceMs: 0 };
-const bytes = (value: number) => value < 1024 ? `${value} B` : value < 1024 ** 2 ? `${(value / 1024).toFixed(1)} KiB` : value < 1024 ** 3 ? `${(value / 1024 ** 2).toFixed(1)} MiB` : `${(value / 1024 ** 3).toFixed(2)} GiB`;
-const percent = (part: number, total: number) => total > 0 ? `${(part / total * 100).toFixed(1)}%` : "—";
 const SqlEditor = lazy(() => import("./SqlEditor").then(module => ({ default: module.SqlEditor })));
 const basemaps = new Set<Basemap>(["carto-light", "carto-dark", "streets", "topo", "imagery", "blank"]);
 const heatPalettes = new Set<HeatPalette>(["sunset", "viridis", "fire", "ice"]);
@@ -218,6 +219,14 @@ export function App() {
   const engine = useMemo(() => new BrowserDuckDBEngine(), []);
   const [systemResolution, setSystemResolution] = useState<SystemResolution>(loadSystemResolution);
   engine.setResolution(systemResolution);
+  const [renderSettings, setRenderSettings] = useState(loadRenderSettings);
+  const [renderReload, setRenderReload] = useState(0);
+  engine.setRenderSettings(renderSettings);
+  const [terrainMetrics, setTerrainMetrics] = useState({ loadedSegments: 0, submittedSegments: 0, tileCount: 0 });
+  function changeRenderSettings(settings: RenderSettings) {
+    const next = normalizeRenderSettings(settings);
+    setRenderSettings(next); saveRenderSettings(next); setRenderReload(value => value + 1);
+  }
   const [tabs, setTabs] = useState(() => tabsWithUrlSettings(loadTabs()));
   const [active, setActive] = useState(() => {
     const requested = new URLSearchParams(window.location.search).get("tab");
@@ -240,7 +249,6 @@ export function App() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [tableOpen, setTableOpen] = useState(false);
-  const [renderingOpen, setRenderingOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [systemSettingsOpen, setSystemSettingsOpen] = useState(false);
@@ -268,7 +276,7 @@ export function App() {
   const [view, setView] = useState(tab.mapState);
   const [renderedView, setRenderedView] = useState(tab.mapState);
   const [terrainCamera, setTerrainCamera] = useState<TerrainCamera | null>(null);
-  const [renderMetrics, setRenderMetrics] = useState({ lod: null as null | number, vertexCount: 0, geometryBufferBytes: 0, plannedVertexEstimate: 0, rawVertexEstimate: 0, vertexBudget: 0, visibleCount: 0, durationMs: 0, scan: emptyScan, cache: emptyCache });
+  const [renderMetrics, setRenderMetrics] = useState({ diagnostics: undefined as import("./contracts").ViewportResult["diagnostics"], lod: null as null | number, vertexCount: 0, geometryBufferBytes: 0, plannedVertexEstimate: 0, rawVertexEstimate: 0, vertexBudget: 0, visibleCount: 0, durationMs: 0, scan: emptyScan, cache: emptyCache });
   const [heat, setHeat] = useState<CooperativeHeatResult>(emptyHeat);
   const mapElement = useRef<HTMLElement>(null);
   const ready = useRef(false);
@@ -322,7 +330,11 @@ export function App() {
       () => cancelled,
       systemResolution === "low" ? 4 : 8,
       terrainEnabled,
-    ).then(result => { if (!cancelled && result) setHeat(result); });
+    ).then(result => {
+      if (!cancelled && result) {
+        setHeat(result);
+      }
+    });
     return () => { cancelled = true; };
   }, [isolateSelected, renderedView, routeBatches, selected?.activityId, systemResolution, tab.style.heatEnabled, terrainEnabled]);
 
@@ -337,6 +349,11 @@ export function App() {
     const update = () => setSystemDark(media.matches);
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    const close = () => setSystemSettingsOpen(false);
+    window.addEventListener("squiggles:close-system-settings", close);
+    return () => window.removeEventListener("squiggles:close-system-settings", close);
   }, []);
   useEffect(() => {
     if (window.location.pathname === "/" && !window.location.search) return;
@@ -379,7 +396,7 @@ export function App() {
       const cameraUnchanged = sameCamera(latestView, mapState);
       if (cameraUnchanged) {
         setRouteBatches(result.batches); setRenderedView(mapState);
-        setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
+        setRenderMetrics({ diagnostics: result.diagnostics, lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
       } else {
         const latestCamera = queryTab.style.viewMode === "3d" ? terrainCameraRef.current : null;
         const bounds = latestCamera?.bounds ?? viewportBounds(latestView, mapElement.current);
@@ -389,7 +406,7 @@ export function App() {
           const latestResult = await engine.renderViewport(latestView.zoom, bounds, latestCamera?.size);
           if (selection === selectionRequest.current && request === viewportRequest.current) {
             setRouteBatches(latestResult.batches); setRenderedView(latestView);
-            setRenderMetrics({ lod: latestResult.lod, vertexCount: latestResult.vertexCount, geometryBufferBytes: latestResult.geometryBufferBytes, plannedVertexEstimate: latestResult.plannedVertexEstimate, rawVertexEstimate: latestResult.rawVertexEstimate, vertexBudget: latestResult.vertexBudget, visibleCount: latestResult.activityCount, durationMs: performance.now() - viewportStarted, scan: latestResult.scan, cache: latestResult.cache });
+            setRenderMetrics({ diagnostics: latestResult.diagnostics, lod: latestResult.lod, vertexCount: latestResult.vertexCount, geometryBufferBytes: latestResult.geometryBufferBytes, plannedVertexEstimate: latestResult.plannedVertexEstimate, rawVertexEstimate: latestResult.rawVertexEstimate, vertexBudget: latestResult.vertexBudget, visibleCount: latestResult.activityCount, durationMs: performance.now() - viewportStarted, scan: latestResult.scan, cache: latestResult.cache });
           }
         }
       }
@@ -487,13 +504,13 @@ export function App() {
         const result = await engine.renderViewport(view.zoom, bounds, camera?.size);
         if (request !== viewportRequest.current) return;
         setRouteBatches(result.batches); setRenderedView(view);
-        setRenderMetrics({ lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
+        setRenderMetrics({ diagnostics: result.diagnostics, lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
       } catch (reason) {
         if (request === viewportRequest.current) setError(reason instanceof Error ? reason.message : String(reason));
       }
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [engine, mapInteracting, systemResolution, terrainCamera, terrainEnabled, view]);
+  }, [engine, mapInteracting, renderReload, systemResolution, renderSettings, terrainCamera, terrainEnabled, view]);
 
   useEffect(() => {
     if (!viewportScope || (!statsOpen && !tableOpen) || !selectionReady.current) return;
@@ -531,7 +548,7 @@ export function App() {
       setActive(destination.id); setDraft(destination.sql); setView(destination.mapState); setRenderedView(destination.mapState); setTerrainCamera(null); setToolbarOpen(openQuery);
       next = destination;
     }
-    replaceUrlSettings(next, next.mapState, units); setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false);
+    replaceUrlSettings(next, next.mapState, units); setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false); setStatsOpen(false); setTableOpen(false); setAboutOpen(false);
     if (ready.current && !isCurrent) void run(next, next.mapState, next.sql);
   }
   function add() {
@@ -581,12 +598,13 @@ export function App() {
   function clearSpatialFilter() { setSpatialDrawing(false); setSpatialDraft([]); saveSpatialFilter(undefined, true); }
   function changeTheme(theme: ThemeMode) { setThemeMode(theme); saveTheme(theme); }
   function changeUnits(next: UnitSystem) { setUnits(next); saveUnits(next); }
-  function changeSystemResolution(next: SystemResolution) { setSystemResolution(next); saveSystemResolution(next); }
+  function changeSystemResolution(next: SystemResolution) { setSystemResolution(next); saveSystemResolution(next); changeRenderSettings({ ...renderSettings, vertexBudget: null }); }
   function openSystemSettings() {
-    setSystemSettingsOpen(true); setMenuOpen(false); setSchemaOpen(false); setToolbarOpen(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false);
+    window.dispatchEvent(new Event("squiggles:close-diagnostics"));
+    setSystemSettingsOpen(true); setMenuOpen(false); setSchemaOpen(false); setToolbarOpen(false); setStatsOpen(false); setTableOpen(false); setAboutOpen(false);
   }
   const openActivity = useCallback(async (activity: RouteMetadata) => {
-    setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setAboutOpen(false); setToolbarOpen(false);
+    setStatsOpen(false); setTableOpen(false); setAboutOpen(false); setToolbarOpen(false);
     setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false);
     try {
       const detail = await engine.getActivity(activity.activityId);
@@ -638,7 +656,7 @@ export function App() {
   async function toggleStats() {
     if (statsOpen) { setStatsOpen(false); return; }
     setSelected(null); setProfileHover(null); setIsolateSelected(false);
-    setTableOpen(false); setRenderingOpen(false); setAboutOpen(false); setToolbarOpen(false); setStatsOpen(true);
+    setTableOpen(false); setAboutOpen(false); setToolbarOpen(false); setStatsOpen(true);
     if (!selectionReady.current || viewportScope) { setScopeLoading(viewportScope); return; }
     try {
       setScopeLoading(true); setError("");
@@ -653,7 +671,7 @@ export function App() {
   async function toggleTable() {
     if (tableOpen) { setTableOpen(false); return; }
     setSelected(null); setProfileHover(null); setIsolateSelected(false);
-    setStatsOpen(false); setRenderingOpen(false); setAboutOpen(false); setToolbarOpen(false); setTableOpen(true);
+    setStatsOpen(false); setAboutOpen(false); setToolbarOpen(false); setTableOpen(true);
     if (!selectionReady.current || viewportScope) { setTableLoading(viewportScope); return; }
     try {
       setTableLoading(true); setError("");
@@ -713,6 +731,20 @@ export function App() {
   const hoverPathData = useMemo(() => hover ? routeBatches.map((batch, index) => binaryPathData(batch, hoverColors[index])) : [], [hover, hoverColors, routeBatches]);
   const selectedSegments = useMemo(() => selected ? routeSegments([selected], true) : [], [selected]);
   const lineWidths = useMemo(() => lineWidthsForViewport(tab.style.lineWidthScale, mapSize.width, mapSize.height), [mapSize, tab.style.lineWidthScale]);
+  useEffect(() => {
+    recordRenderingDiagnostics({
+      ...renderMetrics,
+      terrain: terrainMetrics,
+      selectedRoutes: summary.activityCount,
+      mapView: terrainEnabled ? `3D · ${tab.style.terrainExaggeration.toFixed(2)}× terrain` : "2D",
+      thickness: `${tab.style.lineWidthScale.toFixed(2)}× · 0.15% viewport`,
+      routeWidth: `${lineWidths.route.toFixed(2)} px`,
+      selectedWidth: `${lineWidths.focus.toFixed(2)} px`,
+      heat: { sourceVertices: heat.sourceVertices, scores: heat.scores.size, cellCount: heat.cellCount, durationMs: heat.durationMs, slices: heat.yieldCount + 1, maxSliceMs: heat.maxSliceMs },
+      dataView: tab.style.cleanEnabled ? "Clean derived view" : "Canonical raw view",
+      basemap: tab.style.basemap,
+    });
+  }, [heat, lineWidths, renderMetrics, summary.activityCount, tab.style, terrainEnabled, terrainMetrics]);
   const layers = useMemo(() => [
     ...spatialLayers(tab.spatialFilter, spatialDrawing, spatialDraft),
     ...overviewBatches.flatMap((batch, index) => [
@@ -731,7 +763,7 @@ export function App() {
   ], [engine, hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, spatialDraft, spatialDrawing, tab.spatialFilter, tab.style.color, tab.style.heatEnabled]);
   const terrainHighlightActivityId = hover?.item.activityId ?? selected?.activityId;
 
-  return <main className="app" onKeyDown={event => { if (spatialDrawing && event.key === "Escape") { setSpatialDrawing(false); setSpatialDraft([]); return; } if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void run(); }}>
+  return <main className={`app ${systemSettingsOpen ? "with-side-panel" : ""}`} onKeyDown={event => { if (spatialDrawing && event.key === "Escape") { setSpatialDrawing(false); setSpatialDraft([]); return; } if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void run(); }}>
     <header className="topbar">
       <div className="brand"><button className={`brand-button ${logoMenuOpen ? "active" : ""}`} aria-label="Open Squiggles menu" data-tooltip="Squiggles menu" aria-expanded={logoMenuOpen} onClick={() => { setLogoMenuOpen(open => !open); setMenuOpen(false); setAccountMenuOpen(false); }}><img src={logoUrl} alt="Squiggles" /></button></div>
       <button className="mobile-query-title" aria-label={menuOpen ? "Close query menu" : "Open query menu"} aria-expanded={menuOpen} onClick={() => { setMenuOpen(open => !open); setLogoMenuOpen(false); setAccountMenuOpen(false); setSystemSettingsOpen(false); }}>{tab.title}</button>
@@ -739,16 +771,16 @@ export function App() {
       {sessionIdentity.email ? <button className="avatar-button" aria-label="Open account menu" aria-expanded={accountMenuOpen} onClick={() => { setAccountMenuOpen(open => !open); setMenuOpen(false); setLogoMenuOpen(false); }}>{sessionIdentity.picture ? <img src={sessionIdentity.picture} alt="" referrerPolicy="no-referrer" /> : <span>{(sessionIdentity.name || sessionIdentity.email).slice(0, 1).toUpperCase()}</span>}</button> : <button className="login-button" onClick={() => { setAccountView("login"); setAccountOpen(true); setLogoMenuOpen(false); setMenuOpen(false); }}>Log in</button>}
     </header>
 
-    {logoMenuOpen && <nav className="logo-menu utility-panel" aria-label="Squiggles navigation"><button onClick={() => { setAboutOpen(true); setLogoMenuOpen(false); setStatsOpen(false); setTableOpen(false); setRenderingOpen(false); setToolbarOpen(false); }}>About</button><button disabled={busy} onClick={() => { void openDirectory(); setLogoMenuOpen(false); }}>{datasetName ? "Change dataset" : "Open dataset"}</button><button onClick={() => { setSchemaOpen(true); setLogoMenuOpen(false); }}>AI Skills</button><button onClick={() => { openSystemSettings(); setLogoMenuOpen(false); }}>System settings</button></nav>}
+    {logoMenuOpen && <nav className="logo-menu utility-panel" aria-label="Squiggles navigation"><button onClick={() => { setAboutOpen(true); setLogoMenuOpen(false); setStatsOpen(false); setTableOpen(false); setToolbarOpen(false); }}>About</button><button disabled={busy} onClick={() => { void openDirectory(); setLogoMenuOpen(false); }}>{datasetName ? "Change dataset" : "Open dataset"}</button><button onClick={() => { setSchemaOpen(true); setLogoMenuOpen(false); }}>AI Skills</button><button onClick={() => { openSystemSettings(); setLogoMenuOpen(false); }}>System settings</button></nav>}
 
     {menuOpen && <nav className="mobile-menu utility-panel" aria-label="Query navigation">
       <section><span className="eyebrow">SAVED QUERIES</span>{tabs.map(item => <button className={item.id === tab.id ? "active" : ""} key={item.id} onClick={() => { choose(item); setMenuOpen(false); }}>{item.title}</button>)}<button onClick={() => { add(); setMenuOpen(false); }}>New query</button></section>
-      <section><button onClick={() => { choose(tab, true); setMenuOpen(false); }}>Query settings</button><button disabled={!selectionReady.current} onClick={() => { void toggleStats(); setMenuOpen(false); }}>Statistics</button><button disabled={!selectionReady.current || tableLoading} onClick={() => { void toggleTable(); setMenuOpen(false); }}>Table</button><button disabled={!selectionReady.current} onClick={() => { setRenderingOpen(true); setStatsOpen(false); setTableOpen(false); setAboutOpen(false); setToolbarOpen(false); setSchemaOpen(false); setMenuOpen(false); setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>Rendering</button></section>
+      <section><button onClick={() => { choose(tab, true); setMenuOpen(false); }}>Query settings</button><button disabled={!selectionReady.current} onClick={() => { void toggleStats(); setMenuOpen(false); }}>Statistics</button><button disabled={!selectionReady.current || tableLoading} onClick={() => { void toggleTable(); setMenuOpen(false); }}>Table</button></section>
     </nav>}
 
     {accountMenuOpen && <nav className="account-menu utility-panel" aria-label="Account navigation"><button onClick={() => { setAccountView("account"); setAccountOpen(true); setAccountMenuOpen(false); }}>Account</button><button onClick={() => { setAccountView("upload"); setAccountOpen(true); setAccountMenuOpen(false); }}>Upload Archive</button><button onClick={() => { void publishTabs(); setAccountMenuOpen(false); }}>Publish link</button><button onClick={() => { clearSession(); refreshIdentity(); setAccountMenuOpen(false); }}>Log out</button></nav>}
 
-    {systemSettingsOpen && <section className="system-settings utility-panel" aria-label="System settings"><header><div><span className="eyebrow">SYSTEM</span><strong>Appearance and performance</strong></div><button aria-label="Close system settings" onClick={() => setSystemSettingsOpen(false)}>×</button></header><div><label>Theme</label><div className="theme-control" role="group" aria-label="Theme"><button aria-label="Use light theme" aria-pressed={themeMode === "light"} title="Light theme" onClick={() => changeTheme("light")}>☀︎</button><button aria-label="Use system theme" aria-pressed={themeMode === "system"} title="Follow system theme" onClick={() => changeTheme("system")}>◐</button><button aria-label="Use dark theme" aria-pressed={themeMode === "dark"} title="Dark theme" onClick={() => changeTheme("dark")}>☾</button></div></div><div><label>Distance and elevation</label><div className="unit-control" role="group" aria-label="Units"><button aria-label="Use imperial units" aria-pressed={units === "imperial"} title="Show miles and feet" onClick={() => changeUnits("imperial")}>mi</button><button aria-label="Use metric units" aria-pressed={units === "metric"} title="Show kilometres and metres" onClick={() => changeUnits("metric")}>km</button></div></div><div><label>Map resolution</label><div className="resolution-control" role="group" aria-label="Map resolution"><button aria-pressed={systemResolution === "low"} onClick={() => changeSystemResolution("low")}>Low</button><button aria-pressed={systemResolution === "medium"} onClick={() => changeSystemResolution("medium")}>Medium</button><button aria-pressed={systemResolution === "high"} onClick={() => changeSystemResolution("high")}>High</button></div></div></section>}
+    {systemSettingsOpen && <section className="system-settings utility-panel" aria-label="System settings"><header><div><span className="eyebrow">SYSTEM</span><strong>Appearance and performance</strong></div><button aria-label="Close system settings" onClick={() => setSystemSettingsOpen(false)}>×</button></header><div><label>Theme</label><div className="theme-control" role="group" aria-label="Theme"><button aria-label="Use light theme" aria-pressed={themeMode === "light"} title="Light theme" onClick={() => changeTheme("light")}>☀︎</button><button aria-label="Use system theme" aria-pressed={themeMode === "system"} title="Follow system theme" onClick={() => changeTheme("system")}>◐</button><button aria-label="Use dark theme" aria-pressed={themeMode === "dark"} title="Dark theme" onClick={() => changeTheme("dark")}>☾</button></div></div><div><label>Distance and elevation</label><div className="unit-control" role="group" aria-label="Units"><button aria-label="Use imperial units" aria-pressed={units === "imperial"} title="Show miles and feet" onClick={() => changeUnits("imperial")}>mi</button><button aria-label="Use metric units" aria-pressed={units === "metric"} title="Show kilometres and metres" onClick={() => changeUnits("metric")}>km</button></div></div><div><label>Map resolution</label><div className="resolution-control" role="group" aria-label="Map resolution"><button aria-pressed={systemResolution === "low"} onClick={() => changeSystemResolution("low")}>Low</button><button aria-pressed={systemResolution === "medium"} onClick={() => changeSystemResolution("medium")}>Medium</button><button aria-pressed={systemResolution === "high"} onClick={() => changeSystemResolution("high")}>High</button></div></div><RenderSettingsControls settings={renderSettings} onChange={changeRenderSettings} /></section>}
     {accountOpen && <AccountPanel view={accountView} onClose={() => setAccountOpen(false)} onIdentityChange={refreshIdentity} />}
 
     {schemaOpen && <section className="schema-panel utility-panel" aria-label="AI Skills"><header><strong>AI Skills · Squiggles SQL</strong><div><button onClick={() => void copySchema()}>{schemaCopied ? "Copied" : "Copy for your AI"}</button><button aria-label="Close AI Skills" onClick={() => setSchemaOpen(false)}>×</button></div></header><p>Paste this into the AI assistant of your choice, then describe the activities you want to select.</p><pre>{QUERY_SCHEMA}</pre></section>}
@@ -780,6 +812,9 @@ export function App() {
         basemap={tab.style.basemap}
         dark={effectiveTheme === "dark"}
         exaggeration={tab.style.terrainExaggeration}
+        imageryDetail={renderSettings.imageryDetail}
+        terrainDetail={renderSettings.terrainDetail}
+        onDiagnostics={metrics => setTerrainMetrics(previous => previous.loadedSegments === metrics.loadedSegments && previous.submittedSegments === metrics.submittedSegments && previous.tileCount === metrics.tileCount ? previous : metrics)}
         batches={routeBatches}
         colors={terrainColors}
         widthPx={tab.style.heatEnabled ? lineWidths.heat : lineWidths.route}
@@ -810,7 +845,6 @@ export function App() {
     {selected && <aside className="detail" aria-label="Activity detail"><button className="close" aria-label="Close detail" onClick={() => { setSelected(null); setProfileHover(null); setIsolateSelected(false); }}>×</button><span className="eyebrow">{selected.sportType}</span><h2>{selected.name}</h2><p className="detail-date">{selected.startTime?.slice(0, 10)}</p><div className="detail-stats"><Stat value={distance(selected.distanceM ?? 0)} label="distance" /><Stat value={elevation(selected.elevationGainM ?? 0)} label="gain" /><Stat value={selected.maxElevationM == null ? "—" : elevation(selected.maxElevationM)} label="maximum" /></div><div className="detail-actions"><button onClick={zoomToSelected}>Zoom to route</button><button className={`isolate ${isolateSelected ? "active" : ""}`} aria-pressed={isolateSelected} onClick={() => setIsolateSelected(value => !value)}>{isolateSelected ? "Show all routes" : "Show only this route"}</button></div><ElevationProfile samples={selected.elevationProfile} active={profileHover} units={units} onHover={setProfileHover} />{selected.sourceUrl && <a href={selected.sourceUrl} target="_blank" rel="noreferrer">Open original activity ↗</a>}</aside>}
     {statsOpen && <section className="rich-stats" aria-label="Detailed selection statistics"><header><img src={logoUrl} alt="" /><div><span className="eyebrow">{viewportScope ? "CONTAINED IN VIEWPORT" : "CURRENT SELECTION"}</span><h2>{scopeLoading && viewportScope ? "Updating…" : `${integer.format((viewportScope ? scopedSummary : summary).activityCount)} activities`}</h2></div><button aria-label="Close statistics" onClick={() => setStatsOpen(false)}>×</button></header><ScopeToggle checked={viewportScope} onChange={changeViewportScope} /><Stats summary={viewportScope ? scopedSummary : summary} distance={distance} elevation={elevation} /></section>}
     {tableOpen && <section className="activity-table" aria-label="Activity table"><header><div><span className="eyebrow">{viewportScope ? "CONTAINED IN VIEWPORT" : "CURRENT SELECTION"}</span><h2>{tableLoading || (scopeLoading && viewportScope) ? "Loading activities…" : `${integer.format(tableActivities.length)} activities`}</h2></div><ScopeToggle checked={viewportScope} onChange={changeViewportScope} /><span>Hover to highlight · click to zoom</span><button aria-label="Close activity table" onClick={() => { setTableOpen(false); setHover(null); }}>×</button></header><div className="table-scroll"><table><thead><tr><SortableHeader label="Activity" field="name" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Sport" field="sport" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Date" field="date" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Distance" field="distance" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Gain" field="gain" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /><SortableHeader label="Maximum" field="maximum" active={tableSort} descending={tableDescending} onSort={toggleTableSort} /></tr></thead><tbody>{tableRows.map(item => <tr key={item.activityId} className={selected?.activityId === item.activityId || hover?.origin === "table" && hover.item.activityId === item.activityId ? "selected" : ""} onMouseEnter={() => setHover({ x: 0, y: 0, item, origin: "table" })} onMouseLeave={() => setHover(current => current?.origin === "table" && current.item.activityId === item.activityId ? null : current)} onClick={() => void openTableActivity(item)}><td><strong>{item.name}</strong></td><td>{item.sportType}</td><td>{item.startTime?.slice(0, 10) ?? "—"}</td><td>{item.distanceM == null ? "—" : `${distanceValue(item.distanceM, units).toFixed(1)} ${distanceUnit(units)}`}</td><td>{item.elevationGainM == null ? "—" : elevation(item.elevationGainM)}</td><td>{item.maxElevationM == null ? "—" : elevation(item.maxElevationM)}</td></tr>)}</tbody></table>{!tableLoading && tableRows.length === 0 && <div className="table-empty">No selected activities are fully contained in the visible viewport.</div>}</div></section>}
-    {renderingOpen && <section className="rich-stats diagnostics-drawer" aria-label="Rendering diagnostics"><header><div><span className="eyebrow">BROWSER RENDER PLAN</span><h2>{renderMetrics.lod === 4 ? "Raw geometry" : renderMetrics.lod == null ? "Waiting for geometry" : `LOD ${renderMetrics.lod}`}</h2></div><button aria-label="Close rendering diagnostics" onClick={() => setRenderingOpen(false)}>×</button></header><table><tbody><Diagnostic label="Representation" value={renderMetrics.lod === 4 ? "LOD 4 · raw coordinates" : renderMetrics.lod == null ? "—" : `LOD ${renderMetrics.lod} · simplified overview`} /><Diagnostic label="Map zoom" value={renderedView.zoom.toFixed(2)} /><Diagnostic label="Fragments read" value={`${integer.format(renderMetrics.scan.candidateFragmentCount)} / ${integer.format(renderMetrics.scan.totalFragmentCount)}`} /><Diagnostic label="Candidate Parquet bytes" value={`${bytes(renderMetrics.scan.candidateBytes)} / ${bytes(renderMetrics.scan.totalBytes)}`} /><Diagnostic label="Fragment bytes avoided" value={percent(renderMetrics.scan.totalBytes - renderMetrics.scan.candidateBytes, renderMetrics.scan.totalBytes)} /><Diagnostic label="Row groups expected read" value={`${integer.format(renderMetrics.scan.expectedRowGroupCount)} / ${integer.format(renderMetrics.scan.candidateRowGroupCount)} candidate · ${integer.format(renderMetrics.scan.totalRowGroupCount)} total`} /><Diagnostic label="Row groups filtered" value={integer.format(renderMetrics.scan.totalRowGroupCount - renderMetrics.scan.expectedRowGroupCount)} /><Diagnostic label="Activity rows kept" value={`${integer.format(renderMetrics.scan.keptRowCount)} / ${integer.format(renderMetrics.scan.expectedRowCount)} expected-read rows`} /><Diagnostic label="Read-to-kept efficiency" value={percent(renderMetrics.scan.keptRowCount, renderMetrics.scan.expectedRowCount)} /><Diagnostic label="Visible routes" value={integer.format(renderMetrics.visibleCount)} /><Diagnostic label="Selected routes" value={integer.format(summary.activityCount)} /><Diagnostic label="Planned vertex estimate" value={`${integer.format(renderMetrics.plannedVertexEstimate)} / ${integer.format(renderMetrics.vertexBudget)} budget`} /><Diagnostic label="Raw vertex estimate" value={integer.format(renderMetrics.rawVertexEstimate)} /><Diagnostic label="Rendered vertices" value={integer.format(renderMetrics.vertexCount)} /><Diagnostic label="GeoArrow buffers" value={bytes(renderMetrics.geometryBufferBytes)} /><Diagnostic label="Coordinate objects created" value="0" /><Diagnostic label="Geometry query + transfer" value={`${renderMetrics.durationMs.toFixed(1)} ms`} /><Diagnostic label="Render cache" value={`${renderMetrics.cache.hit ? "hit" : "miss"} · ${bytes(renderMetrics.cache.bytes)} / ${bytes(renderMetrics.cache.budgetBytes)}`} /><Diagnostic label="Cached viewport batches" value={`${integer.format(renderMetrics.cache.entries)} · ${integer.format(renderMetrics.cache.evictions)} evicted`} /><Diagnostic label="Map view" value={terrainEnabled ? `3D · ${tab.style.terrainExaggeration.toFixed(2)}× terrain` : "2D"} /><Diagnostic label="Thickness control" value={`${tab.style.lineWidthScale.toFixed(2)}× · 0.15% viewport`} /><Diagnostic label="Route width" value={`${lineWidths.route.toFixed(2)} px`} /><Diagnostic label="Selected width" value={`${lineWidths.focus.toFixed(2)} px`} /><Diagnostic label="Heat vertices scored" value={integer.format(heat.sourceVertices)} /><Diagnostic label="Heat-colored routes" value={integer.format(heat.scores.size)} /><Diagnostic label="Heat proximity cells" value={integer.format(heat.cellCount)} /><Diagnostic label="Heat preparation" value={`${heat.durationMs.toFixed(1)} ms`} /><Diagnostic label="Heat UI slices" value={`${integer.format(heat.yieldCount + 1)} · ${heat.maxSliceMs.toFixed(1)} ms max`} /><Diagnostic label="Data view" value={tab.style.cleanEnabled ? "Clean derived view" : "Canonical raw view"} /><Diagnostic label="Basemap" value={tab.style.basemap} /></tbody></table><p>DuckDB transfers interleaved GeoArrow coordinate buffers directly to the active WebGL renderer without creating per-point JavaScript objects. Revisited and contained viewport batches remain in a bounded LRU cache. Geometry layer inputs stay referentially stable while the camera moves, and heat scoring is recomputed between bounded main-thread slices.</p></section>}
     {aboutOpen && <section className="rich-stats about-drawer" aria-label="About this project"><header><img src={logoUrl} alt="" /><div><span className="eyebrow">ABOUT THIS PROJECT</span><h2>Your archive, at browser scale</h2></div><button aria-label="Close about this project" onClick={() => setAboutOpen(false)}>×</button></header><p className="about-lead">Squiggles is built for the larger GPX archive that becomes awkward to understand in experiences centered on individual activities or route planning.</p><div className="technology-flow" aria-label="Technology pipeline"><strong>Parquet</strong><span>→</span><strong>GeoArrow</strong><span>→</span><strong>DuckDB-Wasm</strong><span>→</span><strong>WebGL</strong></div><h3>Millions of points, locally</h3><p>Columnar GeoParquet keeps the compiled archive compact. GeoArrow carries coordinates without a giant GeoJSON conversion. DuckDB runs SQL, summaries, viewport pruning, and detail lookup inside a browser worker, while the chosen binary geometry is sent directly to WebGL.</p><p>Together, those pieces let a user's own browser query and view many millions of recorded points. Dropping the same archive as thousands of individual GPX files into a route-planning import flow—Caltopo included—can overwhelm a workflow that was designed for a different job.</p><h3>What it is—and is not</h3><p>This is not a route planner, navigation system, training coach, or social feed. It is a storytelling tool: find the patterns across years of movement, revisit the places that shaped you, and share the resulting map.</p><a className="github-link" href="https://github.com/ljstrnadiii/squiggles" target="_blank" rel="noreferrer" aria-label="Squiggles on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.02c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.74-1.55-2.57-.3-5.27-1.29-5.27-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.16 1.18a10.97 10.97 0 0 1 5.75 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.75.11 3.04.74.8 1.83 1.19 3.09 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.06.79 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" /></svg>View the project on GitHub</a><p className="privacy-note">Your activity SQL and rendering stay in the browser. Optional basemap tiles are the only runtime third-party requests.</p></section>}
   </main>;
 }
@@ -841,6 +875,5 @@ function ElevationProfile({ samples, active, units, onHover }: { samples: Elevat
 function Stat({ value, label }: { value: string; label: string }) { return <div className="stat"><strong>{value}</strong><small>{label}</small></div>; }
 function ScopeToggle({ checked, onChange }: { checked: boolean; onChange: (checked: boolean) => void }) { return <label className="scope-toggle" title="Include only selected activities whose complete route bounds fit inside the unobscured map"><input type="checkbox" aria-label="Limit to activities contained in viewport" checked={checked} onChange={event => onChange(event.target.checked)} /><span>Viewport only</span></label>; }
 function Stats({ summary, distance, elevation }: { summary: SummaryStats; distance: (meters: number) => string; elevation: (meters: number) => string }) { return <><div className="stats-grid"><Stat value={distance(summary.distanceM)} label="total distance" /><Stat value={distance(summary.maxDistanceM ?? 0)} label="longest" /><Stat value={distance(summary.activityCount ? summary.distanceM / summary.activityCount : 0)} label="average distance" /><Stat value={`${integer.format(summary.movingSeconds / 3600)} hr`} label="moving time" /><Stat value={`${integer.format(summary.elapsedSeconds / 3600)} hr`} label="elapsed time" /><Stat value={`${integer.format(summary.activityCount ? summary.movingSeconds / summary.activityCount / 60 : 0)} min`} label="average moving" /><Stat value={elevation(summary.elevationGainM)} label="elevation gain" /><Stat value={elevation(summary.elevationLossM)} label="elevation loss" /><Stat value={`${integer.format(summary.activeDays)} days`} label="active days" /><Stat value={integer.format(summary.droppedJumpPoints)} label="GPS spikes cleaned" /><Stat value={integer.format(summary.droppedElevationPoints)} label="elevation spikes cleaned" /></div><div className="sport-counts">{summary.sportCounts.map(item => <span key={item.sport}><strong>{integer.format(item.count)}</strong> {item.sport}</span>)}</div></>; }
-function Diagnostic({ label, value }: { label: string; value: string }) { return <tr><th>{label}</th><td>{value}</td></tr>; }
 function SortableHeader({ label, field, active, descending, onSort }: { label: string; field: TableSort; active: TableSort; descending: boolean; onSort: (field: TableSort) => void }) { return <th aria-sort={active === field ? (descending ? "descending" : "ascending") : "none"}><button aria-label={`Sort by ${label}`} onClick={() => onSort(field)}>{label}{active === field ? <span aria-hidden="true"> {descending ? "↓" : "↑"}</span> : null}</button></th>; }
 declare global { interface Window { showDirectoryPicker(options?: { mode?: "read" | "readwrite" }): Promise<FileSystemDirectoryHandle> } }

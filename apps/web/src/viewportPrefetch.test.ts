@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { padViewportBounds } from "./engine";
 
 describe("padViewportBounds", () => {
+  it("uses a small default prefetch margin", () => {
+    expect(padViewportBounds([-105, 39, -104, 40])).toEqual([-105.05, 38.95, -103.95, 40.05]);
+  });
+
   it("pads a normal viewport on every side", () => {
     expect(padViewportBounds([-105, 39, -104, 40], 0.2)).toEqual([-105.2, 38.8, -103.8, 40.2]);
   });

@@ -17,7 +17,12 @@ export type MapStyle = {
   cleanEnabled: boolean;
 };
 export type ViewportBounds = [west: number, south: number, east: number, north: number];
-export type ViewportSize = { width: number; height: number };
+export type ViewportSize = {
+  width: number;
+  height: number;
+  pixelMeters?: number;
+  threeD?: boolean;
+};
 export type SpatialPredicate = "intersects" | "within";
 export type SpatialFilter = {
   predicate: SpatialPredicate;
@@ -153,6 +158,7 @@ export type RenderCacheMetrics = {
   evictions: number;
 };
 export type ViewportResult = {
+  diagnostics?: { requestedLod: RenderLod; candidateRoutes: number };
   batches: BinaryRouteBatch[];
   activityCount: number;
   geometryBufferBytes: number;
@@ -167,6 +173,7 @@ export type ViewportResult = {
 };
 export interface ExecutionEngine {
   setResolution(resolution: SystemResolution): void;
+  setRenderSettings(settings: import("./renderSettings").RenderSettings): void;
   openDataset(
     source: DatasetSource,
     onProgress?: (completed: number, total: number) => void,
