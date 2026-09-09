@@ -62,6 +62,8 @@ jobs:
       - uses: pnpm/action-setup@v6
         with:
           version: 11.22.0
+      # The MapLibre declaration generator excludes paths containing node_modules.
+      - run: pnpm config set store-dir "$HOME/.pnpm-store"
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -97,6 +99,8 @@ jobs:
       - uses: pnpm/action-setup@v6
         with:
           version: 11.22.0
+      # The MapLibre declaration generator excludes paths containing node_modules.
+      - run: pnpm config set store-dir "$HOME/.pnpm-store"
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -177,6 +181,8 @@ jobs:
       - uses: pnpm/action-setup@v6
         with:
           version: 11.22.0
+      # The MapLibre declaration generator excludes paths containing node_modules.
+      - run: pnpm config set store-dir "$HOME/.pnpm-store"
       - uses: actions/setup-node@v7
         with:
           node-version: 22

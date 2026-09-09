@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import "./maplibreWorker";
 import { App } from "./App";
 import { PanelEnhancements } from "./PanelEnhancements";
 import "./styles.css";

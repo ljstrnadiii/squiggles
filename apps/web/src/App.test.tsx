@@ -3,7 +3,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const engineCalls = vi.hoisted(() => ({ execute: vi.fn(), getSummary: vi.fn() }));
 
-vi.mock("maplibre-gl", () => ({ Map: class { jumpTo() {} setStyle() {} remove() {} } }));
+vi.mock("maplibre-gl", () => ({ Map: class {
+  constructor(private camera: { center: [number, number]; zoom: number }) {}
+  handlers = new Map<string, ((...args: unknown[]) => void)[]>();
+  on(name: string, handler: (...args: unknown[]) => void) { this.handlers.set(name, [...(this.handlers.get(name) ?? []), handler]); if (name === "load") handler(); return this; }
+  getCenter() { return { lng: this.camera.center[0], lat: this.camera.center[1] }; }
+  getBounds() { return { getWest: () => -107, getSouth: () => 38, getEast: () => -105, getNorth: () => 41 }; }
+  getCanvas() { return { clientWidth: 1200, clientHeight: 800, style: { cursor: "" } }; }
+  getZoom() { return this.camera.zoom; }
+  getLayer() { return undefined; }
+  addLayer() {}
+  jumpTo(camera: { center: [number, number]; zoom: number }) { this.camera = camera; }
+  setStyle() {}
+  setTerrain() {}
+  remove() {}
+} }));
 vi.mock("./engine", () => ({
   BrowserDuckDBEngine: class {
     setResolution() {}
@@ -58,8 +72,8 @@ describe("App", () => {
     expect(screen.getByRole("img", { name: "Squiggles" })).toHaveAttribute("src", "/logo-light.png");
     fireEvent.click(screen.getByRole("button", { name: "Close system settings" }));
     openQuerySettings();
-    expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("mapbox-standard");
-    expect(screen.getByRole("option", { name: "Mapbox Satellite" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("streets");
+    expect(screen.getByRole("option", { name: "Imagery" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Use 2D map view" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Use 3D map view" }));
     expect(screen.getByRole("button", { name: "Use 3D map view" })).toHaveAttribute("aria-pressed", "true");
@@ -190,12 +204,10 @@ describe("App", () => {
     expect(screen.getByRole("checkbox", { name: "Heat" })).not.toBeChecked();
     expect(screen.getByRole("slider", { name: "Heat temperature" })).toHaveValue("2.4");
     expect(screen.getByRole("slider", { name: "Route thickness" })).toHaveValue("1.6");
-    fireEvent.change(screen.getByRole("combobox", { name: "Basemap" }), { target: { value: "mapbox-outdoors" } });
-    await waitFor(() => expect(new URL(window.location.href).searchParams.get("basemap")).toBe("mapbox-outdoors"));
+    fireEvent.change(screen.getByRole("combobox", { name: "Basemap" }), { target: { value: "topo" } });
+    await waitFor(() => expect(new URL(window.location.href).searchParams.get("basemap")).toBe("topo"));
     expect(new URL(window.location.href).searchParams.get("view")).toBe("3d");
     expect(new URL(window.location.href).searchParams.get("lng")).toBe("-106.25000");
-    expect(new URL(window.location.href).searchParams.get("bearing")).toBe("31.5");
-    expect(new URL(window.location.href).searchParams.get("pitch")).toBe("47.0");
   });
 
   it("creates a query tab at the current camera instead of the default location", async () => {
@@ -206,7 +218,7 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Open query menu" })).toHaveTextContent("New Query");
     await waitFor(() => expect(new URL(window.location.href).searchParams.get("lng")).toBe("-106.25000"));
     expect(new URL(window.location.href).searchParams.get("zoom")).toBe("11.25");
-    const stored = JSON.parse(localStorage.getItem("activity-map.tabs.v1") ?? "[]") as { title: string; mapState: { longitude: number; latitude: number; zoom: number; bearing: number; pitch: number }; style: { basemap: string; viewMode: string } }[];
-    expect(stored.find(item => item.title === "New Query")).toMatchObject({ mapState: { longitude: -106.25, latitude: 39.5, zoom: 11.25, bearing: -22, pitch: 43.5 }, style: { basemap: "carto-dark", viewMode: "3d" } });
+    const stored = JSON.parse(localStorage.getItem("activity-map.tabs.v1") ?? "[]") as { title: string; mapState: { longitude: number; latitude: number; zoom: number }; style: { basemap: string; viewMode: string } }[];
+    expect(stored.find(item => item.title === "New Query")).toMatchObject({ mapState: { longitude: -106.25, latitude: 39.5, zoom: 11.25 }, style: { basemap: "carto-dark", viewMode: "3d" } });
   });
 });

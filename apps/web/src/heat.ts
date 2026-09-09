@@ -40,9 +40,12 @@ function visibleWorldPoint(point: WorldPoint, view: MapState, width: number, hei
   return wrappedX <= width / 2 + marginPixels && Math.abs(point.y - center.y) <= height / 2 + marginPixels;
 }
 
-function heatCell(longitude: number, latitude: number, view: MapState, width: number, height: number, worldSize: number, cellPixels: number): Cell | null {
+function heatCell(longitude: number, latitude: number, view: MapState, width: number, height: number, worldSize: number, cellPixels: number, skipViewportClip = false): Cell | null {
   const point = worldPoint(longitude, latitude, worldSize);
-  if (!visibleWorldPoint(point, view, width, height, worldSize, cellPixels)) return null;
+  // Terrain mode already prunes the binary batches with MapLibre's true pitched
+  // viewport bounds. Applying the old flat 2D screen rectangle a second time
+  // drops routes that are visibly draped near the horizon/viewport edges.
+  if (!skipViewportClip && !visibleWorldPoint(point, view, width, height, worldSize, cellPixels)) return null;
   return { x: Math.floor(point.x / cellPixels), y: Math.floor(point.y / cellPixels), total: 0 };
 }
 
@@ -182,6 +185,7 @@ export async function buildBinaryHeatDataCooperative(
   cellPixels = 8,
   shouldCancel: () => boolean = () => false,
   sliceBudgetMs = 8,
+  skipViewportClip = false,
 ): Promise<CooperativeHeatResult | null> {
   const started = performance.now();
   const empty = { scores: new Map<string, number>(), sourceVertices: 0, cellCount: 0, maxScore: 0, durationMs: 0, yieldCount: 0, maxSliceMs: 0 };
@@ -217,7 +221,7 @@ export async function buildBinaryHeatDataCooperative(
         const longitude = batch.positions[point * 2];
         const latitude = batch.positions[point * 2 + 1];
         if (Number.isFinite(longitude) && Number.isFinite(latitude)) {
-          const cell = heatCell(longitude, latitude, view, width, height, worldSize, cellPixels);
+          const cell = heatCell(longitude, latitude, view, width, height, worldSize, cellPixels, skipViewportClip);
           if (cell) {
             const cellKey = key(cell.x, cell.y);
             const existing = globalCells.get(cellKey);
