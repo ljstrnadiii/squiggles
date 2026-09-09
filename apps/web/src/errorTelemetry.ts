@@ -109,9 +109,7 @@ function flush() {
 
 function installRum(config: TelemetryConfig) {
   const clientUrl = config.clientUrl ?? "https://client.rum.us-east-1.amazonaws.com/1.0.2/cwr.js";
-  window.AwsRumClient = { q: [], n: "cwr", i: config.appMonitorId, v: config.appVersion, r: config.region, c: {} };
-  window.cwr = (command, payload) => window.AwsRumClient?.q.push({ c: command, p: payload });
-  window.cwr("config", {
+  const rumConfig = {
     sessionSampleRate: 1,
     identityPoolId: config.identityPoolId,
     endpoint: `https://dataplane.rum.${config.region}.amazonaws.com`,
@@ -122,7 +120,9 @@ function installRum(config: TelemetryConfig) {
       applicationVersion: config.appVersion,
       gitSha: config.gitSha,
     },
-  });
+  };
+  window.AwsRumClient = { q: [], n: "cwr", i: config.appMonitorId, v: config.appVersion, r: config.region, c: rumConfig };
+  window.cwr = (command, payload) => window.AwsRumClient?.q.push({ c: command, p: payload });
   const script = document.createElement("script");
   script.async = true;
   script.src = clientUrl;
