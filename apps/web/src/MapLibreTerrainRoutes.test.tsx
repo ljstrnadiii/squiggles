@@ -60,6 +60,27 @@ describe("terrain profile marker", () => {
     expect(result.widths?.[1]).toBeCloseTo(1.8);
   });
 
+  it("uses an explicit configured color for the highlighted route", () => {
+    const batch: BinaryRouteBatch = {
+      activities: [
+        { activityId: "background", name: "Background", sportType: "Run", startTime: null, distanceM: null, elevationGainM: null, maxElevationM: null, sourceUrl: null },
+        { activityId: "highlight", name: "Highlight", sportType: "Run", startTime: null, distanceM: null, elevationGainM: null, maxElevationM: null, sourceUrl: null },
+      ],
+      positions: new Float64Array([-105, 40, -104, 41, -105, 40, -104, 41]),
+      startIndices: new Uint32Array([0, 2, 4]),
+      segmentActivityIndices: new Uint32Array([0, 1]),
+    };
+    const heatColors = new Uint8Array([
+      10, 20, 30, 255, 10, 20, 30, 255,
+      220, 80, 20, 255, 220, 80, 20, 255,
+    ]);
+    const configured = new Uint8Array([71, 107, 204, 255]);
+    const result = terrainSegmentBatch([batch], [heatColors], undefined, "highlight", undefined, configured);
+    expect([...result.colors.slice(0, 4)]).toEqual([10, 20, 30, 255]);
+    expect([...result.colors.slice(4, 8)]).toEqual([71, 107, 204, 255]);
+    expect(result.widths?.[1]).toBeCloseTo(1.8);
+  });
+
   it("submits a highlighted route after routes from later binary batches", () => {
     const highlighted: BinaryRouteBatch = {
       activities: [{ activityId: "highlight", name: "Highlight", sportType: "Run", startTime: null, distanceM: null, elevationGainM: null, maxElevationM: null, sourceUrl: null }],
