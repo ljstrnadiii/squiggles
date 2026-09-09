@@ -217,6 +217,7 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     const originalWorker = globalThis.Worker;
     globalThis.Worker = WorkerMock as unknown as typeof Worker;
     const engine = new BrowserDuckDBEngine();
+    engine.setRenderSettings({ ...DEFAULT_RENDER_SETTINGS, vertexBudget: 1_250_000 });
     const tab: QueryTab = {
       ...defaultTab,
       style: { ...defaultTab.style },
@@ -254,7 +255,7 @@ describe("BrowserDuckDBEngine viewport cache", () => {
     const originalWorker = globalThis.Worker;
     globalThis.Worker = WorkerMock as unknown as typeof Worker;
     const engine = new BrowserDuckDBEngine();
-    engine.setRenderSettings({ ...DEFAULT_RENDER_SETTINGS, fillBudget: false });
+    engine.setRenderSettings({ ...DEFAULT_RENDER_SETTINGS, fillBudget: false, vertexBudget: 1_250_000 });
     const tab: QueryTab = {
       ...defaultTab,
       style: { ...defaultTab.style },
