@@ -4,7 +4,10 @@ import {
   lodForMetersPerPixel,
   lodForView,
   metersPerPixel,
+  MIN_THREE_D_VERTEX_BUDGETS,
+  MIN_VERTEX_BUDGETS,
   RESOLUTION_VERTEX_BUDGETS,
+  scheduledVertexBudget,
   THREE_D_VERTEX_BUDGETS,
 } from "./lod";
 
@@ -31,18 +34,24 @@ describe("screen-space LOD fidelity", () => {
   });
 });
 
-describe("3D resolution budgets", () => {
-  it("keeps terrain and imagery rendering within smaller GPU budgets", () => {
-    expect(THREE_D_VERTEX_BUDGETS).toEqual({ low: 100_000, medium: 250_000, high: 750_000 });
+describe("zoom scheduled vertex budgets", () => {
+  it("uses smaller budgets when zoomed out and reaches the configured ceiling up close", () => {
+    expect(MIN_VERTEX_BUDGETS).toEqual({ low: 100_000, medium: 200_000, high: 300_000 });
+    expect(RESOLUTION_VERTEX_BUDGETS).toEqual({ low: 500_000, medium: 750_000, high: 1_000_000 });
+    expect(scheduledVertexBudget("medium", 6)).toBe(200_000);
+    expect(scheduledVertexBudget("medium", 10)).toBe(500_000);
+    expect(scheduledVertexBudget("medium", 14)).toBe(750_000);
   });
-});
 
-describe("resolution budgets", () => {
-  it("changes only the vertex budget", () => {
-    expect(RESOLUTION_VERTEX_BUDGETS).toEqual({
-      low: 750_000,
-      medium: 1_250_000,
-      high: 1_750_000,
-    });
+  it("keeps 3D on a more conservative schedule", () => {
+    expect(MIN_THREE_D_VERTEX_BUDGETS).toEqual({ low: 75_000, medium: 125_000, high: 200_000 });
+    expect(THREE_D_VERTEX_BUDGETS).toEqual({ low: 325_000, medium: 500_000, high: 650_000 });
+    expect(scheduledVertexBudget("medium", 6, true)).toBe(150_000);
+    expect(scheduledVertexBudget("medium", 10, true)).toBe(300_000);
+    expect(scheduledVertexBudget("medium", 14, true)).toBe(500_000);
+  });
+
+  it("quantizes budgets so tiny zoom changes do not trigger replans", () => {
+    expect(scheduledVertexBudget("high", 10)).toBe(scheduledVertexBudget("high", 10.1));
   });
 });
