@@ -10,6 +10,7 @@ import {rasterStyles, terrainSource} from "./mapSources";
 const RTT_SIZE = 512;
 const PICK_GRID_SCALE = 2 ** 15;
 const PICK_TOLERANCE_PX = 14;
+const HIGHLIGHT_WIDTH_SCALE = 1.8;
 
 type TileID = {wrap?: number; canonical: {x: number; y: number; z: number}};
 type TerrainInput = maplibregl.CustomRenderMethodInput & {tileID: TileID | null};
@@ -75,7 +76,7 @@ export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Ar
           const [x0, y0] = mercator(lng0, lat0), [x1, y1] = mercator(lng1, lat1);
           endpoints.set([x0, y0, x1, y1], segment * 4);
           segmentColors.set(vertexColors.subarray(point * 4, point * 4 + 4), segment * 4);
-          widths[segment] = isPriority ? 1.35 : 1;
+          widths[segment] = isPriority ? HIGHLIGHT_WIDTH_SCALE : 1;
           owners[segment] = activityOffset + activityIndex;
           segment++;
         }
@@ -102,7 +103,7 @@ export function terrainSegmentBatch(batches: BinaryRouteBatch[], colors: Uint8Ar
       const [x1, y1] = mercator(...highlight.path[point + 1]);
       endpoints.set([x0, y0, x1, y1], segment * 4);
       segmentColors.set(fallback, segment * 4);
-      widths[segment] = 1.35;
+      widths[segment] = HIGHLIGHT_WIDTH_SCALE;
       owners[segment] = owner;
       segment += 1;
     }
