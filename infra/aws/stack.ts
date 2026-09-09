@@ -98,7 +98,7 @@ new aws.s3.BucketObject("web-error-telemetry-config", {
   bucket: app.webBucketName,
   key: "telemetry-config.json",
   content: pulumi.jsonStringify({
-    appMonitorId: errorMonitor.id,
+    appMonitorId: errorMonitor.appMonitorId,
     region,
     identityPoolId: telemetryIdentityPool.id,
     appVersion,
@@ -108,5 +108,5 @@ new aws.s3.BucketObject("web-error-telemetry-config", {
   cacheControl: "no-cache, no-store, must-revalidate",
 }, { dependsOn: [telemetryGuestPolicy] });
 
-export const errorTelemetryAppMonitorId = errorMonitor.id;
+export const errorTelemetryAppMonitorId = errorMonitor.appMonitorId;
 export const errorTelemetryIdentityPoolId = telemetryIdentityPool.id;
