@@ -42,6 +42,7 @@ const reportedObjects = new WeakSet<object>();
 let initialized = false;
 let ready = false;
 let duckdbInstrumented = false;
+let currentSchemaVersion: string | undefined;
 
 function sanitize(value: string, limit: number) {
   return value
@@ -60,6 +61,14 @@ function normalizeError(reason: unknown) {
     };
   }
   return { name: "Error", message: sanitize(String(reason), MAX_MESSAGE), stack: undefined };
+}
+
+function duckdbErrorSummary(reason: unknown) {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  const marker = "DuckDB error:";
+  const detail = message.includes(marker) ? message.slice(message.lastIndexOf(marker) + marker.length) : message;
+  const firstLine = detail.trim().split("\n").find(Boolean) ?? "DuckDB failure";
+  return sanitize(firstLine, MAX_MESSAGE);
 }
 
 function diagnosticContext() {
@@ -88,12 +97,7 @@ function emit(type: string, data: Record<string, unknown>) {
   queue.push({ type, data });
 }
 
-export function reportError(reason: unknown, context: ErrorContext) {
-  if (typeof reason === "object" && reason !== null) {
-    if (reportedObjects.has(reason)) return;
-    reportedObjects.add(reason);
-  }
-  const error = normalizeError(reason);
+function emitError(error: ReturnType<typeof normalizeError>, context: ErrorContext) {
   emit("squiggles_error", {
     error,
     source: context.source,
@@ -106,6 +110,28 @@ export function reportError(reason: unknown, context: ErrorContext) {
     viewport: `${window.innerWidth}x${window.innerHeight}`,
     devicePixelRatio: Number(window.devicePixelRatio.toFixed(2)),
     timestamp: new Date().toISOString(),
+  });
+}
+
+export function reportError(reason: unknown, context: ErrorContext) {
+  if (typeof reason === "object" && reason !== null) {
+    if (reportedObjects.has(reason)) return;
+    reportedObjects.add(reason);
+  }
+  emitError(normalizeError(reason), context);
+}
+
+function reportDuckDBError(reason: unknown, operation: string) {
+  if (typeof reason === "object" && reason !== null) {
+    if (reportedObjects.has(reason)) return;
+    reportedObjects.add(reason);
+  }
+  emitError({ name: "DuckDBError", message: duckdbErrorSummary(reason), stack: undefined }, {
+    source: "duckdb",
+    operation,
+    requestType: operation,
+    kind: duckdbErrorKind(operation, reason),
+    schemaVersion: currentSchemaVersion,
   });
 }
 
@@ -138,7 +164,7 @@ function installRum(config: TelemetryConfig) {
   script.src = clientUrl;
   script.onload = () => { ready = true; flush(); };
   script.onerror = () => { ready = false; };
-  document.head.appendChild(script);
+  document.head.insertBefore(script, document.head.firstChild);
 }
 
 function duckdbErrorKind(operation: string, reason: unknown): ErrorKind {
@@ -157,12 +183,18 @@ function instrumentDuckDB() {
     if (!original) continue;
     prototype[operation] = function(this: BrowserDuckDBEngine, ...args: unknown[]) {
       try {
-        return Promise.resolve(original.apply(this, args)).catch(reason => {
-          reportError(reason, { source: "duckdb", operation, requestType: operation, kind: duckdbErrorKind(operation, reason) });
+        return Promise.resolve(original.apply(this, args)).then(value => {
+          if (operation === "openDataset") {
+            const dataset = value as { manifest?: { schema_version?: string } };
+            currentSchemaVersion = dataset.manifest?.schema_version;
+          }
+          return value;
+        }).catch(reason => {
+          reportDuckDBError(reason, operation);
           throw reason;
         });
       } catch (reason) {
-        reportError(reason, { source: "duckdb", operation, requestType: operation, kind: duckdbErrorKind(operation, reason) });
+        reportDuckDBError(reason, operation);
         throw reason;
       }
     };
@@ -181,4 +213,4 @@ export function initErrorTelemetry() {
     .catch(() => undefined);
 }
 
-export const errorTelemetryTest = { sanitize, normalizeError, duckdbErrorKind };
+export const errorTelemetryTest = { sanitize, normalizeError, duckdbErrorKind, duckdbErrorSummary };
