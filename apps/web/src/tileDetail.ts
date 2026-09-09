@@ -7,6 +7,6 @@ export function applyTileDetail(map: Map, sourceId: string, detail: number) {
   map.setSourceTileLodParams(9.314, 3, sourceId);
   const source = map.getSource(sourceId) as Source;
   const base = source.calculateTileZoom!;
-  source.calculateTileZoom = (...args) => base(...args) + (map.isMoving() ? Math.min(detail, 1) : detail);
+  source.calculateTileZoom = (...args) => base(...args) + detail;
   map.triggerRepaint();
 }
