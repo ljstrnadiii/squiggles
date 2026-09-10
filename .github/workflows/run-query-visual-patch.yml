@@ -1,0 +1,45 @@
+name: Run query visual source patch
+on:
+  push:
+    branches: [feature/query-visual-dimensions]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/query-visual-dimensions
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: corepack enable && pnpm install --frozen-lockfile
+      - name: Apply source patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+          source = Path('.github/workflows/query-visual-dimensions-bootstrap.yml').read_text()
+          marker = "          python <<'PY'\n"
+          start = source.index(marker) + len(marker)
+          end = source.index("\n          PY\n", start)
+          code = textwrap.dedent(source[start:end])
+          code = code.replace('Path(".github/workflows/query-visual-dimensions-bootstrap.yml").unlink()\n', '')
+          exec(compile(code, '<query-visual-bootstrap>', 'exec'))
+          PY
+      - run: pnpm --filter @squiggles/web typecheck
+      - run: pnpm --filter @squiggles/web test
+      - run: pnpm --filter @squiggles/web lint
+      - name: Commit source
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/web/src
+          git commit -m 'feat: add query-derived animation and color'
+          git push origin HEAD:feature/query-visual-dimensions
