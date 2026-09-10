@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 
-import * as app from "./index.js";
-export * from "./index.js";
+import * as app from "./index.ts";
+export * from "./index.ts";
 
 const config = new pulumi.Config();
 const domainName = config.get("domainName") ?? "squiggles.io";
