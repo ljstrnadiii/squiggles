@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import contextlib
-import datetime
+from contextlib import suppress
+from datetime import UTC, datetime
 import os
 from typing import Any
 
@@ -49,11 +49,7 @@ def send_archive_ready_email(
             UpdateExpression="SET #marker = :now",
             ExpressionAttributeNames={"#marker": marker},
             ExpressionAttributeValues={
-                ":now": {
-                    "S": datetime.datetime.now(datetime.UTC)
-                    .isoformat()
-                    .replace("+00:00", "Z")
-                }
+                ":now": {"S": datetime.now(UTC).isoformat().replace("+00:00", "Z")}
             },
         )
     except Exception as error:
@@ -76,7 +72,7 @@ def send_archive_ready_email(
         )
         return True
     except Exception:
-        with contextlib.suppress(Exception):
+        with suppress(Exception):
             dynamo.update_item(
                 TableName=table_name,
                 Key=key,
