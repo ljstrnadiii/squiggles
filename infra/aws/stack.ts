@@ -41,7 +41,6 @@ const telemetryDeployPolicy = new aws.iam.RolePolicy("github-deploy-telemetry", 
       "cognito-identity:TagResource",
       "cognito-identity:UntagResource",
       "cognito-identity:UpdateIdentityPool",
-      "logs:PutResourcePolicy",
     ],
     resources: ["*"],
   }] }).json,
@@ -108,7 +107,9 @@ const errorMonitor = new aws.rum.AppMonitor("client-errors", {
     telemetries: ["errors"],
   },
   customEvents: { status: "ENABLED" },
-  cwLogEnabled: true,
+  // RUM already retains telemetry; avoid duplicating it into CloudWatch Logs,
+  // which requires a separate log-delivery permission surface and adds cost.
+  cwLogEnabled: false,
   tags,
 }, { dependsOn: [telemetryDeployPolicy] });
 
