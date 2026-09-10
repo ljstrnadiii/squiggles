@@ -1,0 +1,27 @@
+.visual-encoding-toggle {
+  align-items: center;
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
+.visual-encoding-toggle span:first-child { display: grid; gap: 2px; }
+.visual-encoding-toggle h3 { margin: 0; }
+.visual-encoding-toggle small { color: var(--muted); font-weight: 400; }
+.visual-encoding-body { display: grid; gap: 12px; margin-top: 12px; }
+.animation-control { align-items: center; display: grid; gap: 8px; grid-template-columns: auto minmax(100px, 1fr) auto auto; }
+.animation-control input[type="range"] { width: 100%; }
+.animation-control output { font-variant-numeric: tabular-nums; min-width: 70px; }
+.dimension-legend { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.dimension-legend span { align-items: center; display: inline-flex; gap: 5px; font-size: 12px; }
+.dimension-legend i { border-radius: 999px; display: inline-block; height: 9px; width: 9px; }
+.visual-encoding-body p { color: var(--muted); margin: 0; }
+@media (max-width: 700px) {
+  .animation-control { grid-template-columns: auto 1fr; }
+  .animation-control output { grid-column: 2; }
+}
