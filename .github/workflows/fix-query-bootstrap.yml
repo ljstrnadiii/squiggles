@@ -1,0 +1,28 @@
+name: Fix query visual bootstrap
+on:
+  push:
+    branches: [feature/query-visual-dimensions]
+permissions:
+  contents: write
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/query-visual-dimensions
+      - shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/query-visual-dimensions-bootstrap.yml')
+          text = p.read_text().replace('        with:\n          version: 10\n', '')
+          p.write_text(text)
+          Path('.github/workflows/fix-query-bootstrap.yml').unlink()
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'chore: use repository pnpm version'
+          git push origin HEAD:feature/query-visual-dimensions
