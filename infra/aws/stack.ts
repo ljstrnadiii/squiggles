@@ -23,27 +23,39 @@ const gitSha = process.env.GITHUB_SHA ?? "local";
 // permissions required to create and maintain RUM's unauthenticated ingestion path.
 const telemetryDeployPolicy = new aws.iam.RolePolicy("github-deploy-telemetry", {
   role: app.githubDeployRoleArn.apply(arn => arn.split("/").at(-1)!),
-  policy: aws.iam.getPolicyDocumentOutput({ statements: [{
-    effect: "Allow",
-    actions: [
-      "rum:CreateAppMonitor",
-      "rum:DeleteAppMonitor",
-      "rum:GetAppMonitor",
-      "rum:ListTagsForResource",
-      "rum:TagResource",
-      "rum:UntagResource",
-      "rum:UpdateAppMonitor",
-      "cognito-identity:CreateIdentityPool",
-      "cognito-identity:DeleteIdentityPool",
-      "cognito-identity:DescribeIdentityPool",
-      "cognito-identity:GetIdentityPoolRoles",
-      "cognito-identity:SetIdentityPoolRoles",
-      "cognito-identity:TagResource",
-      "cognito-identity:UntagResource",
-      "cognito-identity:UpdateIdentityPool",
-    ],
-    resources: ["*"],
-  }] }).json,
+  policy: aws.iam.getPolicyDocumentOutput({ statements: [
+    {
+      effect: "Allow",
+      actions: [
+        "rum:CreateAppMonitor",
+        "rum:DeleteAppMonitor",
+        "rum:GetAppMonitor",
+        "rum:ListTagsForResource",
+        "rum:TagResource",
+        "rum:UntagResource",
+        "rum:UpdateAppMonitor",
+        "cognito-identity:CreateIdentityPool",
+        "cognito-identity:DeleteIdentityPool",
+        "cognito-identity:DescribeIdentityPool",
+        "cognito-identity:GetIdentityPoolRoles",
+        "cognito-identity:SetIdentityPoolRoles",
+        "cognito-identity:TagResource",
+        "cognito-identity:UntagResource",
+        "cognito-identity:UpdateIdentityPool",
+      ],
+      resources: ["*"],
+    },
+    {
+      effect: "Allow",
+      actions: ["iam:CreateServiceLinkedRole"],
+      resources: ["*"],
+      conditions: [{
+        test: "StringEquals",
+        variable: "iam:AWSServiceName",
+        values: ["rum.amazonaws.com"],
+      }],
+    },
+  ] }).json,
 });
 
 const lifecycleEmailIdentityArn = pulumi.interpolate`arn:aws:ses:${region}:${accountId}:identity/${domainName}`;
