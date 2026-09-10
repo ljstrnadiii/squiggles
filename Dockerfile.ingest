@@ -5,4 +5,4 @@ COPY pyproject.toml uv.lock README.md ./
 COPY packages ./packages
 RUN uv sync --frozen --no-dev && uv pip install 'boto3>=1.40,<2'
 ENV PATH="/app/.venv/bin:$PATH"
-CMD ["python", "-m", "activity_map_ingest.cloud_job"]
+CMD ["python", "-m", "activity_map_ingest.cloud_job_wrapper"]
