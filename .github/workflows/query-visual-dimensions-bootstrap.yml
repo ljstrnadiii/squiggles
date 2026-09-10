@@ -1,0 +1,360 @@
+name: Bootstrap query visual dimensions
+
+on:
+  push:
+    branches:
+      - feature/query-visual-dimensions
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/query-visual-dimensions
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Apply implementation
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          def replace(path, old, new):
+              p = Path(path)
+              source = p.read_text()
+              if old not in source:
+                  raise SystemExit(f"missing replacement anchor in {path}: {old[:120]!r}")
+              p.write_text(source.replace(old, new, 1))
+
+          Path("apps/web/src/visualEncoding.ts").write_text(textwrap.dedent(r'''
+          import type { HeatPalette, QueryDimension } from "./contracts";
+          import { colorForWeight } from "./heat";
+
+          export type AnimationMode = "cumulative" | "windowed";
+          export type VisualEncodingSettings = {
+            animateBy: string;
+            animationMode: AnimationMode;
+            animationStep: number;
+            windowSize: number;
+            playbackSpeed: number;
+            playing: boolean;
+            loop: boolean;
+            colorBy: string;
+            palette: HeatPalette;
+          };
+
+          export const DEFAULT_VISUAL_ENCODING: VisualEncodingSettings = {
+            animateBy: "",
+            animationMode: "cumulative",
+            animationStep: 0,
+            windowSize: 1,
+            playbackSpeed: 2,
+            playing: false,
+            loop: true,
+            colorBy: "",
+            palette: "viridis",
+          };
+
+          export function dimensionByName(dimensions: QueryDimension[], name: string) {
+            return dimensions.find(dimension => dimension.name === name);
+          }
+
+          export function reconcileVisualEncoding(
+            settings: VisualEncodingSettings,
+            dimensions: QueryDimension[],
+          ): VisualEncodingSettings {
+            const animation = dimensionByName(dimensions, settings.animateBy);
+            const color = dimensionByName(dimensions, settings.colorBy);
+            const animationStep = animation
+              ? Math.max(0, Math.min(animation.steps.length - 1, settings.animationStep || animation.steps.length - 1))
+              : 0;
+            return {
+              ...settings,
+              animateBy: animation ? settings.animateBy : "",
+              animationStep,
+              playing: animation ? settings.playing : false,
+              colorBy: color ? settings.colorBy : "",
+            };
+          }
+
+          export function activityVisible(
+            dimension: QueryDimension | undefined,
+            settings: VisualEncodingSettings,
+            activityId: string,
+          ) {
+            if (!dimension || !settings.animateBy || !dimension.steps.length) return true;
+            const value = dimension.values[activityId];
+            if (value == null) return false;
+            const index = dimension.steps.findIndex(step => step === value);
+            if (index < 0) return false;
+            const current = Math.max(0, Math.min(dimension.steps.length - 1, settings.animationStep));
+            if (settings.animationMode === "cumulative") return index <= current;
+            return index <= current && index >= Math.max(0, current - settings.windowSize + 1);
+          }
+
+          export function colorForVisualDimension(
+            dimension: QueryDimension | undefined,
+            activityId: string,
+            palette: HeatPalette,
+          ): [number, number, number, number] | null {
+            if (!dimension) return null;
+            const value = dimension.values[activityId];
+            if (value == null) return null;
+            if (dimension.kind === "numeric" && typeof value === "number" && dimension.domain) {
+              const [minimum, maximum] = dimension.domain;
+              return colorForWeight(Math.max(0, value - minimum), Math.max(0, maximum - minimum), palette, 1);
+            }
+            const index = dimension.steps.findIndex(step => step === value);
+            return index < 0 ? null : colorForWeight(index, Math.max(1, dimension.steps.length - 1), palette, 1);
+          }
+          ''').lstrip())
+
+          Path("apps/web/src/VisualEncodingControls.tsx").write_text(textwrap.dedent(r'''
+          import { useEffect, useState } from "react";
+          import type { HeatPalette, QueryDimension } from "./contracts";
+          import { colorForVisualDimension, dimensionByName, type VisualEncodingSettings } from "./visualEncoding";
+          import "./visualEncoding.css";
+
+          export function VisualEncodingControls({ dimensions, settings, onChange }: {
+            dimensions: QueryDimension[];
+            settings: VisualEncodingSettings;
+            onChange: (settings: VisualEncodingSettings) => void;
+          }) {
+            const [open, setOpen] = useState(false);
+            const animation = dimensionByName(dimensions, settings.animateBy);
+            const color = dimensionByName(dimensions, settings.colorBy);
+            const steps = animation?.steps ?? [];
+            const step = Math.max(0, Math.min(Math.max(0, steps.length - 1), settings.animationStep));
+
+            useEffect(() => {
+              if (!settings.playing || !animation || steps.length < 2) return;
+              const timer = window.setTimeout(() => {
+                const next = step + 1;
+                if (next < steps.length) onChange({ ...settings, animationStep: next });
+                else if (settings.loop) onChange({ ...settings, animationStep: 0 });
+                else onChange({ ...settings, playing: false });
+              }, 1000 / settings.playbackSpeed);
+              return () => window.clearTimeout(timer);
+            }, [animation, onChange, settings, step, steps.length]);
+
+            function chooseAnimation(name: string) {
+              const next = dimensionByName(dimensions, name);
+              onChange({
+                ...settings,
+                animateBy: name,
+                animationStep: next ? Math.max(0, next.steps.length - 1) : 0,
+                playing: false,
+              });
+            }
+
+            return <section className="toolbar-section visual-encoding">
+              <button className="visual-encoding-toggle" type="button" aria-expanded={open} onClick={() => setOpen(value => !value)}>
+                <span><h3>Visual encoding</h3><small>Animate and color from query columns</small></span>
+                <span aria-hidden="true">{open ? "▴" : "▾"}</span>
+              </button>
+              {open && <div className="visual-encoding-body">
+                <div className="settings-grid">
+                  <label>Animate by<select aria-label="Animate by" value={settings.animateBy} onChange={event => chooseAnimation(event.target.value)}><option value="">Off</option>{dimensions.map(dimension => <option key={dimension.name} value={dimension.name}>{dimension.name}</option>)}</select></label>
+                  <label>Color by<select aria-label="Color by" value={settings.colorBy} onChange={event => onChange({ ...settings, colorBy: event.target.value })}><option value="">Off</option>{dimensions.map(dimension => <option key={dimension.name} value={dimension.name}>{dimension.name}</option>)}</select></label>
+                  {color && <label>Colors<select aria-label="Visual colormap" value={settings.palette} onChange={event => onChange({ ...settings, palette: event.target.value as HeatPalette })}><option value="sunset">Sunset</option><option value="viridis">Viridis</option><option value="fire">Fire</option><option value="ice">Ice</option></select></label>}
+                  {animation && <label>Mode<select aria-label="Animation mode" value={settings.animationMode} onChange={event => onChange({ ...settings, animationMode: event.target.value as VisualEncodingSettings["animationMode"] })}><option value="cumulative">Cumulative</option><option value="windowed">Windowed</option></select></label>}
+                  {animation && settings.animationMode === "windowed" && <label>Window<input aria-label="Animation window" type="number" min="1" max={Math.max(1, steps.length)} value={settings.windowSize} onChange={event => onChange({ ...settings, windowSize: Math.max(1, Number(event.target.value)) })} /></label>}
+                  {animation && <label>Speed<select aria-label="Animation speed" value={settings.playbackSpeed} onChange={event => onChange({ ...settings, playbackSpeed: Number(event.target.value) })}><option value="0.5">0.5 fps</option><option value="1">1 fps</option><option value="2">2 fps</option><option value="4">4 fps</option><option value="8">8 fps</option></select></label>}
+                </div>
+                {animation && steps.length > 0 && <div className="animation-control">
+                  <button type="button" onClick={() => onChange({ ...settings, playing: !settings.playing })}>{settings.playing ? "Pause" : "Play"}</button>
+                  <input aria-label="Animation step" type="range" min="0" max={Math.max(0, steps.length - 1)} value={step} onChange={event => onChange({ ...settings, animationStep: Number(event.target.value), playing: false })} />
+                  <output>{String(steps[step] ?? "")}</output>
+                  <label className="check"><input type="checkbox" checked={settings.loop} onChange={event => onChange({ ...settings, loop: event.target.checked })} /> Loop</label>
+                </div>}
+                {color && <div className="dimension-legend" aria-label="Color legend">
+                  {color.kind === "numeric" && color.domain ? <span>{color.domain[0].toLocaleString()} → {color.domain[1].toLocaleString()}</span> : color.steps.slice(0, 12).map(value => {
+                    const sampleId = Object.keys(color.values).find(id => color.values[id] === value) ?? "";
+                    const rgba = colorForVisualDimension(color, sampleId, settings.palette);
+                    return <span key={String(value)}><i style={rgba ? { backgroundColor: `rgba(${rgba.join(",")})` } : undefined} />{String(value)}</span>;
+                  })}
+                  {color.steps.length > 12 && <span>+{color.steps.length - 12} more</span>}
+                </div>}
+                {!dimensions.length && <p>Return extra scalar columns with <code>activity_id</code> to animate or color by them.</p>}
+                {settings.colorBy && <p>Color by overrides heat coloring while it is active.</p>}
+              </div>}
+            </section>;
+          }
+          ''').lstrip())
+
+          Path("apps/web/src/visualEncoding.css").write_text(textwrap.dedent(r'''
+          .visual-encoding-toggle {
+            align-items: center;
+            background: none;
+            border: 0;
+            color: inherit;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            padding: 0;
+            text-align: left;
+            width: 100%;
+          }
+          .visual-encoding-toggle span:first-child { display: grid; gap: 2px; }
+          .visual-encoding-toggle h3 { margin: 0; }
+          .visual-encoding-toggle small { color: var(--muted); font-weight: 400; }
+          .visual-encoding-body { display: grid; gap: 12px; margin-top: 12px; }
+          .animation-control { align-items: center; display: grid; gap: 8px; grid-template-columns: auto minmax(100px, 1fr) auto auto; }
+          .animation-control input[type="range"] { width: 100%; }
+          .animation-control output { font-variant-numeric: tabular-nums; min-width: 70px; }
+          .dimension-legend { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+          .dimension-legend span { align-items: center; display: inline-flex; gap: 5px; font-size: 12px; }
+          .dimension-legend i { border-radius: 999px; display: inline-block; height: 9px; width: 9px; }
+          .visual-encoding-body p { color: var(--muted); margin: 0; }
+          @media (max-width: 700px) {
+            .animation-control { grid-template-columns: auto 1fr; }
+            .animation-control output { grid-column: 2; }
+          }
+          ''').lstrip())
+
+          Path("apps/web/src/visualEncoding.test.ts").write_text(textwrap.dedent(r'''
+          import { describe, expect, it } from "vitest";
+          import type { QueryDimension } from "./contracts";
+          import { activityVisible, colorForVisualDimension, DEFAULT_VISUAL_ENCODING, reconcileVisualEncoding } from "./visualEncoding";
+
+          const month: QueryDimension = {
+            name: "month",
+            kind: "temporal",
+            values: { a: "2026-01-01", b: "2026-02-01", c: "2026-03-01" },
+            steps: ["2026-01-01", "2026-02-01", "2026-03-01"],
+          };
+
+          describe("query visual encoding", () => {
+            it("supports cumulative and windowed visibility", () => {
+              const cumulative = { ...DEFAULT_VISUAL_ENCODING, animateBy: "month", animationStep: 1 };
+              expect(activityVisible(month, cumulative, "a")).toBe(true);
+              expect(activityVisible(month, cumulative, "c")).toBe(false);
+              const windowed = { ...cumulative, animationMode: "windowed" as const, windowSize: 1 };
+              expect(activityVisible(month, windowed, "a")).toBe(false);
+              expect(activityVisible(month, windowed, "b")).toBe(true);
+            });
+
+            it("maps categorical values to stable palette colors", () => {
+              const sport: QueryDimension = { name: "sport", kind: "categorical", values: { a: "run", b: "ride" }, steps: ["ride", "run"] };
+              expect(colorForVisualDimension(sport, "a", "viridis")).not.toEqual(colorForVisualDimension(sport, "b", "viridis"));
+            });
+
+            it("drops encodings that are absent from a new query", () => {
+              const settings = { ...DEFAULT_VISUAL_ENCODING, animateBy: "month", colorBy: "sport", playing: true };
+              expect(reconcileVisualEncoding(settings, [month])).toMatchObject({ animateBy: "month", colorBy: "", playing: true });
+              expect(reconcileVisualEncoding(settings, [])).toMatchObject({ animateBy: "", colorBy: "", playing: false });
+            });
+          });
+          ''').lstrip())
+
+          replace(
+            "apps/web/src/contracts.ts",
+            'export type RenderPlan = { type: "arrow"; activityIds: string[] };\nexport type QueryResult = { queryId: string; selectedCount: number; renderPlan: RenderPlan };',
+            'export type QueryScalar = string | number | null;\nexport type QueryDimension = { name: string; kind: "categorical" | "numeric" | "temporal"; values: Record<string, QueryScalar>; steps: (string | number)[]; domain?: [number, number] };\nexport type RenderPlan = { type: "arrow"; activityIds: string[] };\nexport type QueryResult = { queryId: string; selectedCount: number; renderPlan: RenderPlan; dimensions?: QueryDimension[] };',
+          )
+
+          replace(
+            "apps/web/src/duckdb.worker.ts",
+            '  BinaryRouteBatch,\n  ResolutionRenderPlans,',
+            '  BinaryRouteBatch,\n  QueryDimension,\n  ResolutionRenderPlans,',
+          )
+          replace(
+            "apps/web/src/duckdb.worker.ts",
+            'const scalar = (value: unknown) => (typeof value === "bigint" ? Number(value) : value);',
+            '''const scalar = (value: unknown) => (typeof value === "bigint" ? Number(value) : value);\nconst identifier = (value: string) => `"${value.replaceAll('"', '""')}"`;\n\nfunction dimensionKind(type: unknown): QueryDimension["kind"] | null {\n  const value = String(type).toLowerCase();\n  if (/list|struct|map|union|binary|blob|geometry/.test(value)) return null;\n  if (/timestamp|date|time/.test(value)) return "temporal";\n  if (/int|float|double|decimal|real|numeric/.test(value)) return "numeric";\n  return "categorical";\n}\n\nasync function collectQueryDimensions(fields: readonly { name: string; type: unknown }[]): Promise<QueryDimension[]> {\n  const eligible = fields.flatMap(field => {\n    if (field.name === "activity_id") return [];\n    const kind = dimensionKind(field.type);\n    return kind ? [{ name: field.name, kind }] : [];\n  });\n  if (!eligible.length) return [];\n  const table = await connection!.query(`SELECT activity_id,${eligible.map(field => identifier(field.name)).join(",")} FROM selection_dimensions`);\n  const rows = table.toArray() as unknown as Record<string, unknown>[];\n  return eligible.map(field => {\n    const values: Record<string, string | number | null> = {};\n    const unique = new Set<string | number>();\n    for (const row of rows) {\n      const activityId = String(scalar(row.activity_id));\n      const raw = row[field.name];\n      let value: string | number | null;\n      if (raw == null) value = null;\n      else if (field.kind === "temporal") value = String(raw);\n      else {\n        const normalized = scalar(raw);\n        value = typeof normalized === "number" || typeof normalized === "string" ? normalized : String(normalized);\n      }\n      values[activityId] = value;\n      if (value != null) unique.add(value);\n    }\n    const steps = [...unique].sort((left, right) => typeof left === "number" && typeof right === "number" ? left - right : String(left).localeCompare(String(right)));\n    const numeric = field.kind === "numeric" ? steps.filter((value): value is number => typeof value === "number") : [];\n    return {\n      name: field.name,\n      kind: field.kind,\n      values,\n      steps,\n      ...(numeric.length ? { domain: [numeric[0], numeric[numeric.length - 1]] as [number, number] } : {}),\n    };\n  });\n}''',
+          )
+
+          old_selection = '''    selectionAll = isUniversalSelectionSql(request.sql);\n    if (selectionAll) {\n      await connection!.query("DROP TABLE IF EXISTS current_selection");\n    } else {\n      const probe = await connection!.query(\n        `WITH selected AS (${request.sql}) SELECT * FROM selected LIMIT 0`,\n      );\n      if (!probe.schema.fields.some((field) => field.name === "activity_id")) {\n        throw new Error("SQL must return an activity_id column");\n      }\n      await connection!.query("DROP TABLE IF EXISTS current_selection");\n      await connection!.query(\n        `CREATE TEMP TABLE current_selection AS WITH selected AS (${request.sql}) SELECT DISTINCT CAST(a.activity_id AS VARCHAR) activity_id,a.point_count,a.xmin,a.ymin,a.xmax,a.ymax FROM activities a SEMI JOIN selected s USING(activity_id)`,\n      );\n    }\n\n    const selectedCount = selectionAll'''
+          new_selection = '''    selectionAll = isUniversalSelectionSql(request.sql);\n    let dimensions: QueryDimension[] = [];\n    await connection!.query("DROP TABLE IF EXISTS selection_dimensions");\n    if (selectionAll) {\n      await connection!.query("DROP TABLE IF EXISTS current_selection");\n    } else {\n      const probe = await connection!.query(\n        `WITH selected AS (${request.sql}) SELECT * FROM selected LIMIT 0`,\n      );\n      if (!probe.schema.fields.some((field) => field.name === "activity_id")) {\n        throw new Error("SQL must return an activity_id column");\n      }\n      await connection!.query(\n        `CREATE TEMP TABLE selection_dimensions AS WITH selected AS (${request.sql}) SELECT * FROM selected QUALIFY row_number() OVER (PARTITION BY activity_id)=1`,\n      );\n      await connection!.query("DROP TABLE IF EXISTS current_selection");\n      await connection!.query(\n        `CREATE TEMP TABLE current_selection AS SELECT DISTINCT CAST(a.activity_id AS VARCHAR) activity_id,a.point_count,a.xmin,a.ymin,a.xmax,a.ymax FROM activities a SEMI JOIN selection_dimensions s USING(activity_id)`,\n      );\n      dimensions = await collectQueryDimensions(probe.schema.fields);\n    }\n\n    const selectedCount = selectionAll'''
+          replace("apps/web/src/duckdb.worker.ts", old_selection, new_selection)
+          replace(
+            "apps/web/src/duckdb.worker.ts",
+            '      renderPlan: { type: "arrow", activityIds: [] },\n      ...viewport,',
+            '      renderPlan: { type: "arrow", activityIds: [] },\n      dimensions,\n      ...viewport,',
+          )
+
+          replace(
+            "apps/web/src/App.tsx",
+            'import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";',
+            'import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, QueryDimension, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";',
+          )
+          replace(
+            "apps/web/src/App.tsx",
+            'import { recordRenderingDiagnostics } from "./diagnosticState";',
+            'import { recordRenderingDiagnostics } from "./diagnosticState";\nimport { VisualEncodingControls } from "./VisualEncodingControls";\nimport { activityVisible, colorForVisualDimension, DEFAULT_VISUAL_ENCODING, dimensionByName, reconcileVisualEncoding, type VisualEncodingSettings } from "./visualEncoding";',
+          )
+          replace(
+            "apps/web/src/App.tsx",
+            '  const [routeBatches, setRouteBatches] = useState<BinaryRouteBatch[]>([]);',
+            '  const [routeBatches, setRouteBatches] = useState<BinaryRouteBatch[]>([]);\n  const [queryDimensions, setQueryDimensions] = useState<QueryDimension[]>([]);\n  const [visualEncoding, setVisualEncoding] = useState<VisualEncodingSettings>(DEFAULT_VISUAL_ENCODING);',
+          )
+          replace(
+            "apps/web/src/App.tsx",
+            '      if (selection !== selectionRequest.current) return;\n\n      selectionReady.current = true;',
+            '      if (selection !== selectionRequest.current) return;\n      const dimensions = result.dimensions ?? [];\n      setQueryDimensions(dimensions);\n      setVisualEncoding(currentEncoding => reconcileVisualEncoding(currentEncoding, dimensions));\n\n      selectionReady.current = true;',
+          )
+          replace(
+            "apps/web/src/App.tsx",
+            '    setRouteBatches([]); setHeat(emptyHeat);',
+            '    setRouteBatches([]); setHeat(emptyHeat); setQueryDimensions([]); setVisualEncoding(DEFAULT_VISUAL_ENCODING);',
+          )
+          old_colors = '''  const overviewBatches = useMemo(() => isolateSelected ? [] : routeBatches, [isolateSelected, routeBatches]);\n  const overviewColors = useMemo(() => routeBatches.map(batch => routeColors(batch, activity => {\n    if (activity.activityId === selected?.activityId) return [0, 0, 0, 0];\n    return tab.style.heatEnabled\n      ? colorForWeight(heat.scores.get(activity.activityId) ?? 0, heat.maxScore, tab.style.heatPalette, tab.style.heatTemperature)\n      : routeColor(tab.style.color, 190);\n  })), [heat, routeBatches, selected, tab.style.color, tab.style.heatEnabled, tab.style.heatPalette, tab.style.heatTemperature]);\n  const terrainColors = useMemo(() => routeBatches.map(batch => routeColors(batch, activity => tab.style.heatEnabled\n    ? colorForWeight(heat.scores.get(activity.activityId) ?? 0, heat.maxScore, tab.style.heatPalette, tab.style.heatTemperature)\n    : routeColor(tab.style.color, 190))), [heat, routeBatches, tab.style.color, tab.style.heatEnabled, tab.style.heatPalette, tab.style.heatTemperature]);'''
+          new_colors = '''  const animationDimension = useMemo(() => dimensionByName(queryDimensions, visualEncoding.animateBy), [queryDimensions, visualEncoding.animateBy]);\n  const colorDimension = useMemo(() => dimensionByName(queryDimensions, visualEncoding.colorBy), [queryDimensions, visualEncoding.colorBy]);\n  const heatActive = tab.style.heatEnabled && !colorDimension;\n  const overviewBatches = useMemo(() => isolateSelected ? [] : routeBatches, [isolateSelected, routeBatches]);\n  const overviewColors = useMemo(() => routeBatches.map(batch => routeColors(batch, activity => {\n    if (!activityVisible(animationDimension, visualEncoding, activity.activityId) || activity.activityId === selected?.activityId) return [0, 0, 0, 0];\n    const encoded = colorForVisualDimension(colorDimension, activity.activityId, visualEncoding.palette);\n    if (encoded) return encoded;\n    return heatActive\n      ? colorForWeight(heat.scores.get(activity.activityId) ?? 0, heat.maxScore, tab.style.heatPalette, tab.style.heatTemperature)\n      : routeColor(tab.style.color, 190);\n  })), [animationDimension, colorDimension, heat, heatActive, routeBatches, selected, tab.style.color, tab.style.heatPalette, tab.style.heatTemperature, visualEncoding]);\n  const terrainColors = useMemo(() => routeBatches.map(batch => routeColors(batch, activity => {\n    if (!activityVisible(animationDimension, visualEncoding, activity.activityId)) return [0, 0, 0, 0];\n    const encoded = colorForVisualDimension(colorDimension, activity.activityId, visualEncoding.palette);\n    if (encoded) return encoded;\n    return heatActive\n      ? colorForWeight(heat.scores.get(activity.activityId) ?? 0, heat.maxScore, tab.style.heatPalette, tab.style.heatTemperature)\n      : routeColor(tab.style.color, 190);\n  })), [animationDimension, colorDimension, heat, heatActive, routeBatches, tab.style.color, tab.style.heatPalette, tab.style.heatTemperature, visualEncoding]);'''
+          replace("apps/web/src/App.tsx", old_colors, new_colors)
+          replace(
+            "apps/web/src/App.tsx",
+            'getWidth: tab.style.heatEnabled ? lineWidths.heat : lineWidths.route',
+            'getWidth: heatActive ? lineWidths.heat : lineWidths.route',
+          )
+          replace(
+            "apps/web/src/App.tsx",
+            'if (!item) { setHover(null); return; } const x = info.x, y = info.y, activityId = item.activityId;',
+            'if (!item || !activityVisible(animationDimension, visualEncoding, item.activityId)) { setHover(null); return; } const x = info.x, y = info.y, activityId = item.activityId;',
+          )
+          replace(
+            "apps/web/src/App.tsx",
+            'if (!item) return false; void openActivity(item); return true;',
+            'if (!item || !activityVisible(animationDimension, visualEncoding, item.activityId)) return false; void openActivity(item); return true;',
+          )
+          replace(
+            "apps/web/src/App.tsx",
+            '  ], [engine, hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, spatialDraft, spatialDrawing, tab.spatialFilter, tab.style.color, tab.style.heatEnabled]);',
+            '  ], [animationDimension, engine, heatActive, hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, spatialDraft, spatialDrawing, tab.spatialFilter, tab.style.color, visualEncoding]);',
+          )
+          replace(
+            "apps/web/src/App.tsx",
+            '      </div></section>\n      <section className="toolbar-section"><h3>Spatial filter</h3>',
+            '      </div></section>\n      <VisualEncodingControls dimensions={queryDimensions} settings={visualEncoding} onChange={setVisualEncoding} />\n      <section className="toolbar-section"><h3>Spatial filter</h3>',
+          )
+          replace(
+            "apps/web/src/App.tsx",
+            'widthPx={tab.style.heatEnabled ? lineWidths.heat : lineWidths.route}',
+            'widthPx={heatActive ? lineWidths.heat : lineWidths.route}',
+          )
+
+          Path(".github/workflows/query-visual-dimensions-bootstrap.yml").unlink()
+          PY
+      - run: pnpm --filter @squiggles/web typecheck
+      - run: pnpm --filter @squiggles/web test
+      - run: pnpm --filter @squiggles/web lint
+      - name: Commit implementation
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "feat: add query-derived animation and color"
+          git push origin HEAD:feature/query-visual-dimensions
