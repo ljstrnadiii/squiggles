@@ -15,8 +15,9 @@
 .admin-user-status.rejected { color: #d77870; }
 .admin-user-meta { display: flex; flex-wrap: wrap; gap: 8px; }
 .admin-user-detail { overflow-wrap: anywhere; }
-.admin-user-links, .admin-user-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.admin-user-links, .admin-user-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .admin-user-links a { font-size: 9px; color: var(--accent); }
+.admin-user-links button { padding: 2px 6px; font-size: 9px; line-height: 1.2; background: transparent; border-color: var(--line); color: var(--text); }
 .admin-user-actions button { padding: 4px 7px; font-size: 9px; }
 .admin-user-actions button.active { border-color: var(--accent); color: var(--text); }
 .admin-empty { color: var(--muted); font-size: 10px; }
