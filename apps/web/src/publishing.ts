@@ -84,7 +84,7 @@ export async function loadPublishedView(
     tabs,
     active,
     datasetId: saved.datasetId ?? null,
-    updatedAt: saved.updatedAt,
+    updatedAt: saved.updatedAt ?? "",
     identity: saved.identity,
   };
 }
