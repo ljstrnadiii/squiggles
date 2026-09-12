@@ -132,9 +132,21 @@ describe("App", () => {
 
   it("opens an unlisted hosted dataset from its share route", async () => {
     const datasetId = "31ea1577-b6f1-423a-8bda-ea7712345678";
+    localStorage.setItem("squiggles-auth-session", JSON.stringify({ accessToken: "access", idToken: "id" }));
+    const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/runtime-config.json") {
+        return new Response(JSON.stringify({ apiUrl: "https://api.example.test", cognitoDomain: "", cognitoClientId: "" }));
+      }
+      if (url === `https://api.example.test/api/datasets/${datasetId}/access`) {
+        return new Response(JSON.stringify({ datasetId, manifest: { schema_version: "1.6.0", activity_count: 1, rejection_count: 0, bbox: [-105, 39, -104, 40], shards: [] } }));
+      }
+      return new Response("not found", { status: 404 });
+    });
     window.history.replaceState({}, "", `/m/${datasetId}`);
     render(<App />);
     expect(await screen.findByRole("status", { name: "1 routes selected" })).toBeInTheDocument();
+    expect(fetcher).toHaveBeenCalledWith(`https://api.example.test/api/datasets/${datasetId}/access`, expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer access" }) }));
     openLogoMenu();
     expect(screen.getByRole("button", { name: "Change dataset" })).toBeInTheDocument();
     expect(screen.queryByText(datasetId)).not.toBeInTheDocument();

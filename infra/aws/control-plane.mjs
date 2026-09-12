@@ -1,7 +1,7 @@
 import { AdminDeleteUserCommand, AdminGetUserCommand, CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
 import { BatchClient, SubmitJobCommand, TerminateJobCommand } from "@aws-sdk/client-batch";
 import { BatchWriteItemCommand, DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
-import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, DeleteObjectsCommand, HeadObjectCommand, ListObjectsV2Command, ListPartsCommand, S3Client, UploadPartCommand } from "@aws-sdk/client-s3";
+import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, ListPartsCommand, S3Client, UploadPartCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { randomUUID } from "node:crypto";
 
@@ -124,6 +124,31 @@ async function listAdminUsers() {
   return users;
 }
 
+function datasetFiles(manifest) {
+  return [
+    ...(manifest.shards ?? []),
+    ...(manifest.metadata ?? []),
+    ...(manifest.render_levels ?? []).flatMap(level => level.files ?? []),
+  ];
+}
+
+async function signedDataset(datasetId) {
+  const key = `datasets/${datasetId}/dataset.json`;
+  const object = await s3.send(new GetObjectCommand({ Bucket: dataBucket, Key: key }));
+  const manifest = JSON.parse(await object.Body.transformToString());
+  await Promise.all(datasetFiles(manifest).map(async file => {
+    if (typeof file.path !== "string" || file.path.startsWith("/") || file.path.split("/").includes("..")) throw new Error("invalid dataset file path");
+    file.url = await getSignedUrl(s3, new GetObjectCommand({ Bucket: dataBucket, Key: `datasets/${datasetId}/${file.path}` }), { expiresIn: 21_600 });
+  }));
+  return { datasetId, manifest };
+}
+
+async function publishedBySlug(slug) {
+  if (!/^[a-z0-9]{8}$/.test(slug ?? "")) return null;
+  const found = await dynamo.send(new QueryCommand({ TableName: tableName, IndexName: "GSI1", KeyConditionExpression: "GSI1PK = :pk", ExpressionAttributeValues: { ":pk": { S: `PUBLISHED#${slug}` } }, Limit: 1 }));
+  return found.Items?.[0] ?? null;
+}
+
 async function queueUpload(uploadKey, upload, targetSubject, expectedStatus) {
   const id = uploadKey.SK.S.slice(7);
   const now = new Date().toISOString();
@@ -166,16 +191,25 @@ async function queueUpload(uploadKey, upload, targetSubject, expectedStatus) {
   return { id, status: "queued" };
 }
 
+const recompileStatuses = new Set(["failed", "ready", "completed"]);
+
 export async function handler(event) {
   const route = event.routeKey;
   if (route === "GET /api/published/{slug}") {
     const slug = event.pathParameters?.slug;
-    if (!tableName || !/^[a-z0-9]{8}$/.test(slug ?? "")) return response(404, { error: "published_view_not_found" });
-    const found = await dynamo.send(new QueryCommand({ TableName: tableName, IndexName: "GSI1", KeyConditionExpression: "GSI1PK = :pk", ExpressionAttributeValues: { ":pk": { S: `PUBLISHED#${slug}` } }, Limit: 1 }));
-    const published = found.Items?.[0];
+    if (!tableName) return response(404, { error: "published_view_not_found" });
+    const published = await publishedBySlug(slug);
     if (!published) return response(404, { error: "published_view_not_found" });
     await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: { PK: published.PK, SK: published.SK }, UpdateExpression: "ADD viewCount :one", ExpressionAttributeValues: { ":one": { N: "1" } } }));
     return response(200, { slug, tabs: JSON.parse(published.tabsJson.S), active: published.activeTab.S, datasetId: published.datasetId?.S ?? null, updatedAt: published.updatedAt.S });
+  }
+
+  if (route === "GET /api/published/{slug}/dataset-access") {
+    if (!tableName || !dataBucket) return response(404, { error: "published_view_not_found" });
+    const published = await publishedBySlug(event.pathParameters?.slug);
+    const datasetId = published?.datasetId?.S;
+    if (!datasetId) return response(404, { error: "published_dataset_not_found" });
+    return response(200, await signedDataset(datasetId));
   }
 
   const claims = event.requestContext?.authorizer?.jwt?.claims;
@@ -231,6 +265,16 @@ export async function handler(event) {
   const current = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: key, ConsistentRead: true }))).Item;
   const isAdmin = current?.role?.S === "admin" && current?.status?.S === "approved";
 
+  if (route === "GET /api/datasets/{id}/access") {
+    const id = event.pathParameters?.id;
+    if (!/^[0-9a-f-]{36}$/i.test(id ?? "")) return response(404, { error: "dataset_not_found" });
+    const owned = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { PK: key.PK, SK: { S: `DATASET#${id}` } }, ConsistentRead: true }))).Item;
+    if (!isAdmin && owned?.status?.S !== "ready") return response(403, { error: "dataset_access_denied" });
+    const registry = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { PK: { S: `DATASET#${id}` }, SK: { S: "META" } }, ConsistentRead: true }))).Item;
+    if (!registry || registry.status?.S === "failed") return response(404, { error: "dataset_not_found" });
+    return response(200, await signedDataset(id));
+  }
+
   if (route === "GET /api/me" && event.queryStringParameters?.admin === "users") {
     if (!isAdmin) return response(403, { error: "admin_required" });
     return response(200, { users: await listAdminUsers() });
@@ -261,14 +305,14 @@ export async function handler(event) {
     const id = event.pathParameters?.id;
     const body = JSON.parse(event.body ?? "{}");
     const target = body.subject;
-    if (!/^[0-9a-f-]{36}$/i.test(id ?? "") || !/^[0-9a-f-]{16,64}$/i.test(target ?? "")) return response(400, { error: "invalid_retry" });
+    if (!/^[0-9a-f-]{36}$/i.test(id ?? "") || !/^[0-9a-f-]{16,64}$/i.test(target ?? "")) return response(400, { error: "invalid_recompile" });
     const uploadKey = { PK: { S: `USER#${target}` }, SK: { S: `UPLOAD#${id}` } };
     const upload = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: uploadKey, ConsistentRead: true }))).Item;
     if (!upload) return response(404, { error: "upload_not_found" });
-    if (upload.status?.S !== "failed") return response(409, { error: "upload_not_retryable" });
+    if (!recompileStatuses.has(upload.status?.S)) return response(409, { error: "upload_not_recompilable" });
     const object = await s3.send(new HeadObjectCommand({ Bucket: uploadBucket, Key: upload.objectKey.S }));
     if (object.ContentLength !== Number(upload.byteSize.N)) return response(422, { error: "upload_verification_failed" });
-    return response(200, await queueUpload(uploadKey, upload, target, "failed"));
+    return response(200, await queueUpload(uploadKey, upload, target, upload.status.S));
   }
 
   if (route === "POST /api/published") {
@@ -276,11 +320,16 @@ export async function handler(event) {
     const body = JSON.parse(event.body ?? "{}");
     const tabsJson = JSON.stringify(body.tabs ?? []);
     if (!Array.isArray(body.tabs) || body.tabs.length < 1 || body.tabs.length > 50 || tabsJson.length > 100_000 || !body.tabs.every(tab => typeof tab?.id === "string" && typeof tab?.title === "string" && typeof tab?.sql === "string") || typeof body.active !== "string") return response(400, { error: "invalid_published_view" });
+    const publishedDatasetId = typeof body.datasetId === "string" && /^[0-9a-f-]{36}$/i.test(body.datasetId) ? body.datasetId : null;
+    if (publishedDatasetId) {
+      const owned = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { PK: key.PK, SK: { S: `DATASET#${publishedDatasetId}` } }, ConsistentRead: true }))).Item;
+      if (!owned || owned.status?.S !== "ready") return response(403, { error: "dataset_access_denied" });
+    }
     const shareKey = { PK: key.PK, SK: { S: "SHARE#primary" } };
     const prior = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: shareKey, ConsistentRead: true }))).Item;
     const slug = prior?.slug?.S ?? randomUUID().replaceAll("-", "").slice(0, 8);
     const now = new Date().toISOString();
-    await dynamo.send(new PutItemCommand({ TableName: tableName, Item: { ...shareKey, entityType: { S: "share" }, slug: { S: slug }, tabsJson: { S: tabsJson }, activeTab: { S: body.active }, ...(typeof body.datasetId === "string" && /^[0-9a-f-]{36}$/i.test(body.datasetId) ? { datasetId: { S: body.datasetId } } : {}), viewCount: prior?.viewCount ?? { N: "0" }, createdAt: prior?.createdAt ?? { S: now }, updatedAt: { S: now }, GSI1PK: { S: `PUBLISHED#${slug}` }, GSI1SK: { S: "VIEW" } } }));
+    await dynamo.send(new PutItemCommand({ TableName: tableName, Item: { ...shareKey, entityType: { S: "share" }, slug: { S: slug }, tabsJson: { S: tabsJson }, activeTab: { S: body.active }, ...(publishedDatasetId ? { datasetId: { S: publishedDatasetId } } : {}), viewCount: prior?.viewCount ?? { N: "0" }, createdAt: prior?.createdAt ?? { S: now }, updatedAt: { S: now }, GSI1PK: { S: `PUBLISHED#${slug}` }, GSI1SK: { S: "VIEW" } } }));
     return response(200, { slug, url: `/p/${slug}` });
   }
 

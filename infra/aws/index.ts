@@ -172,7 +172,7 @@ new aws.iam.RolePolicyAttachment("ingest-execution", { role: taskExecutionRole.n
 const ingestTaskRole = new aws.iam.Role("ingest-task", { assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({ Service: "ecs-tasks.amazonaws.com" }), tags });
 new aws.iam.RolePolicy("ingest-task", { role: ingestTaskRole.id, policy: aws.iam.getPolicyDocumentOutput({ statements: [
   { effect: "Allow", actions: ["s3:GetObject"], resources: [pulumi.interpolate`${uploadBucket.arn}/users/*`] },
-  { effect: "Allow", actions: ["s3:GetObject", "s3:PutObject"], resources: [pulumi.interpolate`${dataBucket.arn}/datasets/*`, pulumi.interpolate`${ingestedBucket.arn}/datasets/*`] },
+  { effect: "Allow", actions: ["s3:GetObject", "s3:PutObject"], resources: [pulumi.interpolate`${dataBucket.arn}/datasets/*`] },
   { effect: "Allow", actions: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"], resources: [metadataTable.arn] },
 ] }).json });
 const ingestLogs = new aws.cloudwatch.LogGroup("ingest", { retentionInDays: 14, tags });
@@ -196,8 +196,8 @@ new aws.iam.RolePolicy("control-plane-api-data", {
   policy: aws.iam.getPolicyDocumentOutput({ statements: [
     { effect: "Allow", actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query", "dynamodb:BatchWriteItem"], resources: [metadataTable.arn, pulumi.interpolate`${metadataTable.arn}/index/*`] },
     { effect: "Allow", actions: ["cognito-idp:AdminGetUser", "cognito-idp:AdminDeleteUser"], resources: [userPool.arn] },
-    { effect: "Allow", actions: ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListMultipartUploadParts", "s3:AbortMultipartUpload"], resources: [pulumi.interpolate`${uploadBucket.arn}/users/*`, pulumi.interpolate`${ingestedBucket.arn}/users/*`] },
-    { effect: "Allow", actions: ["s3:ListBucket"], resources: [uploadBucket.arn, ingestedBucket.arn] },
+    { effect: "Allow", actions: ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListMultipartUploadParts", "s3:AbortMultipartUpload"], resources: [pulumi.interpolate`${uploadBucket.arn}/users/*`, pulumi.interpolate`${dataBucket.arn}/datasets/*`] },
+    { effect: "Allow", actions: ["s3:ListBucket"], resources: [uploadBucket.arn, dataBucket.arn] },
     { effect: "Allow", actions: ["batch:SubmitJob", "batch:TerminateJob"], resources: [ingestQueue.arn, ingestDefinition.arn, "*"] },
   ] }).json,
 });
@@ -206,7 +206,7 @@ const controlPlaneFunction = new aws.lambda.Function("control-plane-api", {
   runtime: aws.lambda.Runtime.NodeJS22dX,
   handler: "control-plane.handler",
   code: new pulumi.asset.AssetArchive({ "control-plane.cjs": new pulumi.asset.FileAsset(path.join(path.dirname(fileURLToPath(import.meta.url)), "dist/control-plane.cjs")) }),
-  environment: { variables: { METADATA_TABLE_NAME: metadataTable.name, USER_POOL_ID: userPool.id, UPLOAD_BUCKET_NAME: uploadBucket.bucket, DATA_BUCKET_NAME: ingestedBucket.bucket, INGEST_JOB_QUEUE: ingestQueue.arn, INGEST_JOB_DEFINITION: ingestDefinition.arn } },
+  environment: { variables: { METADATA_TABLE_NAME: metadataTable.name, USER_POOL_ID: userPool.id, UPLOAD_BUCKET_NAME: uploadBucket.bucket, DATA_BUCKET_NAME: dataBucket.bucket, INGEST_JOB_QUEUE: ingestQueue.arn, INGEST_JOB_DEFINITION: ingestDefinition.arn } },
   memorySize: 256,
   timeout: 10,
   tags,
@@ -252,8 +252,10 @@ for (const [name, routeKey] of [["uploads-create", "POST /api/uploads"], ["uploa
   new aws.apigatewayv2.Route(name, { apiId: controlPlaneApi.id, routeKey, target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}`, authorizationType: "JWT", authorizerId: controlPlaneAuthorizer.id, authorizationScopes: ["openid"] });
 }
 new aws.apigatewayv2.Route("admin-upload-retry", { apiId: controlPlaneApi.id, routeKey: "POST /api/admin/uploads/{id}/retry", target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}`, authorizationType: "JWT", authorizerId: controlPlaneAuthorizer.id, authorizationScopes: ["openid"] });
+new aws.apigatewayv2.Route("dataset-access", { apiId: controlPlaneApi.id, routeKey: "GET /api/datasets/{id}/access", target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}`, authorizationType: "JWT", authorizerId: controlPlaneAuthorizer.id, authorizationScopes: ["openid"] });
 new aws.apigatewayv2.Route("published-save", { apiId: controlPlaneApi.id, routeKey: "POST /api/published", target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}`, authorizationType: "JWT", authorizerId: controlPlaneAuthorizer.id, authorizationScopes: ["openid"] });
 new aws.apigatewayv2.Route("published-get", { apiId: controlPlaneApi.id, routeKey: "GET /api/published/{slug}", target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}` });
+new aws.apigatewayv2.Route("published-dataset-access", { apiId: controlPlaneApi.id, routeKey: "GET /api/published/{slug}/dataset-access", target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}` });
 new aws.apigatewayv2.Stage("control-plane", {
   apiId: controlPlaneApi.id,
   name: "$default",
