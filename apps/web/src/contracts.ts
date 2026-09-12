@@ -65,8 +65,10 @@ export type SummaryStats = {
   firstActivity: string | null;
   lastActivity: string | null;
 };
+export type QueryScalar = string | number | null;
+export type QueryDimension = { name: string; kind: "categorical" | "numeric" | "temporal"; values: Record<string, QueryScalar>; steps: (string | number)[]; domain?: [number, number] };
 export type RenderPlan = { type: "arrow"; activityIds: string[] };
-export type QueryResult = { queryId: string; selectedCount: number; renderPlan: RenderPlan };
+export type QueryResult = { queryId: string; selectedCount: number; renderPlan: RenderPlan; dimensions?: QueryDimension[] };
 export type Share = { id: string; tabId: string; datasetId: string };
 
 export type VertexStats = { sum: number; min: number; max: number };

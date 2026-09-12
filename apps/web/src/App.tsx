@@ -8,7 +8,7 @@ import DeckGL from "@deck.gl/react";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 
-import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";
+import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, QueryDimension, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";
 import { binaryPathData, pickedActivity, routeColors } from "./binaryRoutes";
 import { BrowserDuckDBEngine } from "./engine";
 import { loadPrivateDataset, loadPublishedDataset } from "./datasetAccess";
@@ -27,6 +27,8 @@ import { loadPublishedView, publishView } from "./publishing";
 import { loadSystemResolution, saveSystemResolution } from "./resolution";
 import { rasterStyles } from "./mapSources";
 import { recordRenderingDiagnostics } from "./diagnosticState";
+import { VisualEncodingControls } from "./VisualEncodingControls";
+import { activityVisible, colorForVisualDimension, DEFAULT_VISUAL_ENCODING, dimensionByName, reconcileVisualEncoding, type VisualEncodingSettings } from "./visualEncoding";
 
 const blankStyle: maplibregl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
 const empty: SummaryStats = { activityCount: 0, distanceM: 0, elapsedSeconds: 0, movingSeconds: 0, elevationGainM: 0, elevationLossM: 0, minElevationM: null, maxElevationM: null, maxDistanceM: null, activeDays: 0, droppedJumpPoints: 0, droppedElevationPoints: 0, sportCounts: [], firstActivity: null, lastActivity: null };
@@ -239,6 +241,8 @@ export function App() {
   const [spatialDrawing, setSpatialDrawing] = useState(false);
   const [spatialDraft, setSpatialDraft] = useState<[number, number][]>([]);
   const [routeBatches, setRouteBatches] = useState<BinaryRouteBatch[]>([]);
+  const [queryDimensions, setQueryDimensions] = useState<QueryDimension[]>([]);
+  const [visualEncoding, setVisualEncoding] = useState<VisualEncodingSettings>(DEFAULT_VISUAL_ENCODING);
   const [tableActivities, setTableActivities] = useState<ActivityListItem[]>([]);
   const [summary, setSummary] = useState(empty);
   const [status, setStatus] = useState("Ready for a local dataset");
@@ -391,6 +395,9 @@ export function App() {
       const activeTerrainCamera = queryTab.style.viewMode === "3d" && capturedTerrainCamera && Math.abs(capturedTerrainCamera.view.zoom - mapState.zoom) < 0.01 ? capturedTerrainCamera : null;
       const result = await engine.execute(current, mapState.zoom, activeTerrainCamera?.bounds ?? viewportBounds(mapState, mapElement.current), activeTerrainCamera?.size);
       if (selection !== selectionRequest.current) return;
+      const dimensions = result.dimensions ?? [];
+      setQueryDimensions(dimensions);
+      setVisualEncoding(currentEncoding => reconcileVisualEncoding(currentEncoding, dimensions));
 
       selectionReady.current = true;
       const latestView = viewRef.current;
@@ -437,7 +444,7 @@ export function App() {
     selectionReady.current = false;
     ready.current = false;
     terrainCameraRef.current = null;
-    setRouteBatches([]); setHeat(emptyHeat);
+    setRouteBatches([]); setHeat(emptyHeat); setQueryDimensions([]); setVisualEncoding(DEFAULT_VISUAL_ENCODING);
     setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false);
     setStatsOpen(false); setTableOpen(false); setTableActivities([]);
     setTerrainCamera(null); setMapInteracting(false);
@@ -730,16 +737,26 @@ export function App() {
     return tableDescending ? -order : order;
   }), [tableActivities, tableDescending, tableSort]);
 
+  const animationDimension = useMemo(() => dimensionByName(queryDimensions, visualEncoding.animateBy), [queryDimensions, visualEncoding.animateBy]);
+  const colorDimension = useMemo(() => dimensionByName(queryDimensions, visualEncoding.colorBy), [queryDimensions, visualEncoding.colorBy]);
+  const heatActive = tab.style.heatEnabled && !colorDimension;
   const overviewBatches = useMemo(() => isolateSelected ? [] : routeBatches, [isolateSelected, routeBatches]);
   const overviewColors = useMemo(() => routeBatches.map(batch => routeColors(batch, activity => {
-    if (activity.activityId === selected?.activityId) return [0, 0, 0, 0];
-    return tab.style.heatEnabled
+    if (!activityVisible(animationDimension, visualEncoding, activity.activityId) || activity.activityId === selected?.activityId) return [0, 0, 0, 0];
+    const encoded = colorForVisualDimension(colorDimension, activity.activityId, visualEncoding.palette);
+    if (encoded) return encoded;
+    return heatActive
       ? colorForWeight(heat.scores.get(activity.activityId) ?? 0, heat.maxScore, tab.style.heatPalette, tab.style.heatTemperature)
       : routeColor(tab.style.color, 190);
-  })), [heat, routeBatches, selected, tab.style.color, tab.style.heatEnabled, tab.style.heatPalette, tab.style.heatTemperature]);
-  const terrainColors = useMemo(() => routeBatches.map(batch => routeColors(batch, activity => tab.style.heatEnabled
-    ? colorForWeight(heat.scores.get(activity.activityId) ?? 0, heat.maxScore, tab.style.heatPalette, tab.style.heatTemperature)
-    : routeColor(tab.style.color, 190))), [heat, routeBatches, tab.style.color, tab.style.heatEnabled, tab.style.heatPalette, tab.style.heatTemperature]);
+  })), [animationDimension, colorDimension, heat, heatActive, routeBatches, selected, tab.style.color, tab.style.heatPalette, tab.style.heatTemperature, visualEncoding]);
+  const terrainColors = useMemo(() => routeBatches.map(batch => routeColors(batch, activity => {
+    if (!activityVisible(animationDimension, visualEncoding, activity.activityId)) return [0, 0, 0, 0];
+    const encoded = colorForVisualDimension(colorDimension, activity.activityId, visualEncoding.palette);
+    if (encoded) return encoded;
+    return heatActive
+      ? colorForWeight(heat.scores.get(activity.activityId) ?? 0, heat.maxScore, tab.style.heatPalette, tab.style.heatTemperature)
+      : routeColor(tab.style.color, 190);
+  })), [animationDimension, colorDimension, heat, heatActive, routeBatches, tab.style.color, tab.style.heatPalette, tab.style.heatTemperature, visualEncoding]);
   const hoverColors = useMemo(() => hover ? routeBatches.map(batch => routeColors(batch, activity => activity.activityId === hover.item.activityId ? routeColor(tab.style.color, 255) : [0, 0, 0, 0])) : [], [hover, routeBatches, tab.style.color]);
   const overviewPathData = useMemo(() => routeBatches.map((batch, index) => binaryPathData(batch, overviewColors[index])), [overviewColors, routeBatches]);
   const pickingPathData = useMemo(() => routeBatches.map(batch => binaryPathData(batch)), [routeBatches]);
@@ -763,8 +780,8 @@ export function App() {
   const layers = useMemo(() => [
     ...spatialLayers(tab.spatialFilter, spatialDrawing, spatialDraft),
     ...overviewBatches.flatMap((batch, index) => [
-      new PathLayer({ id: `routes-${index}`, data: overviewPathData[index], _pathType: "open", positionFormat: "XY", getWidth: tab.style.heatEnabled ? lineWidths.heat : lineWidths.route, widthUnits: "pixels", widthMinPixels: 0.35, pickable: false }),
-      new PathLayer({ id: `route-hit-targets-${index}`, data: pickingPathData[index], _pathType: "open", positionFormat: "XY", getColor: [0, 0, 0, 0], getWidth: lineWidths.route + 10, widthUnits: "pixels", widthMinPixels: 10, pickable: !spatialDrawing, onHover: (info: PickingInfo) => { if (spatialDrawing) return; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item) { setHover(null); return; } const x = info.x, y = info.y, activityId = item.activityId; void engine.getRouteMetadata(activityId).then(metadata => { if (metadata) setHover({ x, y, item: metadata, origin: "map" }); }); }, onClick: (info: PickingInfo) => { if (spatialDrawing) return false; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item) return false; void openActivity(item); return true; } }),
+      new PathLayer({ id: `routes-${index}`, data: overviewPathData[index], _pathType: "open", positionFormat: "XY", getWidth: heatActive ? lineWidths.heat : lineWidths.route, widthUnits: "pixels", widthMinPixels: 0.35, pickable: false }),
+      new PathLayer({ id: `route-hit-targets-${index}`, data: pickingPathData[index], _pathType: "open", positionFormat: "XY", getColor: [0, 0, 0, 0], getWidth: lineWidths.route + 10, widthUnits: "pixels", widthMinPixels: 10, pickable: !spatialDrawing, onHover: (info: PickingInfo) => { if (spatialDrawing) return; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item || !activityVisible(animationDimension, visualEncoding, item.activityId)) { setHover(null); return; } const x = info.x, y = info.y, activityId = item.activityId; void engine.getRouteMetadata(activityId).then(metadata => { if (metadata) setHover({ x, y, item: metadata, origin: "map" }); }); }, onClick: (info: PickingInfo) => { if (spatialDrawing) return false; const item = info.index >= 0 ? pickedActivity(batch, info.index) : null; if (!item || !activityVisible(animationDimension, visualEncoding, item.activityId)) return false; void openActivity(item); return true; } }),
     ]),
     ...(hover && !spatialDrawing ? routeBatches.map((batch, index) =>
       new PathLayer({ id: `hover-route-${index}`, data: hoverPathData[index], _pathType: "open", positionFormat: "XY", getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8 }),
@@ -775,7 +792,7 @@ export function App() {
       new PathLayer<RouteSegment>({ id: "selected-route", data: selectedSegments, getPath: item => item.path, getColor: routeColor(tab.style.color, 255), getWidth: lineWidths.focus, widthUnits: "pixels", widthMinPixels: 0.8, pickable: !spatialDrawing }),
     ] : []),
     ...(profileHover && !spatialDrawing ? [new ScatterplotLayer<ElevationSample>({ id: "profile-position", data: [profileHover], getPosition: item => item.position, getFillColor: [71, 107, 204, 255], getLineColor: [255, 255, 255, 255], getRadius: 8, radiusUnits: "pixels", stroked: true, lineWidthMinPixels: 3 })] : []),
-  ], [engine, hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, spatialDraft, spatialDrawing, tab.spatialFilter, tab.style.color, tab.style.heatEnabled]);
+  ], [animationDimension, engine, heatActive, hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, spatialDraft, spatialDrawing, tab.spatialFilter, tab.style.color, visualEncoding]);
   const terrainHighlightActivityId = hover?.item.activityId ?? selected?.activityId;
 
   return <main className={`app ${systemSettingsOpen ? "with-side-panel" : ""}`} onKeyDown={event => { if (spatialDrawing && event.key === "Escape") { setSpatialDrawing(false); setSpatialDraft([]); return; } if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void run(); }}>
@@ -814,6 +831,7 @@ export function App() {
         <label data-tooltip="Choose the color ramp for route proximity.">Colors<select aria-label="Heat colormap" value={tab.style.heatPalette} disabled={!tab.style.heatEnabled} onChange={event => changeStyle({ heatPalette: event.target.value as HeatPalette })}><option value="sunset">Sunset</option><option value="viridis">Viridis</option><option value="fire">Fire</option><option value="ice">Ice</option></select></label>
         <label className="temperature" data-tooltip="Higher values make less-frequent shared routes reach saturated colors sooner."><span>Temperature</span><input aria-label="Heat temperature" type="range" min="0.5" max="3" step="0.1" disabled={!tab.style.heatEnabled} value={tab.style.heatTemperature} onChange={event => changeStyle({ heatTemperature: Number(event.target.value) })} /><output>{tab.style.heatTemperature.toFixed(1)}×</output></label>
       </div></section>
+      <VisualEncodingControls dimensions={queryDimensions} settings={visualEncoding} onChange={setVisualEncoding} />
       <section className="toolbar-section"><h3>Spatial filter</h3><div className="spatial-filter-controls"><label data-tooltip="Intersects selects routes that enter or cross the drawn area. Entirely within requires the whole route to stay inside it.">Predicate<select aria-label="Spatial predicate" value={tab.spatialFilter?.predicate ?? "intersects"} onChange={event => changeSpatialPredicate(event.target.value as SpatialPredicate)}><option value="intersects">Intersects</option><option value="within">Contains</option></select></label><button onClick={startSpatialDraw}>{tab.spatialFilter?.polygon.length ? "Redraw area" : "Draw area"}</button></div>{Boolean(tab.spatialFilter?.polygon.length) && <><p className="spatial-filter-summary">{tab.spatialFilter?.predicate === "within" ? "Contains" : "Intersects"} · {tab.spatialFilter!.polygon.length} vertices</p><div className="spatial-filter-actions"><button onClick={() => saveSpatialFilter({ ...tab.spatialFilter!, visible: !tab.spatialFilter!.visible }, false)}>{tab.spatialFilter?.visible ? "Hide area" : "Show area"}</button><button onClick={clearSpatialFilter}>Clear</button></div></>}</section>
       <section className="toolbar-section"><h3>Data</h3><label className="check" data-tooltip="Run the last successful SQL automatically against a derived view that excludes isolated GPS jumps and elevation spikes. Unsaved SQL stays a draft and raw files are unchanged."><input aria-label="Clean" type="checkbox" checked={tab.style.cleanEnabled} onChange={event => changeStyle({ cleanEnabled: event.target.checked })} /> Clean anomalous points</label></section>
       <section className="toolbar-section sql-section"><div className="section-heading"><div><h3>SQL</h3><p>{draft === tab.sql ? "Current query is applied" : "Draft changed · run to apply"}</p></div><button className="run" title="Run this DuckDB SQL query" disabled={busy || !ready.current} onClick={() => void run()}>▶ Run <kbd>⌘↵</kbd></button></div><Suspense fallback={<div className="sql-loading">Loading SQL editor…</div>}><SqlEditor value={draft} dark={effectiveTheme === "dark"} onChange={setDraft} /></Suspense></section>
@@ -832,7 +850,7 @@ export function App() {
         onDiagnostics={metrics => setTerrainMetrics(previous => previous.loadedSegments === metrics.loadedSegments && previous.submittedSegments === metrics.submittedSegments && previous.tileCount === metrics.tileCount ? previous : metrics)}
         batches={routeBatches}
         colors={terrainColors}
-        widthPx={tab.style.heatEnabled ? lineWidths.heat : lineWidths.route}
+        widthPx={heatActive ? lineWidths.heat : lineWidths.route}
         profilePosition={profileHover?.position}
         highlightActivityId={terrainHighlightActivityId}
         isolateActivityId={isolateSelected ? selected?.activityId : undefined}
