@@ -22,3 +22,7 @@
 .admin-user-actions button { padding: 4px 7px; font-size: 9px; }
 .admin-user-actions button.active { border-color: var(--accent); color: var(--text); }
 .admin-empty { color: var(--muted); font-size: 10px; }
+
+@media (max-width: 600px) {
+  .account-panel { width: 100%; }
+}
