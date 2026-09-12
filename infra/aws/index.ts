@@ -251,6 +251,7 @@ new aws.apigatewayv2.Route("me-delete", {
 for (const [name, routeKey] of [["uploads-create", "POST /api/uploads"], ["uploads-part", "POST /api/uploads/{id}/parts"], ["uploads-parts", "GET /api/uploads/{id}/parts"], ["uploads-complete", "POST /api/uploads/{id}/complete"], ["uploads-list", "GET /api/uploads"]] as const) {
   new aws.apigatewayv2.Route(name, { apiId: controlPlaneApi.id, routeKey, target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}`, authorizationType: "JWT", authorizerId: controlPlaneAuthorizer.id, authorizationScopes: ["openid"] });
 }
+new aws.apigatewayv2.Route("admin-upload-retry", { apiId: controlPlaneApi.id, routeKey: "POST /api/admin/uploads/{id}/retry", target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}`, authorizationType: "JWT", authorizerId: controlPlaneAuthorizer.id, authorizationScopes: ["openid"] });
 new aws.apigatewayv2.Route("published-save", { apiId: controlPlaneApi.id, routeKey: "POST /api/published", target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}`, authorizationType: "JWT", authorizerId: controlPlaneAuthorizer.id, authorizationScopes: ["openid"] });
 new aws.apigatewayv2.Route("published-get", { apiId: controlPlaneApi.id, routeKey: "GET /api/published/{slug}", target: pulumi.interpolate`integrations/${controlPlaneIntegration.id}` });
 new aws.apigatewayv2.Stage("control-plane", {

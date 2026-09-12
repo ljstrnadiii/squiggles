@@ -124,6 +124,48 @@ async function listAdminUsers() {
   return users;
 }
 
+async function queueUpload(uploadKey, upload, targetSubject, expectedStatus) {
+  const id = uploadKey.SK.S.slice(7);
+  const now = new Date().toISOString();
+  await dynamo.send(new UpdateItemCommand({
+    TableName: tableName,
+    Key: uploadKey,
+    ConditionExpression: "#status = :expected",
+    UpdateExpression: "SET #status = :submitting, statusDetail = :detail, updatedAt = :now",
+    ExpressionAttributeNames: { "#status": "status" },
+    ExpressionAttributeValues: {
+      ":expected": { S: expectedStatus },
+      ":submitting": { S: "submitting" },
+      ":detail": { S: "Submitting compile job." },
+      ":now": { S: now },
+    },
+  }));
+  let submitted;
+  try {
+    submitted = await batch.send(new SubmitJobCommand({ jobName: `ingest-${id}`, jobQueue, jobDefinition, containerOverrides: { environment: [
+      { name: "TABLE_NAME", value: tableName }, { name: "SOURCE_BUCKET", value: uploadBucket }, { name: "SOURCE_KEY", value: upload.objectKey.S },
+      { name: "DATA_BUCKET", value: dataBucket }, { name: "USER_SUB", value: targetSubject }, { name: "UPLOAD_ID", value: id },
+    ] } }));
+  } catch (error) {
+    await dynamo.send(new UpdateItemCommand({
+      TableName: tableName,
+      Key: uploadKey,
+      ConditionExpression: "#status = :submitting",
+      UpdateExpression: "SET #status = :expected, statusDetail = :detail, updatedAt = :now",
+      ExpressionAttributeNames: { "#status": "status" },
+      ExpressionAttributeValues: {
+        ":submitting": { S: "submitting" },
+        ":expected": { S: expectedStatus },
+        ":detail": { S: "Compile job submission failed. Retry is safe." },
+        ":now": { S: new Date().toISOString() },
+      },
+    }));
+    throw error;
+  }
+  await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: uploadKey, ConditionExpression: "#status = :submitting", UpdateExpression: "SET #status = :queued, batchJobId = :job, statusDetail = :detail, updatedAt = :now", ExpressionAttributeNames: { "#status": "status" }, ExpressionAttributeValues: { ":submitting": { S: "submitting" }, ":queued": { S: "queued" }, ":job": { S: submitted.jobId }, ":detail": { S: "Compile job queued." }, ":now": { S: new Date().toISOString() } } }));
+  return { id, status: "queued" };
+}
+
 export async function handler(event) {
   const route = event.routeKey;
   if (route === "GET /api/published/{slug}") {
@@ -214,6 +256,21 @@ export async function handler(event) {
     return response(200, { subject: target, status });
   }
 
+  if (route === "POST /api/admin/uploads/{id}/retry") {
+    if (!isAdmin) return response(403, { error: "admin_required" });
+    const id = event.pathParameters?.id;
+    const body = JSON.parse(event.body ?? "{}");
+    const target = body.subject;
+    if (!/^[0-9a-f-]{36}$/i.test(id ?? "") || !/^[0-9a-f-]{16,64}$/i.test(target ?? "")) return response(400, { error: "invalid_retry" });
+    const uploadKey = { PK: { S: `USER#${target}` }, SK: { S: `UPLOAD#${id}` } };
+    const upload = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: uploadKey, ConsistentRead: true }))).Item;
+    if (!upload) return response(404, { error: "upload_not_found" });
+    if (upload.status?.S !== "failed") return response(409, { error: "upload_not_retryable" });
+    const object = await s3.send(new HeadObjectCommand({ Bucket: uploadBucket, Key: upload.objectKey.S }));
+    if (object.ContentLength !== Number(upload.byteSize.N)) return response(422, { error: "upload_verification_failed" });
+    return response(200, await queueUpload(uploadKey, upload, target, "failed"));
+  }
+
   if (route === "POST /api/published") {
     if (current?.status?.S !== "approved") return response(403, { error: "approval_required" });
     const body = JSON.parse(event.body ?? "{}");
@@ -291,12 +348,7 @@ export async function handler(event) {
       upload = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: uploadKey, ConsistentRead: true }))).Item;
     }
     if (upload?.status?.S !== "pending") return response(409, { error: "upload_not_ready" });
-    const submitted = await batch.send(new SubmitJobCommand({ jobName: `ingest-${id}`, jobQueue, jobDefinition, containerOverrides: { environment: [
-      { name: "TABLE_NAME", value: tableName }, { name: "SOURCE_BUCKET", value: uploadBucket }, { name: "SOURCE_KEY", value: upload.objectKey.S },
-      { name: "DATA_BUCKET", value: dataBucket }, { name: "USER_SUB", value: subject }, { name: "UPLOAD_ID", value: id },
-    ] } }));
-    await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: uploadKey, ConditionExpression: "#status = :pending", UpdateExpression: "SET #status = :queued, batchJobId = :job, updatedAt = :now", ExpressionAttributeNames: { "#status": "status" }, ExpressionAttributeValues: { ":pending": { S: "pending" }, ":queued": { S: "queued" }, ":job": { S: submitted.jobId }, ":now": { S: new Date().toISOString() } } }));
-    return response(200, { id, status: "queued" });
+    return response(200, await queueUpload(uploadKey, upload, subject, "pending"));
   }
 
   if (route === "GET /api/uploads") {

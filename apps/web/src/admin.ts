@@ -49,3 +49,16 @@ export async function setAdminUserAccess(config: RuntimeConfig, session: AuthSes
     throw new Error(`Could not update user access${detail}.`);
   }
 }
+
+export async function retryAdminUpload(config: RuntimeConfig, session: AuthSession, subject: string, uploadId: string): Promise<void> {
+  const response = await authFetch(config, session, `${config.apiUrl}/api/admin/uploads/${uploadId}/retry`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ subject }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: string } | null;
+    const detail = body?.error ? ` (${body.error.replaceAll("_", " ")})` : "";
+    throw new Error(`Could not retry upload${detail}.`);
+  }
+}
