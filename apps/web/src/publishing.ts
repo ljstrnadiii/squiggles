@@ -1,5 +1,5 @@
 import { normalizeCamera } from "./camera";
-import { authFetch, type AuthSession, type RuntimeConfig } from "./auth";
+import { identityFromSession, loadSession, authFetch, type AuthSession, type RuntimeConfig } from "./auth";
 import type { QueryTab } from "./contracts";
 import { renderPlanHint } from "./renderPlanHints";
 import { defaultTab, normalizeTab } from "./storage";
@@ -52,7 +52,27 @@ export async function loadPublishedView(
   mapRef: string,
 ): Promise<PublishedView> {
   const response = await fetch(`${config.apiUrl}/api/published/${mapRef}`, { cache: "no-store" });
-  if (!response.ok) throw new Error("This map could not be found.");
+  if (!response.ok) {
+    const canonicalMap = /^[0-9a-f-]{36}$/i.test(mapRef);
+    const session = loadSession();
+    if (!canonicalMap || !session) throw new Error("This map could not be found.");
+    const identity = identityFromSession(session);
+    const ownerDisplayName = identity.name || identity.email;
+    return {
+      mapId: mapRef,
+      url: `/m/${mapRef}`,
+      tabs: [{ ...defaultTab, style: { ...defaultTab.style }, mapState: { ...defaultTab.mapState } }],
+      active: defaultTab.id,
+      datasetId: mapRef,
+      updatedAt: "",
+      identity: {
+        mapId: mapRef,
+        ownerDisplayName,
+        ...(identity.picture ? { ownerAvatarUrl: identity.picture } : {}),
+        viewerRole: "owner",
+      },
+    };
+  }
   const saved = (await response.json()) as Partial<PublishedView> & Pick<PublishedView, "datasetId" | "updatedAt" | "identity">;
   const tabs = Array.isArray(saved.tabs) && saved.tabs.length ? saved.tabs.map(tab => normalizeTab(tab)) : [{ ...defaultTab, style: { ...defaultTab.style }, mapState: { ...defaultTab.mapState } }];
   const active = typeof saved.active === "string" && tabs.some(tab => tab.id === saved.active) ? saved.active : tabs[0].id;
