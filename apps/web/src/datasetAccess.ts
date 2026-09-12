@@ -1,4 +1,4 @@
-import { authFetch, type AuthSession, type RuntimeConfig } from "./auth";
+import { authFetch, loadSession, type AuthSession, type RuntimeConfig } from "./auth";
 import type { DatasetManifest, DatasetSource } from "./contracts";
 import type { MapIdentity } from "./mapIdentity";
 
@@ -22,9 +22,13 @@ export async function loadPrivateDataset(
 
 export async function loadPublishedDataset(
   config: RuntimeConfig,
-  slug: string,
+  mapRef: string,
 ): Promise<DatasetSource> {
-  const response = await fetch(`${config.apiUrl}/api/published/${slug}/dataset-access`, { cache: "no-store" });
-  if (!response.ok) throw new Error("This published map's dataset could not be opened.");
+  if (/^[0-9a-f-]{36}$/i.test(mapRef)) {
+    const session = loadSession();
+    if (session) return (await loadPrivateDataset(config, session, mapRef)).source;
+  }
+  const response = await fetch(`${config.apiUrl}/api/published/${mapRef}/dataset-access`, { cache: "no-store" });
+  if (!response.ok) throw new Error("This map's dataset could not be opened.");
   return source(await response.json() as DatasetAccess);
 }
