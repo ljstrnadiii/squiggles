@@ -101,12 +101,13 @@ function sameCamera(left: MapState, right: MapState) {
     && left.bearing === right.bearing;
 }
 
-function sharedDatasetId(pathname = window.location.pathname) {
-  const match = /^\/m\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/?$/i.exec(pathname);
-  return match?.[1];
+function sharedDatasetId() {
+  return undefined;
 }
 
 function publishedSlug(pathname = window.location.pathname) {
+  const canonical = /^\/m\/([0-9a-f-]{36})\/?$/i.exec(pathname)?.[1];
+  if (canonical) return canonical;
   return /^\/p\/([a-z0-9]{8})\/?$/.exec(pathname)?.[1];
 }
 
@@ -509,18 +510,33 @@ export function App() {
       void (async () => {
         try {
           const config = await loadRuntimeConfig();
-          if (!config) throw new Error("Published maps are unavailable.");
+          if (!config) throw new Error("Maps are unavailable.");
           const saved = await loadPublishedView(config, published);
-          setMapIdentity(saved.identity);
-          rememberLocalMap(saved.identity, `/p/${published}`);
+          const wasLegacyPublishedUrl = /^\/p\//.test(window.location.pathname);
+          if (wasLegacyPublishedUrl) {
+            window.history.replaceState({}, "", `${saved.url}${window.location.search}`);
+            storageScopeRef.current = mapStorageScope();
+          }
+          const adminPreview = new URLSearchParams(window.location.search).get("admin") === "1";
           const session = loadSession();
-          if (session) void loadMapNavigation(config, session).then(setMapNavigation).catch(() => undefined);
+          let identity = saved.identity;
+          let source = saved.datasetId ? await loadPublishedDataset(config, published) : null;
+          if (adminPreview && session) {
+            const opened = await loadPrivateDataset(config, session, saved.mapId);
+            identity = opened.identity ?? identity;
+            source = opened.source;
+          }
+          setMapIdentity(identity);
+          if (!adminPreview) rememberLocalMap(saved.identity);
+          if (session) void loadMapNavigation(config, session).then(navigation => {
+            setMapNavigation(navigation);
+            if (navigation.myMap?.mapId === saved.mapId) setMapIdentity(navigation.myMap);
+          }).catch(() => undefined);
           const selected = saved.tabs.find(item => item.id === saved.active) ?? saved.tabs[0];
           tabsRef.current = saved.tabs; activeRef.current = selected.id; viewRef.current = selected.mapState;
           setTabs(saved.tabs); setActive(selected.id); setDraft(selected.sql); setView(selected.mapState);
-          if (saved.datasetId) {
-            await openSource(await loadPublishedDataset(config, published), selected.mapState, selected);
-          } else setStatus("Published map settings loaded");
+          if (source) await openSource(source, saved.tabs.length === 1 && saved.tabs[0].id === defaultTab.id && !initialUrlCamera.current ? undefined : selected.mapState, selected);
+          else setStatus("Map has no optimized archive yet");
         } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
       })();
       return;
@@ -696,12 +712,11 @@ export function App() {
     if (!session) { setAccountView("login"); setAccountOpen(true); return; }
     try {
       const config = await loadRuntimeConfig();
-      if (!config) throw new Error("Publishing is unavailable.");
+      if (!config) throw new Error("Saving map views is unavailable.");
       const currentTabs = tabs.map(item => item.id === tab.id ? { ...item, mapState: view, sql: draft } : item);
       const datasetId = datasetName && /^[0-9a-f-]{36}$/i.test(datasetName) ? datasetName : null;
-      const published = await publishView(config, session, currentTabs, tab.id, datasetId);
-      await navigator.clipboard.writeText(`${window.location.origin}${published.url}`);
-      setStatus("Published link copied"); setLinkCopied(true); window.setTimeout(() => setLinkCopied(false), 1500);
+      await publishView(config, session, currentTabs, tab.id, datasetId);
+      setStatus("Map view saved");
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); refreshIdentity(); }
   }
 
@@ -842,7 +857,7 @@ export function App() {
       {sessionIdentity.email ? <>
         {mapNavigation?.myMap && mapNavigation.myMap.url !== window.location.pathname && <a className="map-menu-link" href={mapNavigation.myMap.url}>My map</a>}
         {mapNavigation?.recentMaps.length ? <section className="recent-maps"><span className="eyebrow">RECENT MAPS</span>{mapNavigation.recentMaps.filter(item => item.url !== window.location.pathname).map(item => <a key={item.url} href={item.url}><span className="recent-map-avatar">{item.ownerAvatarUrl ? <img src={item.ownerAvatarUrl} alt="" referrerPolicy="no-referrer" /> : item.ownerDisplayName.slice(0, 1).toUpperCase()}</span><span>{item.ownerDisplayName}</span></a>)}</section> : null}
-        <div className="account-menu-actions"><button onClick={() => { setAccountView("account"); setAccountOpen(true); setAccountMenuOpen(false); }}>Account</button><button onClick={() => { setAccountView("upload"); setAccountOpen(true); setAccountMenuOpen(false); }}>Upload Archive</button>{currentIdentity?.viewerRole === "owner" && <button onClick={() => { void publishTabs(); setAccountMenuOpen(false); }}>Publish link</button>}<button onClick={() => { clearSession(); setMapNavigation(null); refreshIdentity(); setAccountMenuOpen(false); }}>Log out</button></div>
+        <div className="account-menu-actions"><button onClick={() => { setAccountView("account"); setAccountOpen(true); setAccountMenuOpen(false); }}>Account</button><button onClick={() => { setAccountView("upload"); setAccountOpen(true); setAccountMenuOpen(false); }}>Upload Archive</button>{currentIdentity?.viewerRole === "owner" && <button onClick={() => { void publishTabs(); setAccountMenuOpen(false); }}>Save view</button>}<button onClick={() => { clearSession(); setMapNavigation(null); refreshIdentity(); setAccountMenuOpen(false); }}>Log out</button></div>
       </> : <button onClick={() => { setAccountView("login"); setAccountOpen(true); setAccountMenuOpen(false); }}>Log in</button>}
     </nav>}
 
