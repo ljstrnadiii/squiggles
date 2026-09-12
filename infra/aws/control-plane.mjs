@@ -191,6 +191,8 @@ async function queueUpload(uploadKey, upload, targetSubject, expectedStatus) {
   return { id, status: "queued" };
 }
 
+const recompileStatuses = new Set(["failed", "ready", "completed"]);
+
 export async function handler(event) {
   const route = event.routeKey;
   if (route === "GET /api/published/{slug}") {
@@ -303,14 +305,14 @@ export async function handler(event) {
     const id = event.pathParameters?.id;
     const body = JSON.parse(event.body ?? "{}");
     const target = body.subject;
-    if (!/^[0-9a-f-]{36}$/i.test(id ?? "") || !/^[0-9a-f-]{16,64}$/i.test(target ?? "")) return response(400, { error: "invalid_retry" });
+    if (!/^[0-9a-f-]{36}$/i.test(id ?? "") || !/^[0-9a-f-]{16,64}$/i.test(target ?? "")) return response(400, { error: "invalid_recompile" });
     const uploadKey = { PK: { S: `USER#${target}` }, SK: { S: `UPLOAD#${id}` } };
     const upload = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: uploadKey, ConsistentRead: true }))).Item;
     if (!upload) return response(404, { error: "upload_not_found" });
-    if (upload.status?.S !== "failed") return response(409, { error: "upload_not_retryable" });
+    if (!recompileStatuses.has(upload.status?.S)) return response(409, { error: "upload_not_recompilable" });
     const object = await s3.send(new HeadObjectCommand({ Bucket: uploadBucket, Key: upload.objectKey.S }));
     if (object.ContentLength !== Number(upload.byteSize.N)) return response(422, { error: "upload_verification_failed" });
-    return response(200, await queueUpload(uploadKey, upload, target, "failed"));
+    return response(200, await queueUpload(uploadKey, upload, target, upload.status.S));
   }
 
   if (route === "POST /api/published") {

@@ -50,7 +50,7 @@ export async function setAdminUserAccess(config: RuntimeConfig, session: AuthSes
   }
 }
 
-export async function retryAdminUpload(config: RuntimeConfig, session: AuthSession, subject: string, uploadId: string): Promise<void> {
+export async function recompileAdminUpload(config: RuntimeConfig, session: AuthSession, subject: string, uploadId: string): Promise<void> {
   const response = await authFetch(config, session, `${config.apiUrl}/api/admin/uploads/${uploadId}/retry`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -59,6 +59,6 @@ export async function retryAdminUpload(config: RuntimeConfig, session: AuthSessi
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: string } | null;
     const detail = body?.error ? ` (${body.error.replaceAll("_", " ")})` : "";
-    throw new Error(`Could not retry upload${detail}.`);
+    throw new Error(`Could not recompile upload${detail}.`);
   }
 }
