@@ -57,7 +57,7 @@ export async function loadPublishedView(
     const session = loadSession();
     if (!canonicalMap || !session) throw new Error("This map could not be found.");
     const identity = identityFromSession(session);
-    const ownerDisplayName = identity.name || identity.email;
+    const ownerDisplayName = identity.name || identity.email || "My map";
     return {
       mapId: mapRef,
       url: `/m/${mapRef}`,
