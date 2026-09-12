@@ -11,6 +11,7 @@ import * as maplibregl from "maplibre-gl";
 import type { ActivityListItem, Basemap, BinaryRouteBatch, DatasetSource, ElevationSample, HeatPalette, MapState, QueryTab, RenderCacheMetrics, RouteActivity, RouteMetadata, ScanMetrics, SpatialPredicate, SummaryStats, SystemResolution, ThemeMode, UnitSystem, ViewportBounds } from "./contracts";
 import { binaryPathData, pickedActivity, routeColors } from "./binaryRoutes";
 import { BrowserDuckDBEngine } from "./engine";
+import { loadPrivateDataset, loadPublishedDataset } from "./datasetAccess";
 import { buildBinaryHeatDataCooperative, colorForWeight, type CooperativeHeatResult } from "./heat";
 import { QUERY_SCHEMA } from "./querySchema";
 import { lineWidthsForViewport, routeSegments, type RouteSegment } from "./routes";
@@ -487,18 +488,22 @@ export function App() {
           tabsRef.current = saved.tabs; activeRef.current = selected.id; viewRef.current = selected.mapState;
           setTabs(saved.tabs); setActive(selected.id); setDraft(selected.sql); setView(selected.mapState);
           if (saved.datasetId) {
-            const hostedDatasetRoot = (import.meta.env.VITE_DATASET_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/datasets";
-            await openSource({ kind: "url", baseUrl: `${hostedDatasetRoot}/${saved.datasetId}`, name: saved.datasetId }, selected.mapState, selected);
+            await openSource(await loadPublishedDataset(config, published), selected.mapState, selected);
           } else setStatus("Published map settings loaded");
         } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
       })();
       return;
     }
-    const hostedDatasetRoot = (import.meta.env.VITE_DATASET_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/datasets";
-    const source = shared
-      ? { kind: "url" as const, baseUrl: `${hostedDatasetRoot}/${shared}`, name: shared }
-      : { kind: "url" as const, baseUrl: `/local-data/${local!}`, name: local! };
-    void openSource(source, initialUrlCamera.current ? view : undefined);
+    if (shared) {
+      void (async () => {
+        try {
+          const config = await loadRuntimeConfig();
+          const session = loadSession();
+          if (!config || !session) throw new Error("Sign in to open this private map.");
+          await openSource(await loadPrivateDataset(config, session, shared), initialUrlCamera.current ? view : undefined);
+        } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+      })();
+    } else void openSource({ kind: "url", baseUrl: `/local-data/${local!}`, name: local! }, initialUrlCamera.current ? view : undefined);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

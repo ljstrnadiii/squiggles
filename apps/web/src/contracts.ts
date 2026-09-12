@@ -36,7 +36,7 @@ export type ResolutionRenderPlans = Record<SystemResolution, RenderPlanChoice>;
 export type Dataset = { id: string; name: string; manifest: DatasetManifest };
 export type DatasetSource =
   | { kind: "directory"; handle: FileSystemDirectoryHandle }
-  | { kind: "url"; baseUrl: string; name: string };
+  | { kind: "url"; baseUrl: string; name: string; manifest?: DatasetManifest };
 export type Activity = { activityId: string; name: string; sportType: string };
 export type QueryTab = {
   id: string;
@@ -79,6 +79,7 @@ export type RowGroupManifest = {
 };
 export type DatasetFileManifest = {
   path: string;
+  url?: string;
   row_count: number;
   byte_size: number;
   sha256: string;

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { QueryTab, ViewportResult } from "./contracts";
+import type { DatasetManifest, QueryTab, ViewportResult } from "./contracts";
 import { BrowserDuckDBEngine, cacheBudget, formatDuckDBDiagnostic } from "./engine";
 import { DEFAULT_RENDER_SETTINGS } from "./renderSettings";
 import { defaultTab } from "./storage";
@@ -65,7 +65,7 @@ function workerRecorder(posted: Record<string, unknown>[]) {
   };
 }
 
-function v3Manifest() {
+function v3Manifest(): DatasetManifest {
   return {
     schema_version: "1.6.0",
     activity_count: 1,
@@ -156,6 +156,43 @@ describe("BrowserDuckDBEngine viewport cache", () => {
           ],
         },
       ],
+    });
+
+    fetchMock.mockRestore();
+    globalThis.Worker = originalWorker;
+  });
+
+  it("uses signed file URLs from an embedded dataset manifest", async () => {
+    const posted: Record<string, unknown>[] = [];
+    const originalWorker = globalThis.Worker;
+    globalThis.Worker = workerRecorder(posted) as unknown as typeof Worker;
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const baseManifest = v3Manifest();
+    const renderLevel = baseManifest.render_levels![0]!;
+    const signedManifest: DatasetManifest = {
+      ...baseManifest,
+      shards: [{ ...baseManifest.shards[0], url: "https://s3.example.test/signed-activities" }],
+      render_levels: [
+        {
+          ...renderLevel,
+          files: [{ ...renderLevel.files[0], url: "https://s3.example.test/signed-render" }],
+        },
+      ],
+    };
+
+    const engine = new BrowserDuckDBEngine();
+    await engine.openDataset({
+      kind: "url",
+      baseUrl: "",
+      name: "private",
+      manifest: signedManifest,
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(posted[0]).toMatchObject({
+      type: "open",
+      files: [{ name: "activities/a.parquet", url: "https://s3.example.test/signed-activities" }],
+      renderLevels: [{ files: [{ name: "render/lod=0/part-00000.parquet", url: "https://s3.example.test/signed-render" }] }],
     });
 
     fetchMock.mockRestore();
