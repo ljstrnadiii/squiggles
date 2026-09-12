@@ -1,6 +1,6 @@
 import { AdminDeleteUserCommand, AdminGetUserCommand, CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
 import { BatchClient, SubmitJobCommand, TerminateJobCommand } from "@aws-sdk/client-batch";
-import { BatchWriteItemCommand, DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { BatchWriteItemCommand, DeleteItemCommand, DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, ListPartsCommand, S3Client, UploadPartCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { randomUUID } from "node:crypto";
@@ -39,6 +39,38 @@ async function userPartition(subject) {
     cursor = page.LastEvaluatedKey;
   } while (cursor);
   return items;
+}
+
+async function profileForSubject(subject) {
+  if (!subject) return null;
+  return (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { PK: { S: `USER#${subject}` }, SK: { S: "PROFILE" } }, ConsistentRead: true }))).Item ?? null;
+}
+
+function mapIdentity(profile, mapId, viewerRole) {
+  return {
+    mapId,
+    ownerDisplayName: profile?.name?.S || "Shared map",
+    ...(profile?.picture?.S ? { ownerAvatarUrl: profile.picture.S } : {}),
+    viewerRole,
+  };
+}
+
+async function recentMapView(item) {
+  const profile = await profileForSubject(item.ownerSubject?.S);
+  return {
+    ...mapIdentity(profile, item.mapId?.S ?? item.slug?.S ?? "", "viewer"),
+    url: item.url?.S ?? `/p/${item.slug?.S}`,
+    lastViewedAt: item.updatedAt?.S ?? item.createdAt?.S ?? "",
+  };
+}
+
+function ownMap(records, profile) {
+  const shares = records.filter(item => item.entityType?.S === "share").sort((a, b) => (b.updatedAt?.S ?? "").localeCompare(a.updatedAt?.S ?? ""));
+  const datasets = records.filter(item => item.entityType?.S === "dataset" && item.status?.S === "ready").sort((a, b) => (b.updatedAt?.S ?? b.createdAt?.S ?? "").localeCompare(a.updatedAt?.S ?? a.createdAt?.S ?? ""));
+  const datasetId = datasets[0]?.datasetId?.S ?? datasets[0]?.SK?.S?.slice(8);
+  if (datasetId) return { ...mapIdentity(profile, datasetId, "owner"), url: `/m/${datasetId}` };
+  const share = shares[0];
+  return share?.slug?.S ? { ...mapIdentity(profile, share.datasetId?.S ?? `published:${share.slug.S}`, "owner"), url: `/p/${share.slug.S}` } : null;
 }
 
 async function activeDatasetBuild(datasetId) {
@@ -201,7 +233,9 @@ export async function handler(event) {
     const published = await publishedBySlug(slug);
     if (!published) return response(404, { error: "published_view_not_found" });
     await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: { PK: published.PK, SK: published.SK }, UpdateExpression: "ADD viewCount :one", ExpressionAttributeValues: { ":one": { N: "1" } } }));
-    return response(200, { slug, tabs: JSON.parse(published.tabsJson.S), active: published.activeTab.S, datasetId: published.datasetId?.S ?? null, updatedAt: published.updatedAt.S });
+    const ownerSubject = published.PK.S.slice(5);
+    const identity = mapIdentity(await profileForSubject(ownerSubject), published.datasetId?.S ?? `published:${slug}`, "viewer");
+    return response(200, { slug, tabs: JSON.parse(published.tabsJson.S), active: published.activeTab.S, datasetId: published.datasetId?.S ?? null, updatedAt: published.updatedAt.S, identity });
   }
 
   if (route === "GET /api/published/{slug}/dataset-access") {
@@ -246,7 +280,7 @@ export async function handler(event) {
       if (error?.name !== "ConditionalCheckFailedException") throw error;
     }
   } else {
-    const needsIdentity = (!existing.Item.email?.S && verifiedEmail) || (!existing.Item.name?.S && verifiedName);
+    const needsIdentity = (!existing.Item.email?.S && verifiedEmail) || (!existing.Item.name?.S && verifiedName) || (!existing.Item.picture?.S && verifiedPicture);
     const needsAdmin = isBootstrapAdmin && (existing.Item.role?.S !== "admin" || existing.Item.status?.S !== "approved");
     if (needsIdentity || needsAdmin) {
       const now = new Date().toISOString();
@@ -272,7 +306,42 @@ export async function handler(event) {
     if (!isAdmin && owned?.status?.S !== "ready") return response(403, { error: "dataset_access_denied" });
     const registry = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { PK: { S: `DATASET#${id}` }, SK: { S: "META" } }, ConsistentRead: true }))).Item;
     if (!registry || registry.status?.S === "failed") return response(404, { error: "dataset_not_found" });
-    return response(200, await signedDataset(id));
+    const isOwner = owned?.status?.S === "ready";
+    const ownerSubject = registry.owner?.S ?? (isOwner ? subject : null);
+    const ownerProfile = ownerSubject === subject ? current : await profileForSubject(ownerSubject);
+    return response(200, { ...await signedDataset(id), identity: mapIdentity(ownerProfile, id, isOwner ? "owner" : "admin") });
+  }
+
+  if (route === "GET /api/recent-maps") {
+    const records = await userPartition(subject);
+    const recents = records.filter(item => item.entityType?.S === "recentMap").sort((a, b) => (b.updatedAt?.S ?? "").localeCompare(a.updatedAt?.S ?? ""));
+    const recentMaps = await Promise.all(recents.slice(0, 8).map(recentMapView));
+    return response(200, { myMap: ownMap(records, current), recentMaps });
+  }
+
+  if (route === "POST /api/recent-maps") {
+    const body = JSON.parse(event.body ?? "{}");
+    const slug = String(body.slug ?? "");
+    if (!/^[a-z0-9]{8}$/.test(slug)) return response(400, { error: "invalid_recent_map" });
+    const published = await publishedBySlug(slug);
+    if (!published) return response(404, { error: "published_view_not_found" });
+    const ownerSubject = published.PK.S.slice(5);
+    if (ownerSubject === subject) return response(200, { saved: false });
+    const now = new Date().toISOString();
+    const recentKey = { PK: key.PK, SK: { S: `RECENT#${slug}` } };
+    await dynamo.send(new PutItemCommand({ TableName: tableName, Item: {
+      ...recentKey,
+      entityType: { S: "recentMap" },
+      slug: { S: slug },
+      mapId: { S: published.datasetId?.S ?? `published:${slug}` },
+      ownerSubject: { S: ownerSubject },
+      url: { S: `/p/${slug}` },
+      createdAt: { S: now },
+      updatedAt: { S: now },
+    } }));
+    const records = (await userPartition(subject)).filter(item => item.entityType?.S === "recentMap").sort((a, b) => (b.updatedAt?.S ?? "").localeCompare(a.updatedAt?.S ?? ""));
+    await Promise.all(records.slice(12).map(item => dynamo.send(new DeleteItemCommand({ TableName: tableName, Key: { PK: item.PK, SK: item.SK } }))));
+    return response(200, { saved: true });
   }
 
   if (route === "GET /api/me" && event.queryStringParameters?.admin === "users") {

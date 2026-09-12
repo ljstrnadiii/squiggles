@@ -4,7 +4,7 @@ import "./admin.css";
 import { beginGoogleLogin, clearSession, deleteAccount, finishLogin, getProfile, identityFromSession, loadRuntimeConfig, loadSession, type AuthSession, type RuntimeConfig, type UserProfile } from "./auth";
 import { filterStravaArchive, listUploads, reconcileUploadStatuses, uploadArchive, type UploadRecord } from "./uploads";
 
-export function AccountPanel({ onClose, onIdentityChange, view = "account" }: { onClose: () => void; onIdentityChange: () => void; view?: "account" | "upload" | "login" }) {
+export function AccountPanel({ onClose, onIdentityChange, view = "account" }: { onClose: () => void; onIdentityChange: (completedLogin?: boolean) => void; view?: "account" | "upload" | "login" }) {
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
   const [session, setSession] = useState<AuthSession | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -23,12 +23,13 @@ export function AccountPanel({ onClose, onIdentityChange, view = "account" }: { 
         const runtime = await loadRuntimeConfig();
         setConfig(runtime);
         if (!runtime) return;
+        const completedLogin = window.location.pathname === "/auth/callback";
         const authenticated = await finishLogin(runtime);
         setSession(authenticated);
         if (authenticated) {
           const next = { ...await getProfile(runtime, authenticated), ...identityFromSession(authenticated) };
           setProfile(next);
-          onIdentityChange();
+          onIdentityChange(completedLogin);
           if (next.status === "approved") setUploads(reconcileUploadStatuses(await listUploads(runtime, authenticated), next.stats?.datasetCount ?? 0));
           if (next.role === "admin") setAdminUsers(await listAdminUsers(runtime, authenticated));
         }

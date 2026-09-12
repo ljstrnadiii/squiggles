@@ -3,6 +3,7 @@ import { authFetch, type AuthSession, type RuntimeConfig } from "./auth";
 import type { QueryTab } from "./contracts";
 import { renderPlanHint } from "./renderPlanHints";
 import { normalizeTab } from "./storage";
+import type { MapIdentity } from "./mapIdentity";
 
 export type PublishedView = {
   slug: string;
@@ -10,6 +11,7 @@ export type PublishedView = {
   active: string;
   datasetId: string | null;
   updatedAt: string;
+  identity: MapIdentity;
 };
 
 export async function publishView(

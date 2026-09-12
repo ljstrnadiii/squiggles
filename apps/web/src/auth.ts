@@ -7,6 +7,7 @@ export type UserProfile = Identity & { subject: string; status: "pending" | "app
 const sessionKey = "squiggles-auth-session";
 const verifierKey = "squiggles-auth-verifier";
 const stateKey = "squiggles-auth-state";
+const returnToKey = "squiggles-auth-return-to";
 
 const base64Url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 const randomValue = () => base64Url(crypto.getRandomValues(new Uint8Array(32)));
@@ -67,6 +68,7 @@ export async function beginGoogleLogin(config: RuntimeConfig) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
   sessionStorage.setItem(verifierKey, verifier);
   sessionStorage.setItem(stateKey, state);
+  sessionStorage.setItem(returnToKey, `${window.location.pathname}${window.location.search}${window.location.hash}`);
   const redirectUri = `${window.location.origin}/auth/callback`;
   const url = new URL("/oauth2/authorize", config.cognitoDomain);
   url.search = new URLSearchParams({ response_type: "code", client_id: config.cognitoClientId, redirect_uri: redirectUri, scope: "openid email profile", identity_provider: "Google", code_challenge_method: "S256", code_challenge: base64Url(new Uint8Array(digest)), state }).toString();
@@ -90,7 +92,9 @@ export async function finishLogin(config: RuntimeConfig): Promise<AuthSession | 
   localStorage.setItem(sessionKey, JSON.stringify(session));
   sessionStorage.removeItem(verifierKey);
   sessionStorage.removeItem(stateKey);
-  window.history.replaceState({}, "", "/");
+  const returnTo = sessionStorage.getItem(returnToKey);
+  sessionStorage.removeItem(returnToKey);
+  window.history.replaceState({}, "", returnTo?.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/");
   return session;
 }
 

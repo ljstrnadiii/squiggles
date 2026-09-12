@@ -81,6 +81,7 @@ describe("published maps", () => {
           active: "all",
           datasetId: null,
           updatedAt: "2026-08-24",
+          identity: { mapId: "published:abcd1234", ownerDisplayName: "Martha", viewerRole: "viewer" },
         }),
         { status: 200 },
       ),
