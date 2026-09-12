@@ -84,9 +84,10 @@ function adminUser(profile, records) {
   const share = shares[0];
   const datasetId = dataset?.SK?.S?.startsWith("DATASET#") ? dataset.SK.S.slice(8) : null;
   const publishedUrl = share?.slug?.S ? `/p/${share.slug.S}` : null;
-  const mapUrl = publishedUrl ?? (datasetId ? `/m/${datasetId}` : null);
   const access = profile.status?.S ?? "pending";
   const uploadStatus = latestUpload?.status?.S ?? null;
+  const activeUpload = Boolean(uploadStatus && !["ready", "failed"].includes(uploadStatus));
+  const mapUrl = activeUpload ? null : publishedUrl ?? (datasetId ? `/m/${datasetId}` : null);
   const phase = access !== "approved" ? `access:${access}` : share ? "published" : dataset ? "ready" : uploadStatus ?? "approved";
   return {
     subject: profile.PK.S.slice(5),
@@ -134,13 +135,32 @@ function datasetFiles(manifest) {
 
 async function signedDataset(datasetId) {
   const key = `datasets/${datasetId}/dataset.json`;
-  const object = await s3.send(new GetObjectCommand({ Bucket: dataBucket, Key: key }));
+  let object;
+  try {
+    object = await s3.send(new GetObjectCommand({ Bucket: dataBucket, Key: key }));
+  } catch (error) {
+    if (error?.name === "NoSuchKey" || error?.$metadata?.httpStatusCode === 404) {
+      const unavailable = new Error("dataset_manifest_not_found");
+      unavailable.statusCode = 404;
+      throw unavailable;
+    }
+    throw error;
+  }
   const manifest = JSON.parse(await object.Body.transformToString());
   await Promise.all(datasetFiles(manifest).map(async file => {
     if (typeof file.path !== "string" || file.path.startsWith("/") || file.path.split("/").includes("..")) throw new Error("invalid dataset file path");
     file.url = await getSignedUrl(s3, new GetObjectCommand({ Bucket: dataBucket, Key: `datasets/${datasetId}/${file.path}` }), { expiresIn: 21_600 });
   }));
   return { datasetId, manifest };
+}
+
+async function signedDatasetResponse(datasetId) {
+  try {
+    return response(200, await signedDataset(datasetId));
+  } catch (error) {
+    if (error?.statusCode === 404) return response(404, { error: error.message });
+    throw error;
+  }
 }
 
 async function publishedBySlug(slug) {
@@ -209,7 +229,7 @@ export async function handler(event) {
     const published = await publishedBySlug(event.pathParameters?.slug);
     const datasetId = published?.datasetId?.S;
     if (!datasetId) return response(404, { error: "published_dataset_not_found" });
-    return response(200, await signedDataset(datasetId));
+    return signedDatasetResponse(datasetId);
   }
 
   const claims = event.requestContext?.authorizer?.jwt?.claims;
@@ -272,7 +292,7 @@ export async function handler(event) {
     if (!isAdmin && owned?.status?.S !== "ready") return response(403, { error: "dataset_access_denied" });
     const registry = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { PK: { S: `DATASET#${id}` }, SK: { S: "META" } }, ConsistentRead: true }))).Item;
     if (!registry || registry.status?.S === "failed") return response(404, { error: "dataset_not_found" });
-    return response(200, await signedDataset(id));
+    return signedDatasetResponse(id);
   }
 
   if (route === "GET /api/me" && event.queryStringParameters?.admin === "users") {
