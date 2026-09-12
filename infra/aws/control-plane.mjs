@@ -55,22 +55,98 @@ function mapIdentity(profile, mapId, viewerRole) {
   };
 }
 
+function latestReadyDataset(records) {
+  return records
+    .filter(item => item.entityType?.S === "dataset" && item.status?.S === "ready")
+    .sort((a, b) => (b.updatedAt?.S ?? b.createdAt?.S ?? "").localeCompare(a.updatedAt?.S ?? a.createdAt?.S ?? ""))[0] ?? null;
+}
+
+async function mapRecordById(mapId) {
+  if (!/^[0-9a-f-]{36}$/i.test(mapId ?? "")) return null;
+  const found = await dynamo.send(new QueryCommand({ TableName: tableName, IndexName: "GSI1", KeyConditionExpression: "GSI1PK = :pk", ExpressionAttributeValues: { ":pk": { S: `MAP#${mapId}` } }, Limit: 1 }));
+  return found.Items?.[0] ?? null;
+}
+
+async function ensureMapForSubject(subject, profile = null) {
+  const ownerProfile = profile ?? await profileForSubject(subject);
+  if (!ownerProfile) return null;
+  let mapId = ownerProfile.mapId?.S;
+  if (!mapId) {
+    const created = randomUUID();
+    const updated = await dynamo.send(new UpdateItemCommand({
+      TableName: tableName,
+      Key: { PK: { S: `USER#${subject}` }, SK: { S: "PROFILE" } },
+      UpdateExpression: "SET mapId = if_not_exists(mapId, :mapId)",
+      ExpressionAttributeValues: { ":mapId": { S: created } },
+      ReturnValues: "ALL_NEW",
+    }));
+    mapId = updated.Attributes?.mapId?.S ?? created;
+    ownerProfile.mapId = { S: mapId };
+  }
+  const now = new Date().toISOString();
+  try {
+    await dynamo.send(new PutItemCommand({
+      TableName: tableName,
+      ConditionExpression: "attribute_not_exists(PK)",
+      Item: {
+        PK: { S: `USER#${subject}` }, SK: { S: "MAP#primary" }, entityType: { S: "map" }, mapId: { S: mapId }, ownerSubject: { S: subject },
+        viewCount: { N: "0" }, createdAt: { S: now }, updatedAt: { S: now }, GSI1PK: { S: `MAP#${mapId}` }, GSI1SK: { S: "MAP" },
+      },
+    }));
+  } catch (error) {
+    if (error?.name !== "ConditionalCheckFailedException") throw error;
+  }
+  return mapId;
+}
+
+async function publishedBySlug(slug) {
+  if (!/^[a-z0-9]{8}$/.test(slug ?? "")) return null;
+  const found = await dynamo.send(new QueryCommand({ TableName: tableName, IndexName: "GSI1", KeyConditionExpression: "GSI1PK = :pk", ExpressionAttributeValues: { ":pk": { S: `PUBLISHED#${slug}` } }, Limit: 1 }));
+  return found.Items?.[0] ?? null;
+}
+
+async function mapContext(reference) {
+  let ownerSubject = null;
+  let legacyShare = null;
+  let mapRecord = null;
+
+  if (/^[0-9a-f-]{36}$/i.test(reference ?? "")) {
+    mapRecord = await mapRecordById(reference);
+    ownerSubject = mapRecord?.ownerSubject?.S ?? mapRecord?.PK?.S?.slice(5) ?? null;
+    if (!ownerSubject) {
+      const registry = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { PK: { S: `DATASET#${reference}` }, SK: { S: "META" } }, ConsistentRead: true }))).Item;
+      ownerSubject = registry?.owner?.S ?? null;
+    }
+  } else if (/^[a-z0-9]{8}$/.test(reference ?? "")) {
+    legacyShare = await publishedBySlug(reference);
+    ownerSubject = legacyShare?.PK?.S?.slice(5) ?? null;
+  }
+
+  if (!ownerSubject) return null;
+  const profile = await profileForSubject(ownerSubject);
+  if (!profile) return null;
+  const mapId = await ensureMapForSubject(ownerSubject, profile);
+  const records = await userPartition(ownerSubject);
+  const share = legacyShare ?? records.find(item => item.SK?.S === "SHARE#primary") ?? null;
+  const dataset = latestReadyDataset(records);
+  const datasetId = dataset?.datasetId?.S ?? dataset?.SK?.S?.slice(8) ?? null;
+  mapRecord ??= records.find(item => item.SK?.S === "MAP#primary") ?? null;
+  return { mapId, ownerSubject, profile, records, share, datasetId, mapRecord };
+}
+
 async function recentMapView(item) {
   const profile = await profileForSubject(item.ownerSubject?.S);
+  const mapId = item.mapId?.S ?? profile?.mapId?.S ?? "";
   return {
-    ...mapIdentity(profile, item.mapId?.S ?? item.slug?.S ?? "", "viewer"),
-    url: item.url?.S ?? `/p/${item.slug?.S}`,
+    ...mapIdentity(profile, mapId, "viewer"),
+    url: mapId ? `/m/${mapId}` : item.url?.S ?? "",
     lastViewedAt: item.updatedAt?.S ?? item.createdAt?.S ?? "",
   };
 }
 
-function ownMap(records, profile) {
-  const shares = records.filter(item => item.entityType?.S === "share").sort((a, b) => (b.updatedAt?.S ?? "").localeCompare(a.updatedAt?.S ?? ""));
-  const datasets = records.filter(item => item.entityType?.S === "dataset" && item.status?.S === "ready").sort((a, b) => (b.updatedAt?.S ?? b.createdAt?.S ?? "").localeCompare(a.updatedAt?.S ?? a.createdAt?.S ?? ""));
-  const datasetId = datasets[0]?.datasetId?.S ?? datasets[0]?.SK?.S?.slice(8);
-  if (datasetId) return { ...mapIdentity(profile, datasetId, "owner"), url: `/m/${datasetId}` };
-  const share = shares[0];
-  return share?.slug?.S ? { ...mapIdentity(profile, share.datasetId?.S ?? `published:${share.slug.S}`, "owner"), url: `/p/${share.slug.S}` } : null;
+function ownMap(_records, profile) {
+  const mapId = profile?.mapId?.S;
+  return mapId ? { ...mapIdentity(profile, mapId, "owner"), url: `/m/${mapId}` } : null;
 }
 
 async function activeDatasetBuild(datasetId) {
@@ -110,16 +186,16 @@ async function profilesForStatus(status) {
 function adminUser(profile, records) {
   const uploads = records.filter(item => item.entityType?.S === "upload").sort((a, b) => (b.updatedAt?.S ?? b.createdAt?.S ?? "").localeCompare(a.updatedAt?.S ?? a.createdAt?.S ?? ""));
   const datasets = records.filter(item => item.entityType?.S === "dataset").sort((a, b) => (b.updatedAt?.S ?? b.createdAt?.S ?? "").localeCompare(a.updatedAt?.S ?? a.createdAt?.S ?? ""));
-  const shares = records.filter(item => item.entityType?.S === "share").sort((a, b) => (b.updatedAt?.S ?? "").localeCompare(a.updatedAt?.S ?? ""));
   const latestUpload = uploads[0];
   const dataset = datasets[0];
-  const share = shares[0];
+  const mapRecord = records.find(item => item.SK?.S === "MAP#primary");
+  const share = records.find(item => item.SK?.S === "SHARE#primary");
   const datasetId = dataset?.SK?.S?.startsWith("DATASET#") ? dataset.SK.S.slice(8) : null;
-  const publishedUrl = share?.slug?.S ? `/p/${share.slug.S}` : null;
-  const mapUrl = publishedUrl ?? (datasetId ? `/m/${datasetId}` : null);
+  const mapId = profile.mapId?.S ?? mapRecord?.mapId?.S ?? null;
+  const mapUrl = mapId ? `/m/${mapId}` : null;
   const access = profile.status?.S ?? "pending";
   const uploadStatus = latestUpload?.status?.S ?? null;
-  const phase = access !== "approved" ? `access:${access}` : share ? "published" : dataset ? "ready" : uploadStatus ?? "approved";
+  const phase = access !== "approved" ? `access:${access}` : dataset ? "ready" : uploadStatus ?? "approved";
   return {
     subject: profile.PK.S.slice(5),
     email: profile.email?.S ?? "",
@@ -143,15 +219,21 @@ function adminUser(profile, records) {
     datasets: datasets.length,
     datasetId,
     activityCount: datasets.reduce((total, item) => total + Number(item.activityCount?.N ?? 0), 0),
-    publishedUrl,
+    publishedUrl: null,
     mapUrl,
-    publishedViews: shares.reduce((total, item) => total + Number(item.viewCount?.N ?? 0), 0),
+    publishedViews: Number(mapRecord?.viewCount?.N ?? 0),
+    savedViews: share ? 1 : 0,
   };
 }
 
 async function listAdminUsers() {
   const profiles = (await Promise.all(["pending", "approved", "rejected"].map(profilesForStatus))).flat();
-  const users = await Promise.all(profiles.map(async profile => adminUser(profile, await userPartition(profile.PK.S.slice(5)))));
+  const users = await Promise.all(profiles.map(async profile => {
+    const subject = profile.PK.S.slice(5);
+    const mapId = await ensureMapForSubject(subject, profile);
+    if (mapId) profile.mapId = { S: mapId };
+    return adminUser(profile, await userPartition(subject));
+  }));
   users.sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
   return users;
 }
@@ -173,12 +255,6 @@ async function signedDataset(datasetId) {
     file.url = await getSignedUrl(s3, new GetObjectCommand({ Bucket: dataBucket, Key: `datasets/${datasetId}/${file.path}` }), { expiresIn: 21_600 });
   }));
   return { datasetId, manifest };
-}
-
-async function publishedBySlug(slug) {
-  if (!/^[a-z0-9]{8}$/.test(slug ?? "")) return null;
-  const found = await dynamo.send(new QueryCommand({ TableName: tableName, IndexName: "GSI1", KeyConditionExpression: "GSI1PK = :pk", ExpressionAttributeValues: { ":pk": { S: `PUBLISHED#${slug}` } }, Limit: 1 }));
-  return found.Items?.[0] ?? null;
 }
 
 async function queueUpload(uploadKey, upload, targetSubject, expectedStatus) {
@@ -228,22 +304,31 @@ const recompileStatuses = new Set(["failed", "ready", "completed"]);
 export async function handler(event) {
   const route = event.routeKey;
   if (route === "GET /api/published/{slug}") {
-    const slug = event.pathParameters?.slug;
-    if (!tableName) return response(404, { error: "published_view_not_found" });
-    const published = await publishedBySlug(slug);
-    if (!published) return response(404, { error: "published_view_not_found" });
-    await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: { PK: published.PK, SK: published.SK }, UpdateExpression: "ADD viewCount :one", ExpressionAttributeValues: { ":one": { N: "1" } } }));
-    const ownerSubject = published.PK.S.slice(5);
-    const identity = mapIdentity(await profileForSubject(ownerSubject), published.datasetId?.S ?? `published:${slug}`, "viewer");
-    return response(200, { slug, tabs: JSON.parse(published.tabsJson.S), active: published.activeTab.S, datasetId: published.datasetId?.S ?? null, updatedAt: published.updatedAt.S, identity });
+    const reference = event.pathParameters?.slug;
+    if (!tableName) return response(404, { error: "map_not_found" });
+    const context = await mapContext(reference);
+    if (!context) return response(404, { error: "map_not_found" });
+    if (context.mapRecord) await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: { PK: context.mapRecord.PK, SK: context.mapRecord.SK }, UpdateExpression: "ADD viewCount :one", ExpressionAttributeValues: { ":one": { N: "1" } } }));
+    const tabs = context.share?.tabsJson?.S ? JSON.parse(context.share.tabsJson.S) : [];
+    const active = context.share?.activeTab?.S ?? null;
+    const updatedAt = context.share?.updatedAt?.S ?? context.mapRecord?.updatedAt?.S ?? context.profile.updatedAt?.S ?? "";
+    return response(200, {
+      ...(context.share?.slug?.S ? { slug: context.share.slug.S } : {}),
+      mapId: context.mapId,
+      url: `/m/${context.mapId}`,
+      tabs,
+      active,
+      datasetId: context.datasetId,
+      updatedAt,
+      identity: mapIdentity(context.profile, context.mapId, "viewer"),
+    });
   }
 
   if (route === "GET /api/published/{slug}/dataset-access") {
-    if (!tableName || !dataBucket) return response(404, { error: "published_view_not_found" });
-    const published = await publishedBySlug(event.pathParameters?.slug);
-    const datasetId = published?.datasetId?.S;
-    if (!datasetId) return response(404, { error: "published_dataset_not_found" });
-    return response(200, await signedDataset(datasetId));
+    if (!tableName || !dataBucket) return response(404, { error: "map_not_found" });
+    const context = await mapContext(event.pathParameters?.slug);
+    if (!context?.datasetId) return response(404, { error: "map_dataset_not_found" });
+    return response(200, await signedDataset(context.datasetId));
   }
 
   const claims = event.requestContext?.authorizer?.jwt?.claims;
@@ -269,6 +354,7 @@ export async function handler(event) {
         Item: {
           ...key,
           entityType: { S: "user" },
+          mapId: { S: randomUUID() },
           status: { S: isBootstrapAdmin ? "approved" : "pending" },
           role: { S: isBootstrapAdmin ? "admin" : "user" },
           email: { S: verifiedEmail }, name: { S: verifiedName }, picture: { S: verifiedPicture },
@@ -297,19 +383,18 @@ export async function handler(event) {
   }
 
   const current = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: key, ConsistentRead: true }))).Item;
+  const currentMapId = await ensureMapForSubject(subject, current);
+  if (currentMapId) current.mapId = { S: currentMapId };
   const isAdmin = current?.role?.S === "admin" && current?.status?.S === "approved";
 
   if (route === "GET /api/datasets/{id}/access") {
     const id = event.pathParameters?.id;
-    if (!/^[0-9a-f-]{36}$/i.test(id ?? "")) return response(404, { error: "dataset_not_found" });
-    const owned = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { PK: key.PK, SK: { S: `DATASET#${id}` } }, ConsistentRead: true }))).Item;
-    if (!isAdmin && owned?.status?.S !== "ready") return response(403, { error: "dataset_access_denied" });
-    const registry = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { PK: { S: `DATASET#${id}` }, SK: { S: "META" } }, ConsistentRead: true }))).Item;
-    if (!registry || registry.status?.S === "failed") return response(404, { error: "dataset_not_found" });
-    const isOwner = owned?.status?.S === "ready";
-    const ownerSubject = registry.owner?.S ?? (isOwner ? subject : null);
-    const ownerProfile = ownerSubject === subject ? current : await profileForSubject(ownerSubject);
-    return response(200, { ...await signedDataset(id), identity: mapIdentity(ownerProfile, id, isOwner ? "owner" : "admin") });
+    if (!/^[0-9a-f-]{36}$/i.test(id ?? "")) return response(404, { error: "map_not_found" });
+    const context = await mapContext(id);
+    if (!context?.datasetId) return response(404, { error: "map_not_found" });
+    const isOwner = context.ownerSubject === subject;
+    if (!isOwner && !isAdmin) return response(403, { error: "map_access_denied" });
+    return response(200, { ...await signedDataset(context.datasetId), identity: mapIdentity(context.profile, context.mapId, isOwner ? "owner" : "admin") });
   }
 
   if (route === "GET /api/recent-maps") {
@@ -321,21 +406,18 @@ export async function handler(event) {
 
   if (route === "POST /api/recent-maps") {
     const body = JSON.parse(event.body ?? "{}");
-    const slug = String(body.slug ?? "");
-    if (!/^[a-z0-9]{8}$/.test(slug)) return response(400, { error: "invalid_recent_map" });
-    const published = await publishedBySlug(slug);
-    if (!published) return response(404, { error: "published_view_not_found" });
-    const ownerSubject = published.PK.S.slice(5);
-    if (ownerSubject === subject) return response(200, { saved: false });
+    const reference = typeof body.mapId === "string" && /^[0-9a-f-]{36}$/i.test(body.mapId) ? body.mapId : String(body.slug ?? "");
+    const context = await mapContext(reference);
+    if (!context) return response(404, { error: "map_not_found" });
+    if (context.ownerSubject === subject) return response(200, { saved: false });
     const now = new Date().toISOString();
-    const recentKey = { PK: key.PK, SK: { S: `RECENT#${slug}` } };
+    const recentKey = { PK: key.PK, SK: { S: `RECENT#${context.mapId}` } };
     await dynamo.send(new PutItemCommand({ TableName: tableName, Item: {
       ...recentKey,
       entityType: { S: "recentMap" },
-      slug: { S: slug },
-      mapId: { S: published.datasetId?.S ?? `published:${slug}` },
-      ownerSubject: { S: ownerSubject },
-      url: { S: `/p/${slug}` },
+      mapId: { S: context.mapId },
+      ownerSubject: { S: context.ownerSubject },
+      url: { S: `/m/${context.mapId}` },
       createdAt: { S: now },
       updatedAt: { S: now },
     } }));
@@ -366,6 +448,7 @@ export async function handler(event) {
       ExpressionAttributeNames: { "#status": "status", "#role": "role" },
       ExpressionAttributeValues: { ":status": { S: status }, ":user": { S: "user" }, ":gsi": { S: `USER_STATUS#${status}` }, ":now": { S: now } },
     }));
+    await ensureMapForSubject(target, targetProfile);
     return response(200, { subject: target, status });
   }
 
@@ -388,18 +471,21 @@ export async function handler(event) {
     if (current?.status?.S !== "approved") return response(403, { error: "approval_required" });
     const body = JSON.parse(event.body ?? "{}");
     const tabsJson = JSON.stringify(body.tabs ?? []);
-    if (!Array.isArray(body.tabs) || body.tabs.length < 1 || body.tabs.length > 50 || tabsJson.length > 100_000 || !body.tabs.every(tab => typeof tab?.id === "string" && typeof tab?.title === "string" && typeof tab?.sql === "string") || typeof body.active !== "string") return response(400, { error: "invalid_published_view" });
-    const publishedDatasetId = typeof body.datasetId === "string" && /^[0-9a-f-]{36}$/i.test(body.datasetId) ? body.datasetId : null;
-    if (publishedDatasetId) {
-      const owned = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { PK: key.PK, SK: { S: `DATASET#${publishedDatasetId}` } }, ConsistentRead: true }))).Item;
+    if (!Array.isArray(body.tabs) || body.tabs.length < 1 || body.tabs.length > 50 || tabsJson.length > 100_000 || !body.tabs.every(tab => typeof tab?.id === "string" && typeof tab?.title === "string" && typeof tab?.sql === "string") || typeof body.active !== "string") return response(400, { error: "invalid_saved_view" });
+    const requestedDatasetId = typeof body.datasetId === "string" && /^[0-9a-f-]{36}$/i.test(body.datasetId) ? body.datasetId : null;
+    if (requestedDatasetId) {
+      const owned = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { PK: key.PK, SK: { S: `DATASET#${requestedDatasetId}` } }, ConsistentRead: true }))).Item;
       if (!owned || owned.status?.S !== "ready") return response(403, { error: "dataset_access_denied" });
     }
     const shareKey = { PK: key.PK, SK: { S: "SHARE#primary" } };
     const prior = (await dynamo.send(new GetItemCommand({ TableName: tableName, Key: shareKey, ConsistentRead: true }))).Item;
     const slug = prior?.slug?.S ?? randomUUID().replaceAll("-", "").slice(0, 8);
     const now = new Date().toISOString();
-    await dynamo.send(new PutItemCommand({ TableName: tableName, Item: { ...shareKey, entityType: { S: "share" }, slug: { S: slug }, tabsJson: { S: tabsJson }, activeTab: { S: body.active }, ...(publishedDatasetId ? { datasetId: { S: publishedDatasetId } } : {}), viewCount: prior?.viewCount ?? { N: "0" }, createdAt: prior?.createdAt ?? { S: now }, updatedAt: { S: now }, GSI1PK: { S: `PUBLISHED#${slug}` }, GSI1SK: { S: "VIEW" } } }));
-    return response(200, { slug, url: `/p/${slug}` });
+    const records = await userPartition(subject);
+    const latest = latestReadyDataset(records);
+    const datasetId = latest?.datasetId?.S ?? latest?.SK?.S?.slice(8) ?? requestedDatasetId;
+    await dynamo.send(new PutItemCommand({ TableName: tableName, Item: { ...shareKey, entityType: { S: "share" }, slug: { S: slug }, mapId: { S: currentMapId }, tabsJson: { S: tabsJson }, activeTab: { S: body.active }, ...(datasetId ? { datasetId: { S: datasetId } } : {}), viewCount: prior?.viewCount ?? { N: "0" }, createdAt: prior?.createdAt ?? { S: now }, updatedAt: { S: now }, GSI1PK: { S: `PUBLISHED#${slug}` }, GSI1SK: { S: "VIEW" } } }));
+    return response(200, { slug, mapId: currentMapId, url: `/m/${currentMapId}` });
   }
 
   if (route === "DELETE /api/me") {
@@ -478,8 +564,12 @@ export async function handler(event) {
   const uploads = records.filter(item => item.entityType?.S === "upload").sort((a, b) => (b.updatedAt?.S ?? b.createdAt?.S ?? "").localeCompare(a.updatedAt?.S ?? a.createdAt?.S ?? ""));
   const latestUpload = uploads[0];
   const latestCompile = latestUpload ? await uploadView(latestUpload) : null;
+  const mapRecord = records.find(item => item.SK?.S === "MAP#primary");
+  const savedView = records.find(item => item.SK?.S === "SHARE#primary");
   return response(200, {
     subject,
+    mapId: currentMapId,
+    mapUrl: `/m/${currentMapId}`,
     email: current?.email?.S ?? verifiedEmail,
     name: current?.name?.S ?? verifiedName,
     picture: current?.picture?.S ?? verifiedPicture,
@@ -497,8 +587,8 @@ export async function handler(event) {
       activityCount: records.filter(item => item.entityType?.S === "dataset").reduce((total, item) => total + Number(item.activityCount?.N ?? 0), 0),
       curatedBytes: records.filter(item => item.entityType?.S === "dataset").reduce((total, item) => total + Number(item.byteSize?.N ?? 0), 0),
       datasetCount: records.filter(item => item.entityType?.S === "dataset").length,
-      publishedViews: records.filter(item => item.entityType?.S === "share").reduce((total, item) => total + Number(item.viewCount?.N ?? 0), 0),
-      publishedMaps: records.filter(item => item.entityType?.S === "share").length,
+      publishedViews: Number(mapRecord?.viewCount?.N ?? 0),
+      publishedMaps: savedView ? 1 : 0,
     },
   });
 }
