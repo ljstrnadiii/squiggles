@@ -1,7 +1,8 @@
 import { normalizeCamera } from "./camera";
 import type { Basemap, QueryTab } from "./contracts";
 
-const KEY = "activity-map.tabs.v1";
+const LEGACY_KEY = "activity-map.tabs.v1";
+const SCOPED_KEY = "activity-map.tabs.v2";
 export const ELECTRIC_BLUE = "#476bcc";
 const legacyDefaultColors = new Set(["#dcff4e", "#ff8a4c", "#315fd5", "#0000ff"]);
 const legacyBasemaps: Record<string, Basemap> = {
@@ -54,9 +55,25 @@ export function normalizeTab(tab: QueryTab & { style: QueryTab["style"] & { line
   };
 }
 
-export function loadTabs(): QueryTab[] {
+function storageKey(scope: string) {
+  return `${SCOPED_KEY}:${scope}`;
+}
+
+export function mapStorageScope(pathname = window.location.pathname, search = window.location.search) {
+  const mapId = /^\/m\/([0-9a-f-]{36})\/?$/i.exec(pathname)?.[1];
+  if (mapId) return `map:${mapId.toLowerCase()}`;
+  const legacyPublished = /^\/p\/([a-z0-9]{8})\/?$/.exec(pathname)?.[1];
+  if (legacyPublished) return `published:${legacyPublished}`;
+  const local = new URLSearchParams(search).get("dataset");
+  return local && /^[a-zA-Z0-9_-]+$/.test(local) ? `local:${local}` : "home";
+}
+
+export function loadTabs(scope = "home"): QueryTab[] {
   try {
-    const stored = JSON.parse(localStorage.getItem(KEY) ?? "[]") as Array<QueryTab & { style: QueryTab["style"] & { lineWidth?: number } }>;
+    const scoped = localStorage.getItem(storageKey(scope));
+    const legacy = scope === "home" ? localStorage.getItem(LEGACY_KEY) : null;
+    const stored = JSON.parse(scoped ?? legacy ?? "[]") as Array<QueryTab & { style: QueryTab["style"] & { lineWidth?: number } }>;
+    if (scope !== "home") return stored.length ? stored.map(normalizeTab) : [defaultTab];
     const tabs = stored.length ? stored.map(normalizeTab) : [defaultTab];
     return tabs.some(tab => tab.id === highRunsTab.id) ? tabs : [...tabs, highRunsTab];
   } catch {
@@ -64,6 +81,6 @@ export function loadTabs(): QueryTab[] {
   }
 }
 
-export function saveTabs(tabs: QueryTab[]) {
-  localStorage.setItem(KEY, JSON.stringify(tabs));
+export function saveTabs(tabs: QueryTab[], scope = "home") {
+  localStorage.setItem(storageKey(scope), JSON.stringify(tabs));
 }

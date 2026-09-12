@@ -51,6 +51,7 @@ vi.mock("./engine", () => ({
 
 afterEach(() => { cleanup(); localStorage.clear(); engineCalls.execute.mockReset(); engineCalls.getSummary.mockClear(); engineCalls.mapOptions.mockClear(); engineCalls.maps.length = 0; });
 import { App } from "./App";
+import { defaultTab } from "./storage";
 
 describe("App", () => {
   function openQueryMenu() { fireEvent.click(screen.getByRole("button", { name: "Open query menu" })); }
@@ -132,24 +133,53 @@ describe("App", () => {
 
   it("opens an unlisted hosted dataset from its share route", async () => {
     const datasetId = "31ea1577-b6f1-423a-8bda-ea7712345678";
-    localStorage.setItem("squiggles-auth-session", JSON.stringify({ accessToken: "access", idToken: "id" }));
+    const idToken = `x.${btoa(JSON.stringify({ email: "len@example.com", name: "Len" })).replaceAll("=", "")}.x`;
+    localStorage.setItem("squiggles-auth-session", JSON.stringify({ accessToken: "access", idToken }));
+    localStorage.setItem("activity-map.tabs.v1", JSON.stringify([{ ...defaultTab, id: "curated", title: "Len's curated map", style: { ...defaultTab.style, viewMode: "3d" } }]));
     const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url === "/runtime-config.json") {
         return new Response(JSON.stringify({ apiUrl: "https://api.example.test", cognitoDomain: "", cognitoClientId: "" }));
       }
       if (url === `https://api.example.test/api/datasets/${datasetId}/access`) {
-        return new Response(JSON.stringify({ datasetId, manifest: { schema_version: "1.6.0", activity_count: 1, rejection_count: 0, bbox: [-105, 39, -104, 40], shards: [] } }));
+        return new Response(JSON.stringify({ datasetId, manifest: { schema_version: "1.6.0", activity_count: 1, rejection_count: 0, bbox: [-105, 39, -104, 40], shards: [] }, identity: { mapId: datasetId, ownerDisplayName: "Len", viewerRole: "owner" } }));
       }
       return new Response("not found", { status: 404 });
     });
     window.history.replaceState({}, "", `/m/${datasetId}`);
     render(<App />);
     expect(await screen.findByRole("status", { name: "1 routes selected" })).toBeInTheDocument();
+    expect(engineCalls.maps[0].camera.center).toEqual([-104.5, 39.5]);
+    expect(engineCalls.maps[0].camera.pitch ?? 0).toBe(0);
     expect(fetcher).toHaveBeenCalledWith(`https://api.example.test/api/datasets/${datasetId}/access`, expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer access" }) }));
+    expect(screen.getByRole("button", { name: "Open map menu for My map" })).toBeInTheDocument();
+    openQueryMenu();
+    expect(screen.getByRole("button", { name: "All Activities" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Len's curated map" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close query menu" }));
     openLogoMenu();
     expect(screen.getByRole("button", { name: "Change dataset" })).toBeInTheDocument();
     expect(screen.queryByText(datasetId)).not.toBeInTheDocument();
+  });
+
+  it("shows the published map owner's identity without requiring login", async () => {
+    const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async input => {
+      const url = String(input);
+      if (url === "/runtime-config.json") return new Response(JSON.stringify({ apiUrl: "https://api.example.test", cognitoDomain: "", cognitoClientId: "" }));
+      if (url === "https://api.example.test/api/published/abcd1234") return new Response(JSON.stringify({
+        slug: "abcd1234", tabs: [defaultTab], active: defaultTab.id, datasetId: "dataset-1", updatedAt: "2026-09-12",
+        identity: { mapId: "dataset-1", ownerDisplayName: "Martha", ownerAvatarUrl: "https://example.test/martha.jpg", viewerRole: "viewer" },
+      }));
+      if (url === "https://api.example.test/api/published/abcd1234/dataset-access") return new Response(JSON.stringify({ datasetId: "dataset-1", manifest: { schema_version: "1.6.0", activity_count: 1, rejection_count: 0, bbox: [-105, 39, -104, 40], shards: [] } }));
+      return new Response("not found", { status: 404 });
+    });
+    window.history.replaceState({}, "", "/p/abcd1234");
+    render(<App />);
+    expect(await screen.findByRole("button", { name: "Open map menu for Martha" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open map menu for Martha" }));
+    expect(screen.getByRole("navigation", { name: "Map and account navigation" })).toHaveTextContent("Martha");
+    expect(screen.getByRole("button", { name: "Log in" })).toBeInTheDocument();
+    expect(fetcher).not.toHaveBeenCalledWith(expect.stringContaining("/api/recent-maps"), expect.anything());
   });
 
   it("opens a synthetic developer dataset and renders its summary", async () => {
@@ -230,7 +260,7 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Open query menu" })).toHaveTextContent("New Query");
     await waitFor(() => expect(new URL(window.location.href).searchParams.get("lng")).toBe("-106.25000"));
     expect(new URL(window.location.href).searchParams.get("zoom")).toBe("11.25");
-    const stored = JSON.parse(localStorage.getItem("activity-map.tabs.v1") ?? "[]") as { title: string; mapState: { longitude: number; latitude: number; zoom: number }; style: { basemap: string; viewMode: string } }[];
+    const stored = JSON.parse(localStorage.getItem("activity-map.tabs.v2:home") ?? "[]") as { title: string; mapState: { longitude: number; latitude: number; zoom: number }; style: { basemap: string; viewMode: string } }[];
     expect(stored.find(item => item.title === "New Query")).toMatchObject({ mapState: { longitude: -106.25, latitude: 39.5, zoom: 11.25 }, style: { basemap: "carto-dark", viewMode: "3d" } });
   });
 
@@ -251,7 +281,7 @@ describe("App", () => {
     finishQuery();
 
     await waitFor(() => {
-      const stored = JSON.parse(localStorage.getItem("activity-map.tabs.v1") ?? "[]") as Array<{ id: string; mapState: { longitude: number; latitude: number; zoom: number; pitch: number; bearing: number } }>;
+      const stored = JSON.parse(localStorage.getItem("activity-map.tabs.v2:local:synthetic") ?? "[]") as Array<{ id: string; mapState: { longitude: number; latitude: number; zoom: number; pitch: number; bearing: number } }>;
       expect(stored.find(item => item.id === "all")?.mapState).toEqual({ longitude: -110.5, latitude: 42.25, zoom: 9.75, pitch: 58, bearing: 17 });
     });
   });

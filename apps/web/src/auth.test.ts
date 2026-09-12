@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { authFetch, clearSession, deleteAccount, identityFromSession, loadSession } from "./auth";
+import { authFetch, clearSession, deleteAccount, finishLogin, identityFromSession, loadSession } from "./auth";
 
 describe("browser authentication", () => {
   beforeEach(() => { sessionStorage.clear(); localStorage.clear(); vi.restoreAllMocks(); });
@@ -27,5 +27,14 @@ describe("browser authentication", () => {
     expect(response.status).toBe(200);
     expect(session.accessToken).toBe("renewed");
     expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+  it("returns to the shared map after login", async () => {
+    sessionStorage.setItem("squiggles-auth-verifier", "verifier");
+    sessionStorage.setItem("squiggles-auth-state", "expected");
+    sessionStorage.setItem("squiggles-auth-return-to", "/p/abcd1234?tab=all");
+    window.history.replaceState({}, "", "/auth/callback?state=expected&code=code");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ access_token: "access", id_token: "id" }), { status: 200 }));
+    await finishLogin({ apiUrl: "", cognitoDomain: "https://login.example.com", cognitoClientId: "client" });
+    expect(`${window.location.pathname}${window.location.search}`).toBe("/p/abcd1234?tab=all");
   });
 });

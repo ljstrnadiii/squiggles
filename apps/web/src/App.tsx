@@ -16,7 +16,7 @@ import { buildBinaryHeatDataCooperative, colorForWeight, type CooperativeHeatRes
 import { QUERY_SCHEMA } from "./querySchema";
 import { lineWidthsForViewport, routeSegments, type RouteSegment } from "./routes";
 import { spatialLayers } from "./spatialLayers";
-import { defaultTab, ELECTRIC_BLUE, loadTabs, normalizeRouteColor, saveTabs } from "./storage";
+import { defaultTab, ELECTRIC_BLUE, loadTabs, mapStorageScope, normalizeRouteColor, saveTabs } from "./storage";
 import { loadTheme, saveTheme } from "./theme";
 import { distanceUnit, distanceValue, elevationUnit, elevationValue, loadUnits, saveUnits } from "./units";
 import { AccountPanel } from "./AccountPanel";
@@ -27,6 +27,7 @@ import { loadPublishedView, publishView } from "./publishing";
 import { loadSystemResolution, saveSystemResolution } from "./resolution";
 import { rasterStyles } from "./mapSources";
 import { recordRenderingDiagnostics } from "./diagnosticState";
+import { loadMapNavigation, rememberLocalMap, type MapIdentity, type MapNavigation } from "./mapIdentity";
 
 const blankStyle: maplibregl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
 const empty: SummaryStats = { activityCount: 0, distanceM: 0, elapsedSeconds: 0, movingSeconds: 0, elevationGainM: 0, elevationLossM: 0, minElevationM: null, maxElevationM: null, maxDistanceM: null, activeDays: 0, droppedJumpPoints: 0, droppedElevationPoints: 0, sportCounts: [], firstActivity: null, lastActivity: null };
@@ -100,12 +101,13 @@ function sameCamera(left: MapState, right: MapState) {
     && left.bearing === right.bearing;
 }
 
-function sharedDatasetId(pathname = window.location.pathname) {
-  const match = /^\/m\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/?$/i.exec(pathname);
-  return match?.[1];
+function sharedDatasetId() {
+  return undefined;
 }
 
 function publishedSlug(pathname = window.location.pathname) {
+  const canonical = /^\/m\/([0-9a-f-]{36})\/?$/i.exec(pathname)?.[1];
+  if (canonical) return canonical;
   return /^\/p\/([a-z0-9]{8})\/?$/.exec(pathname)?.[1];
 }
 
@@ -228,7 +230,7 @@ export function App() {
     const next = normalizeRenderSettings(settings);
     setRenderSettings(next); saveRenderSettings(next); setRenderReload(value => value + 1);
   }
-  const [tabs, setTabs] = useState(() => tabsWithUrlSettings(loadTabs()));
+  const [tabs, setTabs] = useState(() => tabsWithUrlSettings(loadTabs(mapStorageScope())));
   const [active, setActive] = useState(() => {
     const requested = new URLSearchParams(window.location.search).get("tab");
     return tabs.some(item => item.id === requested) ? requested! : tabs[0].id;
@@ -258,6 +260,9 @@ export function App() {
   const [logoMenuOpen, setLogoMenuOpen] = useState(false);
   const [accountView, setAccountView] = useState<"account" | "upload" | "login">("account");
   const [sessionIdentity, setSessionIdentity] = useState(() => identityFromSession(loadSession()));
+  const [mapIdentity, setMapIdentity] = useState<MapIdentity | null>(null);
+  const [mapNavigation, setMapNavigation] = useState<MapNavigation | null>(null);
+  const [routeVersion, setRouteVersion] = useState(0);
   const [tableLoading, setTableLoading] = useState(false);
   const [viewportScope, setViewportScope] = useState(false);
   const [scopedSummary, setScopedSummary] = useState(empty);
@@ -291,13 +296,23 @@ export function App() {
   const tabsRef = useRef(tabs);
   const activeRef = useRef(active);
   const terrainCameraRef = useRef(terrainCamera);
+  const storageScopeRef = useRef(mapStorageScope());
   viewRef.current = view;
   tabsRef.current = tabs;
   activeRef.current = active;
   terrainCameraRef.current = terrainCamera;
   const effectiveTheme = themeMode === "system" ? (systemDark ? "dark" : "light") : themeMode;
   const logoUrl = effectiveTheme === "dark" ? "/logo-dark.png" : "/logo-light.png";
-  const refreshIdentity = useCallback(() => setSessionIdentity(identityFromSession(loadSession())), []);
+  const refreshIdentity = useCallback((reloadRoute = false) => {
+    const identity = identityFromSession(loadSession());
+    setSessionIdentity(identity);
+    if (!identity.email && !publishedSlug()) setMapIdentity(null);
+    if (reloadRoute) {
+      autoOpened.current = false;
+      storageScopeRef.current = mapStorageScope();
+      setRouteVersion(version => version + 1);
+    }
+  }, []);
   const distance = (meters: number) => `${integer.format(distanceValue(meters, units))} ${distanceUnit(units)}`;
   const elevation = (meters: number) => `${integer.format(elevationValue(meters, units))} ${elevationUnit(units)}`;
 
@@ -305,6 +320,18 @@ export function App() {
     viewRef.current = next;
     setView(next);
   }
+
+  useEffect(() => {
+    const session = loadSession();
+    if (!sessionIdentity.email || !session) { setMapNavigation(null); return; }
+    let cancelled = false;
+    void loadRuntimeConfig().then(config => config && loadMapNavigation(config, session)).then(navigation => {
+      if (!navigation || cancelled) return;
+      setMapNavigation(navigation);
+      if (navigation.myMap?.url === window.location.pathname) setMapIdentity(navigation.myMap);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [sessionIdentity]);
 
   useEffect(() => {
     const element = mapElement.current;
@@ -369,7 +396,7 @@ export function App() {
         if (!stored || sameCamera(stored.mapState, view)) return previous;
         const updated = previous.map(item => item.id === active ? { ...item, mapState: { ...view } } : item);
         tabsRef.current = updated;
-        saveTabs(updated);
+        saveTabs(updated, storageScopeRef.current);
         return updated;
       });
     }, 180);
@@ -419,7 +446,7 @@ export function App() {
           : tabsRef.current.find(item => item.id === queryTab.id)?.mapState ?? mapState;
         const updated = previous.map(item => item.id === queryTab.id ? { ...current, mapState: { ...latestMapState } } : item);
         tabsRef.current = updated;
-        saveTabs(updated); return updated;
+        saveTabs(updated, storageScopeRef.current); return updated;
       });
     } catch (reason) {
       if (selection !== selectionRequest.current) return;
@@ -462,6 +489,7 @@ export function App() {
 
   useEffect(() => {
     if (autoOpened.current) return;
+    if (window.location.pathname === "/auth/callback") return;
     const published = publishedSlug();
     const shared = sharedDatasetId();
     const local = new URLSearchParams(window.location.search).get("dataset");
@@ -482,14 +510,33 @@ export function App() {
       void (async () => {
         try {
           const config = await loadRuntimeConfig();
-          if (!config) throw new Error("Published maps are unavailable.");
+          if (!config) throw new Error("Maps are unavailable.");
           const saved = await loadPublishedView(config, published);
+          const wasLegacyPublishedUrl = /^\/p\//.test(window.location.pathname);
+          if (wasLegacyPublishedUrl) {
+            window.history.replaceState({}, "", `${saved.url}${window.location.search}`);
+            storageScopeRef.current = mapStorageScope();
+          }
+          const adminPreview = new URLSearchParams(window.location.search).get("admin") === "1";
+          const session = loadSession();
+          let identity = saved.identity;
+          let source = saved.datasetId ? await loadPublishedDataset(config, published) : null;
+          if (adminPreview && session) {
+            const opened = await loadPrivateDataset(config, session, saved.mapId);
+            identity = opened.identity ?? identity;
+            source = opened.source;
+          }
+          setMapIdentity(identity);
+          if (!adminPreview) rememberLocalMap(saved.identity);
+          if (session) void loadMapNavigation(config, session).then(navigation => {
+            setMapNavigation(navigation);
+            if (navigation.myMap?.mapId === saved.mapId) setMapIdentity(navigation.myMap);
+          }).catch(() => undefined);
           const selected = saved.tabs.find(item => item.id === saved.active) ?? saved.tabs[0];
           tabsRef.current = saved.tabs; activeRef.current = selected.id; viewRef.current = selected.mapState;
           setTabs(saved.tabs); setActive(selected.id); setDraft(selected.sql); setView(selected.mapState);
-          if (saved.datasetId) {
-            await openSource(await loadPublishedDataset(config, published), selected.mapState, selected);
-          } else setStatus("Published map settings loaded");
+          if (source) await openSource(source, saved.tabs.length === 1 && saved.tabs[0].id === defaultTab.id && !initialUrlCamera.current ? undefined : selected.mapState, selected);
+          else setStatus("Map has no optimized archive yet");
         } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
       })();
       return;
@@ -500,12 +547,18 @@ export function App() {
           const config = await loadRuntimeConfig();
           const session = loadSession();
           if (!config || !session) throw new Error("Sign in to open this private map.");
-          await openSource(await loadPrivateDataset(config, session, shared), initialUrlCamera.current ? view : undefined);
+          const opened = await loadPrivateDataset(config, session, shared);
+          const scopedTabs = tabsWithUrlSettings(loadTabs(storageScopeRef.current));
+          const selected = scopedTabs[0];
+          tabsRef.current = scopedTabs; activeRef.current = selected.id; viewRef.current = selected.mapState;
+          setTabs(scopedTabs); setActive(selected.id); setDraft(selected.sql); setView(selected.mapState);
+          setMapIdentity(opened.identity ?? null);
+          await openSource(opened.source, initialUrlCamera.current ? selected.mapState : undefined, selected);
         } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
       })();
     } else void openSource({ kind: "url", baseUrl: `/local-data/${local!}`, name: local! }, initialUrlCamera.current ? view : undefined);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [routeVersion]);
 
   useEffect(() => {
     const request = ++viewportRequest.current;
@@ -559,7 +612,7 @@ export function App() {
       const updated = tabsRef.current.map(item => item.id === activeRef.current ? { ...item, mapState: { ...viewRef.current } } : item);
       const destination = updated.find(item => item.id === next.id) ?? next;
       tabsRef.current = updated; activeRef.current = destination.id; viewRef.current = destination.mapState; terrainCameraRef.current = null;
-      setTabs(updated); saveTabs(updated);
+      setTabs(updated); saveTabs(updated, storageScopeRef.current);
       setActive(destination.id); setDraft(destination.sql); setView(destination.mapState); setRenderedView(destination.mapState); setTerrainCamera(null); setToolbarOpen(openQuery);
       next = destination;
     }
@@ -568,23 +621,23 @@ export function App() {
   }
   function add() {
     const next = { ...defaultTab, mapState: { ...view }, style: { ...tab.style }, id: crypto.randomUUID(), title: "New Query" };
-    const updated = [...tabs, next]; tabsRef.current = updated; setTabs(updated); saveTabs(updated); choose(next, true);
+    const updated = [...tabs, next]; tabsRef.current = updated; setTabs(updated); saveTabs(updated, storageScopeRef.current); choose(next, true);
   }
   function duplicate() {
     const next = { ...tab, style: { ...tab.style }, spatialFilter: tab.spatialFilter ? { ...tab.spatialFilter, polygon: [...tab.spatialFilter.polygon] } : undefined, id: crypto.randomUUID(), title: `${tab.title} copy`, sql: draft };
-    const updated = [...tabs, next]; tabsRef.current = updated; setTabs(updated); saveTabs(updated); choose(next, true);
+    const updated = [...tabs, next]; tabsRef.current = updated; setTabs(updated); saveTabs(updated, storageScopeRef.current); choose(next, true);
   }
   function remove() {
     if (tabs.length === 1) return;
-    const updated = tabs.filter(item => item.id !== tab.id); tabsRef.current = updated; setTabs(updated); saveTabs(updated); choose(updated[0]);
+    const updated = tabs.filter(item => item.id !== tab.id); tabsRef.current = updated; setTabs(updated); saveTabs(updated, storageScopeRef.current); choose(updated[0]);
   }
-  function rename(title: string) { const updated = tabs.map(item => item.id === tab.id ? { ...item, title } : item); tabsRef.current = updated; setTabs(updated); saveTabs(updated); }
+  function rename(title: string) { const updated = tabs.map(item => item.id === tab.id ? { ...item, title } : item); tabsRef.current = updated; setTabs(updated); saveTabs(updated, storageScopeRef.current); }
   function changeStyle(style: Partial<QueryTab["style"]>, requestedView?: MapState) {
     const nextView = requestedView ?? (style.viewMode === "3d" && tab.style.viewMode !== "3d" && view.pitch === 0 ? { ...view, pitch: 60 } : view);
     const nextTab = { ...tab, mapState: nextView, style: { ...tab.style, ...style } };
     if (nextView !== view) updateView(nextView);
     const updated = tabs.map(item => item.id === tab.id ? nextTab : item);
-    tabsRef.current = updated; setTabs(updated); saveTabs(updated);
+    tabsRef.current = updated; setTabs(updated); saveTabs(updated, storageScopeRef.current);
     if (style.viewMode !== undefined && style.viewMode !== tab.style.viewMode) { terrainCameraRef.current = null; setTerrainCamera(null); setMapInteracting(false); replaceUrlSettings(nextTab, nextView, units); }
     if (style.cleanEnabled !== undefined && style.cleanEnabled !== tab.style.cleanEnabled && ready.current) void run(nextTab, view, tab.sql);
   }
@@ -595,7 +648,7 @@ export function App() {
   function saveSpatialFilter(spatialFilter: QueryTab["spatialFilter"], rerun: boolean) {
     const nextTab = { ...tab, spatialFilter };
     const updated = tabs.map(item => item.id === tab.id ? nextTab : item);
-    tabsRef.current = updated; setTabs(updated); saveTabs(updated);
+    tabsRef.current = updated; setTabs(updated); saveTabs(updated, storageScopeRef.current);
     if (rerun && ready.current) void run(nextTab, view, tab.sql);
   }
   function changeSpatialPredicate(predicate: SpatialPredicate) {
@@ -659,12 +712,11 @@ export function App() {
     if (!session) { setAccountView("login"); setAccountOpen(true); return; }
     try {
       const config = await loadRuntimeConfig();
-      if (!config) throw new Error("Publishing is unavailable.");
+      if (!config) throw new Error("Saving map views is unavailable.");
       const currentTabs = tabs.map(item => item.id === tab.id ? { ...item, mapState: view, sql: draft } : item);
       const datasetId = datasetName && /^[0-9a-f-]{36}$/i.test(datasetName) ? datasetName : null;
-      const published = await publishView(config, session, currentTabs, tab.id, datasetId);
-      await navigator.clipboard.writeText(`${window.location.origin}${published.url}`);
-      setStatus("Published link copied"); setLinkCopied(true); window.setTimeout(() => setLinkCopied(false), 1500);
+      await publishView(config, session, currentTabs, tab.id, datasetId);
+      setStatus("Map view saved");
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); refreshIdentity(); }
   }
 
@@ -777,13 +829,20 @@ export function App() {
     ...(profileHover && !spatialDrawing ? [new ScatterplotLayer<ElevationSample>({ id: "profile-position", data: [profileHover], getPosition: item => item.position, getFillColor: [71, 107, 204, 255], getLineColor: [255, 255, 255, 255], getRadius: 8, radiusUnits: "pixels", stroked: true, lineWidthMinPixels: 3 })] : []),
   ], [engine, hover, hoverPathData, isolateSelected, lineWidths, openActivity, overviewBatches, overviewPathData, pickingPathData, profileHover, routeBatches, selected, selectedSegments, spatialDraft, spatialDrawing, tab.spatialFilter, tab.style.color, tab.style.heatEnabled]);
   const terrainHighlightActivityId = hover?.item.activityId ?? selected?.activityId;
+  const currentIdentity = mapIdentity ?? (sessionIdentity.email ? {
+    mapId: "account",
+    ownerDisplayName: sessionIdentity.name || sessionIdentity.email,
+    ...(sessionIdentity.picture ? { ownerAvatarUrl: sessionIdentity.picture } : {}),
+    viewerRole: "owner" as const,
+  } : null);
+  const currentMapLabel = currentIdentity?.viewerRole === "owner" ? "My map" : currentIdentity?.ownerDisplayName;
 
   return <main className={`app ${systemSettingsOpen ? "with-side-panel" : ""}`} onKeyDown={event => { if (spatialDrawing && event.key === "Escape") { setSpatialDrawing(false); setSpatialDraft([]); return; } if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void run(); }}>
     <header className="topbar">
       <div className="brand"><button className={`brand-button ${logoMenuOpen ? "active" : ""}`} aria-label="Open Squiggles menu" data-tooltip="Squiggles menu" aria-expanded={logoMenuOpen} onClick={() => { setLogoMenuOpen(open => !open); setMenuOpen(false); setAccountMenuOpen(false); }}><img src={logoUrl} alt="Squiggles" /></button></div>
       <button className="mobile-query-title" aria-label={menuOpen ? "Close query menu" : "Open query menu"} aria-expanded={menuOpen} onClick={() => { setMenuOpen(open => !open); setLogoMenuOpen(false); setAccountMenuOpen(false); setSystemSettingsOpen(false); }}>{tab.title}</button>
       <div className={`status ${busy ? "working" : ""}`} role="status" aria-label={status}><span /></div>
-      {sessionIdentity.email ? <button className="avatar-button" aria-label="Open account menu" aria-expanded={accountMenuOpen} onClick={() => { setAccountMenuOpen(open => !open); setMenuOpen(false); setLogoMenuOpen(false); }}>{sessionIdentity.picture ? <img src={sessionIdentity.picture} alt="" referrerPolicy="no-referrer" /> : <span>{(sessionIdentity.name || sessionIdentity.email).slice(0, 1).toUpperCase()}</span>}</button> : <button className="login-button" onClick={() => { setAccountView("login"); setAccountOpen(true); setLogoMenuOpen(false); setMenuOpen(false); }}>Log in</button>}
+      {currentIdentity ? <button className="map-identity-button" aria-label={`Open map menu for ${currentMapLabel}`} aria-expanded={accountMenuOpen} onClick={() => { setAccountMenuOpen(open => !open); setMenuOpen(false); setLogoMenuOpen(false); }}><span className="map-owner-avatar">{currentIdentity.ownerAvatarUrl ? <img src={currentIdentity.ownerAvatarUrl} alt="" referrerPolicy="no-referrer" /> : <span>{currentIdentity.ownerDisplayName.slice(0, 1).toUpperCase()}</span>}</span><strong>{currentMapLabel}</strong>{currentIdentity.viewerRole === "admin" && <small>Admin preview</small>}<span aria-hidden="true">▾</span></button> : <button className="login-button" onClick={() => { setAccountView("login"); setAccountOpen(true); setLogoMenuOpen(false); setMenuOpen(false); }}>Log in</button>}
     </header>
 
     {logoMenuOpen && <nav className="logo-menu utility-panel" aria-label="Squiggles navigation"><button onClick={() => { setAboutOpen(true); setLogoMenuOpen(false); setStatsOpen(false); setTableOpen(false); setToolbarOpen(false); }}>About</button><button disabled={busy} onClick={() => { void openDirectory(); setLogoMenuOpen(false); }}>{datasetName ? "Change dataset" : "Open dataset"}</button><button onClick={() => { setSchemaOpen(true); setLogoMenuOpen(false); }}>AI Skills</button><button onClick={() => { openSystemSettings(); setLogoMenuOpen(false); }}>System settings</button></nav>}
@@ -793,7 +852,14 @@ export function App() {
       <section><button onClick={() => { choose(tab, true); setMenuOpen(false); }}>Query settings</button><button disabled={!selectionReady.current} onClick={() => { void toggleStats(); setMenuOpen(false); }}>Statistics</button><button disabled={!selectionReady.current || tableLoading} onClick={() => { void toggleTable(); setMenuOpen(false); }}>Table</button></section>
     </nav>}
 
-    {accountMenuOpen && <nav className="account-menu utility-panel" aria-label="Account navigation"><button onClick={() => { setAccountView("account"); setAccountOpen(true); setAccountMenuOpen(false); }}>Account</button><button onClick={() => { setAccountView("upload"); setAccountOpen(true); setAccountMenuOpen(false); }}>Upload Archive</button><button onClick={() => { void publishTabs(); setAccountMenuOpen(false); }}>Publish link</button><button onClick={() => { clearSession(); refreshIdentity(); setAccountMenuOpen(false); }}>Log out</button></nav>}
+    {accountMenuOpen && <nav className="account-menu utility-panel" aria-label="Map and account navigation">
+      <div className="current-map-heading"><span>{currentMapLabel}</span>{currentIdentity?.viewerRole === "admin" && <small>Admin preview</small>}</div>
+      {sessionIdentity.email ? <>
+        {mapNavigation?.myMap && mapNavigation.myMap.url !== window.location.pathname && <a className="map-menu-link" href={mapNavigation.myMap.url}>My map</a>}
+        {mapNavigation?.recentMaps.length ? <section className="recent-maps"><span className="eyebrow">RECENT MAPS</span>{mapNavigation.recentMaps.filter(item => item.url !== window.location.pathname).map(item => <a key={item.url} href={item.url}><span className="recent-map-avatar">{item.ownerAvatarUrl ? <img src={item.ownerAvatarUrl} alt="" referrerPolicy="no-referrer" /> : item.ownerDisplayName.slice(0, 1).toUpperCase()}</span><span>{item.ownerDisplayName}</span></a>)}</section> : null}
+        <div className="account-menu-actions"><button onClick={() => { setAccountView("account"); setAccountOpen(true); setAccountMenuOpen(false); }}>Account</button><button onClick={() => { setAccountView("upload"); setAccountOpen(true); setAccountMenuOpen(false); }}>Upload Archive</button>{currentIdentity?.viewerRole === "owner" && <button onClick={() => { void publishTabs(); setAccountMenuOpen(false); }}>Save view</button>}<button onClick={() => { clearSession(); setMapNavigation(null); refreshIdentity(); setAccountMenuOpen(false); }}>Log out</button></div>
+      </> : <button onClick={() => { setAccountView("login"); setAccountOpen(true); setAccountMenuOpen(false); }}>Log in</button>}
+    </nav>}
 
     {systemSettingsOpen && <section className="system-settings utility-panel" aria-label="System settings"><header><div><span className="eyebrow">SYSTEM</span><strong>Appearance and performance</strong></div><button aria-label="Close system settings" onClick={() => setSystemSettingsOpen(false)}>×</button></header><div><label>Theme</label><div className="theme-control" role="group" aria-label="Theme"><button aria-label="Use light theme" aria-pressed={themeMode === "light"} title="Light theme" onClick={() => changeTheme("light")}>☀︎</button><button aria-label="Use system theme" aria-pressed={themeMode === "system"} title="Follow system theme" onClick={() => changeTheme("system")}>◐</button><button aria-label="Use dark theme" aria-pressed={themeMode === "dark"} title="Dark theme" onClick={() => changeTheme("dark")}>☾</button></div></div><div><label>Distance and elevation</label><div className="unit-control" role="group" aria-label="Units"><button aria-label="Use imperial units" aria-pressed={units === "imperial"} title="Show miles and feet" onClick={() => changeUnits("imperial")}>mi</button><button aria-label="Use metric units" aria-pressed={units === "metric"} title="Show kilometres and metres" onClick={() => changeUnits("metric")}>km</button></div></div><div><label>Map resolution</label><div className="resolution-control" role="group" aria-label="Map resolution"><button aria-pressed={systemResolution === "low"} onClick={() => changeSystemResolution("low")}>Low</button><button aria-pressed={systemResolution === "medium"} onClick={() => changeSystemResolution("medium")}>Medium</button><button aria-pressed={systemResolution === "high"} onClick={() => changeSystemResolution("high")}>High</button></div></div><RenderSettingsControls settings={renderSettings} onChange={changeRenderSettings} /></section>}
     {accountOpen && <AccountPanel view={accountView} onClose={() => setAccountOpen(false)} onIdentityChange={refreshIdentity} />}

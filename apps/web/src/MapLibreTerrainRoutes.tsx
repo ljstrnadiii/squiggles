@@ -6,7 +6,7 @@ import * as maplibregl from "maplibre-gl";
 
 import type {Basemap, BinaryRouteBatch, MapState, RouteMetadata, ViewportBounds, ViewportSize} from "./contracts";
 import {rasterStyles, terrainSource} from "./mapSources";
-import {loadTabs} from "./storage";
+import {loadTabs, mapStorageScope} from "./storage";
 
 const RTT_SIZE = 512;
 const PICK_GRID_SCALE = 2 ** 15;
@@ -39,7 +39,7 @@ function mercator(lng: number, rawLat: number): [number, number] {
 }
 
 function configuredRouteColor(): Uint8Array {
-  const tabs = loadTabs();
+  const tabs = loadTabs(mapStorageScope());
   const requested = new URLSearchParams(window.location.search).get("tab");
   const value = (tabs.find(tab => tab.id === requested) ?? tabs[0])?.style.color ?? "#476bcc";
   const match = /^#([0-9a-f]{6})$/i.exec(value);

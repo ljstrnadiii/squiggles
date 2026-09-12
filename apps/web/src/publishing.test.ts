@@ -4,15 +4,16 @@ import { loadPublishedView, publishView } from "./publishing";
 import { clearRenderPlanHints, recordRenderPlan } from "./renderPlanHints";
 import { defaultTab } from "./storage";
 
-describe("published maps", () => {
+describe("saved map views", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     clearRenderPlanHints();
   });
 
   it("persists tabs without system settings", async () => {
+    const mapId = "31ea1577-b6f1-423a-8bda-ea7712345678";
     const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ slug: "abcd1234", url: "/p/abcd1234" }), {
+      new Response(JSON.stringify({ mapId, slug: "abcd1234", url: `/m/${mapId}` }), {
         status: 200,
       }),
     );
@@ -29,7 +30,7 @@ describe("published maps", () => {
     expect(String(request.body)).not.toContain("theme");
     expect(String(request.body)).not.toContain("units");
     expect(JSON.parse(String(request.body)).tabs[0].mapState).toEqual(terrainTab.mapState);
-    expect(result.url).toBe("/p/abcd1234");
+    expect(result.url).toBe(`/m/${mapId}`);
   });
 
   it("persists low medium and high render plans with their source viewport", async () => {
@@ -40,8 +41,9 @@ describe("published maps", () => {
       high: { lod: 5 as const, vertexEstimate: 1_600_000 },
     };
     recordRenderPlan(defaultTab.id, { plans, bounds });
+    const mapId = "31ea1577-b6f1-423a-8bda-ea7712345678";
     const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ slug: "abcd1234", url: "/p/abcd1234" }), {
+      new Response(JSON.stringify({ mapId, slug: "abcd1234", url: `/m/${mapId}` }), {
         status: 200,
       }),
     );
@@ -59,7 +61,8 @@ describe("published maps", () => {
     });
   });
 
-  it("loads a short published view", async () => {
+  it("loads a legacy published alias as its canonical map", async () => {
+    const mapId = "31ea1577-b6f1-423a-8bda-ea7712345678";
     const dirty = {
       ...defaultTab,
       mapState: {
@@ -77,10 +80,13 @@ describe("published maps", () => {
       new Response(
         JSON.stringify({
           slug: "abcd1234",
+          mapId,
+          url: `/m/${mapId}`,
           tabs: [dirty],
           active: "all",
           datasetId: null,
           updatedAt: "2026-08-24",
+          identity: { mapId, ownerDisplayName: "Martha", viewerRole: "viewer" },
         }),
         { status: 200 },
       ),
@@ -89,6 +95,8 @@ describe("published maps", () => {
       { apiUrl: "https://api.example.com", cognitoDomain: "", cognitoClientId: "" },
       "abcd1234",
     );
+    expect(published.mapId).toBe(mapId);
+    expect(published.url).toBe(`/m/${mapId}`);
     expect(published.active).toBe("all");
     expect(published.tabs[0].mapState).toEqual({ ...defaultTab.mapState, pitch: 47, bearing: -31 });
   });

@@ -36,7 +36,7 @@ describe("dataset access", () => {
         headers: expect.objectContaining({ authorization: "Bearer access" }),
       }),
     );
-    expect(source).toEqual({ kind: "url", baseUrl: "", name: "dataset-1", manifest });
+    expect(source).toEqual({ source: { kind: "url", baseUrl: "", name: "dataset-1", manifest } });
   });
 
   it("opens published datasets through the public published access endpoint", async () => {
