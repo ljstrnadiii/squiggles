@@ -1408,6 +1408,7 @@ button:disabled {
   from { transform: translateY(24px); opacity: 0; }
 }
 .account-panel p { margin: 0; line-height: 1.5; color: var(--muted); }
+.account-panel { width: min(520px, 52vw); }
 .account-panel .account-primary { width: 100%; font-weight: 700; }
 .account-panel .account-error { color: #d95c5c; }
 .approval-status { display: flex; align-items: center; gap: .55rem; font-weight: 700; text-transform: capitalize; }
