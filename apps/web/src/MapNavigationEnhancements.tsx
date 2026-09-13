@@ -270,12 +270,30 @@ export function MapNavigationEnhancements() {
     await navigator.share({ title: `${ownerName} · Squiggles`, url: canonicalShareUrl });
   };
 
+  const loginFromMenu = () => {
+    setSettingsOpen(false);
+    void login();
+  };
+
   const menu = <>
-    {navigation?.myMap && <a href={navigation.myMap.url}><Icon name="map"/><span>My map</span></a>}
-    <button onClick={() => { setFavoritesOpen(true); setSettingsOpen(false); setQuery(""); }}><Icon name="star"/><span>Favorites</span></button>
-    <button onClick={() => { setSettingsOpen(false); runNativeAccountAction(["Account"]); }}><Icon name="user"/><span>Account</span></button>
-    <button onClick={() => { setSettingsOpen(false); runNativeAccountAction(["Upload Archive"]); }}><Icon name="upload"/><span>Upload</span></button>
-    <button onClick={() => { clearSession(); window.location.assign("/"); }}><Icon name="logout"/><span>Logout</span></button>
+    {navigation?.myMap
+      ? <a href={navigation.myMap.url}><Icon name="map"/><span>My map</span></a>
+      : !session && <button onClick={loginFromMenu}><Icon name="map"/><span>My map</span></button>}
+    <button onClick={() => {
+      if (!session) { loginFromMenu(); return; }
+      setFavoritesOpen(true); setSettingsOpen(false); setQuery("");
+    }}><Icon name="star"/><span>Favorites</span></button>
+    <button onClick={() => {
+      if (!session) { loginFromMenu(); return; }
+      setSettingsOpen(false); runNativeAccountAction(["Account"]);
+    }}><Icon name="user"/><span>Account</span></button>
+    <button onClick={() => {
+      if (!session) { loginFromMenu(); return; }
+      setSettingsOpen(false); runNativeAccountAction(["Upload Archive"]);
+    }}><Icon name="upload"/><span>Upload</span></button>
+    {session
+      ? <button onClick={() => { clearSession(); window.location.assign("/"); }}><Icon name="logout"/><span>Logout</span></button>
+      : <button onClick={loginFromMenu}><Icon name="user"/><span>Log in</span></button>}
   </>;
 
   const saveExplanation = saving
@@ -297,9 +315,7 @@ export function MapNavigationEnhancements() {
         <button className={`map-owner-icon map-save-icon ${saveState}`} aria-label={saveExplanation} title={saveExplanation} disabled={saving} onClick={() => void saveMap()}><Icon name="save"/></button>
         <button className="map-owner-icon" aria-label="Share map" title="Share this map" onClick={() => { setShareOpen(true); setSettingsOpen(false); setContextOpen(false); }}><Icon name="share"/></button>
       </div>}
-      {session
-        ? <button className={`app-settings-trigger ${settingsOpen ? "active" : ""}`} aria-label="Open account menu" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); setContextOpen(false); }}><span aria-hidden="true">⋮</span></button>
-        : <button className="map-login-trigger" onClick={() => void login()}>Log in</button>}
+      <button className={`app-settings-trigger ${settingsOpen ? "active" : ""}`} aria-label="Open account menu" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); setContextOpen(false); }}><span aria-hidden="true">⋮</span></button>
     </>, topbar)}
 
     {contextOpen && mapId && <div className="map-context-popover" role="dialog" aria-label="Map owner and views">
