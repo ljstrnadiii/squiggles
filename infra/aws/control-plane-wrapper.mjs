@@ -6,7 +6,7 @@ import { sendLifecycleEmail } from "./lifecycle-email.mjs";
 
 const dynamo = new DynamoDBClient({});
 const tableName = process.env.METADATA_TABLE_NAME;
-const publicMapPattern = /^[a-z0-9]{10}$/;
+const publicMapPattern = /^[a-z0-9]{8}$/;
 const internalMapPattern = /^[0-9a-f-]{36}$/i;
 
 function profileKey(subject) {
@@ -66,7 +66,7 @@ async function ensurePublicMapId(subject, suppliedProfile = null) {
   }
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const publicMapId = randomBytes(5).toString("hex");
+    const publicMapId = randomBytes(4).toString("hex");
     const now = new Date().toISOString();
     try {
       await dynamo.send(new PutItemCommand({
@@ -150,7 +150,7 @@ async function updateFavorite(event, subject) {
     mapId: { S: context.mapId },
     publicMapId: { S: context.publicMapId },
     ownerSubject: { S: context.ownerSubject },
-    url: { S: `/m/${context.publicMapId}` },
+    url: { S: `/p/${context.publicMapId}` },
     createdAt: { S: now },
     updatedAt: { S: now },
   } }));
@@ -172,7 +172,7 @@ async function expandedFavorites(subject, baseResult) {
     if (!publicMapId) return null;
     return {
       ...mapIdentity(ownerProfile, publicMapId),
-      url: `/m/${publicMapId}`,
+      url: `/p/${publicMapId}`,
       lastViewedAt: item.updatedAt?.S ?? item.createdAt?.S ?? "",
     };
   }))).filter(Boolean);
@@ -180,7 +180,7 @@ async function expandedFavorites(subject, baseResult) {
   return {
     ...baseResult,
     body: JSON.stringify({
-      myMap: publicMapId ? { ...mapIdentity(profile, publicMapId, "owner"), url: `/m/${publicMapId}` } : null,
+      myMap: publicMapId ? { ...mapIdentity(profile, publicMapId, "owner"), url: `/p/${publicMapId}` } : null,
       // Historical JSON key is retained as a wire-compatibility detail; the client presents these as Favorites.
       recentMaps: favoriteMaps,
     }),
@@ -247,8 +247,8 @@ function rewriteMapBody(result, publicMapId) {
   try {
     const body = JSON.parse(result.body);
     if (body.mapId !== undefined) body.mapId = publicMapId;
-    if (body.mapUrl !== undefined) body.mapUrl = `/m/${publicMapId}`;
-    if (body.url !== undefined) body.url = `/m/${publicMapId}`;
+    if (body.mapUrl !== undefined) body.mapUrl = `/p/${publicMapId}`;
+    if (body.url !== undefined) body.url = `/p/${publicMapId}`;
     if (body.identity?.mapId !== undefined) body.identity.mapId = publicMapId;
     return { ...result, body: JSON.stringify(body) };
   } catch {
@@ -265,7 +265,7 @@ async function rewriteAdminUsers(result) {
       if (!user?.subject) return user;
       const profile = await getProfile(user.subject);
       const publicMapId = await ensurePublicMapId(user.subject, profile);
-      return publicMapId ? { ...user, mapUrl: `/m/${publicMapId}` } : user;
+      return publicMapId ? { ...user, mapUrl: `/p/${publicMapId}` } : user;
     }));
     return { ...result, body: JSON.stringify(body) };
   } catch {
