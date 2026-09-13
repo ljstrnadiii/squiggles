@@ -5,9 +5,10 @@ import { clearSession, identityFromSession, loadRuntimeConfig, loadSession } fro
 import type { QueryTab } from "./contracts";
 import { likeMap, loadMapNavigation, unlikeMap, type MapNavigation } from "./mapIdentity";
 import { loadPublishedView } from "./publishing";
-import { loadTabs, mapStorageScope } from "./storage";
+import { loadTabs, mapStorageScope, saveTabs } from "./storage";
 
 type IconName = "map" | "star" | "user" | "upload" | "save" | "share" | "logout" | "heart" | "edit";
+type SaveState = "saved" | "view-dirty" | "settings-dirty";
 
 function Icon({ name }: { name: IconName }) {
   const common = { width: 20, height: 20, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
@@ -36,6 +37,27 @@ function currentMapId() {
 
 function mapDefinitionSignature(tabs: QueryTab[]) {
   return JSON.stringify(tabs.map(tab => ({ id: tab.id, title: tab.title, sql: tab.sql, style: tab.style, spatialFilter: tab.spatialFilter })));
+}
+
+function rounded(value: number | undefined, digits: number) {
+  return Number.isFinite(value) ? Number(value!.toFixed(digits)) : null;
+}
+
+function mapViewSignature(tabs: QueryTab[]) {
+  return JSON.stringify(tabs.map(tab => ({
+    id: tab.id,
+    mapState: tab.mapState ? {
+      longitude: rounded(tab.mapState.longitude, 5),
+      latitude: rounded(tab.mapState.latitude, 5),
+      zoom: rounded(tab.mapState.zoom, 4),
+      pitch: rounded(tab.mapState.pitch, 2),
+      bearing: rounded(tab.mapState.bearing, 2),
+    } : null,
+  })));
+}
+
+function mapPersistedSignature(tabs: QueryTab[]) {
+  return JSON.stringify({ definition: mapDefinitionSignature(tabs), view: mapViewSignature(tabs) });
 }
 
 function Avatar({ name, url, className = "maps-dialog-avatar" }: { name: string; url?: string; className?: string }) {
@@ -101,8 +123,10 @@ export function MapNavigationEnhancements() {
   const [copied, setCopied] = useState(false);
   const [domVersion, setDomVersion] = useState(0);
   const [pendingLike, setPendingLike] = useState(false);
-  const [savedSignature, setSavedSignature] = useState<string | null>(null);
-  const [currentSignature, setCurrentSignature] = useState(() => mapDefinitionSignature(loadTabs(mapStorageScope())));
+  const [savedDefinitionSignature, setSavedDefinitionSignature] = useState<string | null>(null);
+  const [savedViewSignature, setSavedViewSignature] = useState<string | null>(null);
+  const [currentDefinitionSignature, setCurrentDefinitionSignature] = useState(() => mapDefinitionSignature(loadTabs(mapStorageScope())));
+  const [currentViewSignature, setCurrentViewSignature] = useState(() => mapViewSignature(loadTabs(mapStorageScope())));
   const [saving, setSaving] = useState(false);
 
   const session = loadSession();
@@ -150,21 +174,40 @@ export function MapNavigationEnhancements() {
   const currentViewName = nativeQueryButton()?.textContent?.trim() || "Map";
   const views = useMemo(() => loadTabs(mapStorageScope()).map(tab => ({ id: tab.id, title: tab.title })), [domVersion, path]);
   const favorite = Boolean(mapId && navigation?.recentMaps.some(map => map.mapId === mapId));
-  const saveDirty = savedSignature !== null && currentSignature !== savedSignature;
+  const settingsDirty = savedDefinitionSignature !== null && currentDefinitionSignature !== savedDefinitionSignature;
+  const viewDirty = !settingsDirty && savedViewSignature !== null && currentViewSignature !== savedViewSignature;
+  const saveState: SaveState = settingsDirty ? "settings-dirty" : viewDirty ? "view-dirty" : "saved";
 
   useEffect(() => {
-    if (!viewingOwnMap || !mapId) { setSavedSignature(null); return; }
+    if (!viewingOwnMap || !mapId) {
+      setSavedDefinitionSignature(null);
+      setSavedViewSignature(null);
+      return;
+    }
     let cancelled = false;
     void loadRuntimeConfig()
       .then(config => config ? loadPublishedView(config, mapId) : null)
-      .then(saved => { if (!cancelled && saved) setSavedSignature(mapDefinitionSignature(saved.tabs)); })
+      .then(saved => {
+        if (cancelled || !saved) return;
+        const scope = mapStorageScope();
+        saveTabs(saved.tabs, scope);
+        setSavedDefinitionSignature(mapDefinitionSignature(saved.tabs));
+        setSavedViewSignature(mapViewSignature(saved.tabs));
+        setCurrentDefinitionSignature(mapDefinitionSignature(saved.tabs));
+        setCurrentViewSignature(mapViewSignature(saved.tabs));
+        setDomVersion(version => version + 1);
+      })
       .catch(() => undefined);
     return () => { cancelled = true; };
   }, [mapId, viewingOwnMap]);
 
   useEffect(() => {
     if (!viewingOwnMap) return;
-    const update = () => setCurrentSignature(mapDefinitionSignature(loadTabs(mapStorageScope())));
+    const update = () => {
+      const tabs = loadTabs(mapStorageScope());
+      setCurrentDefinitionSignature(mapDefinitionSignature(tabs));
+      setCurrentViewSignature(mapViewSignature(tabs));
+    };
     update();
     const timer = window.setInterval(update, 400);
     return () => window.clearInterval(timer);
@@ -193,7 +236,7 @@ export function MapNavigationEnhancements() {
 
   const saveMap = async () => {
     if (!viewingOwnMap || !mapId || saving) return;
-    const target = mapDefinitionSignature(loadTabs(mapStorageScope()));
+    const target = mapPersistedSignature(loadTabs(mapStorageScope()));
     setSaving(true);
     runNativeAccountAction(["Save view"]);
     try {
@@ -202,9 +245,9 @@ export function MapNavigationEnhancements() {
       for (let attempt = 0; attempt < 5; attempt += 1) {
         await new Promise(resolve => window.setTimeout(resolve, 350));
         const saved = await loadPublishedView(config, mapId);
-        const signature = mapDefinitionSignature(saved.tabs);
-        setSavedSignature(signature);
-        if (signature === target) break;
+        setSavedDefinitionSignature(mapDefinitionSignature(saved.tabs));
+        setSavedViewSignature(mapViewSignature(saved.tabs));
+        if (mapPersistedSignature(saved.tabs) === target) break;
       }
     } catch {
       // The native save path owns user-facing errors; leave the dirty state unchanged.
@@ -230,17 +273,23 @@ export function MapNavigationEnhancements() {
     <button onClick={() => { clearSession(); window.location.assign("/"); }}><Icon name="logout"/><span>Logout</span></button>
   </>;
 
-  const saveExplanation = saving ? "Saving map…" : saveDirty ? "Unsaved changes — save this map" : "Saved — no unsaved query settings";
+  const saveExplanation = saving
+    ? "Saving map…"
+    : saveState === "settings-dirty"
+      ? "Query or map settings changed — save this map"
+      : saveState === "view-dirty"
+        ? "View changed — save to make this perspective the default"
+        : "Saved — map settings and view are up to date";
 
   return <>
     <span className="map-navigation-redesign-marker" hidden />
     {topbar && createPortal(<>
       {mapId && <button className={`map-context-trigger ${contextOpen ? "active" : ""}`} aria-label={`Open ${ownerName} map views`} aria-expanded={contextOpen} onClick={() => { setContextOpen(open => !open); setSettingsOpen(false); }}>
         <Avatar name={ownerName} url={ownerAvatarUrl} className="map-context-avatar" />
-        <strong>{currentViewName}</strong><span className="map-context-chevron" aria-hidden="true">⌄</span>
+        <strong>{currentViewName}</strong>
       </button>}
       {mapId && viewingOwnMap && <div className="map-owner-actions">
-        <button className={`map-owner-icon map-save-icon ${saveDirty ? "dirty" : "saved"}`} aria-label={saveExplanation} title={saveExplanation} disabled={saving} onClick={() => void saveMap()}><Icon name="save"/></button>
+        <button className={`map-owner-icon map-save-icon ${saveState}`} aria-label={saveExplanation} title={saveExplanation} disabled={saving} onClick={() => void saveMap()}><Icon name="save"/></button>
         <button className="map-owner-icon" aria-label="Share map" title="Share this map" onClick={() => { setShareOpen(true); setSettingsOpen(false); setContextOpen(false); }}><Icon name="share"/></button>
       </div>}
       {session && <button className={`app-settings-trigger ${settingsOpen ? "active" : ""}`} aria-label="Open account menu" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); setContextOpen(false); }}><span aria-hidden="true">⋮</span></button>}
