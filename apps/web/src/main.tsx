@@ -8,10 +8,8 @@ import { initErrorTelemetry } from "./errorTelemetry";
 import "./styles.css";
 import "./panelEnhancements.css";
 import "./mapNavigationEnhancements.css";
-import "./legacyViewMenuFix.css";
 import "./responsivePaneFixes.css";
 import "./spatial.css";
-import "./mapDisclosure.css";
 
 if (/^\/m\/[0-9a-f-]{36}\/?$/i.test(window.location.pathname)) {
   window.history.replaceState({}, "", "/");
