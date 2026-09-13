@@ -19,7 +19,7 @@ describe("map-scoped query tabs", () => {
   });
 
   it("uses only compact public map routes as hosted map scopes", () => {
-    expect(mapStorageScope("/m/31ea1577-b6f1-423a-8bda-ea7712345678", "")).toBe("home");
+    expect(mapStorageScope("/m/31ea1577-b6f1-423a-8bda-ea7712345678", "")).toBe("invalid-route");
     expect(mapStorageScope("/p/abcd1234", "")).toBe("published:abcd1234");
   });
 });
