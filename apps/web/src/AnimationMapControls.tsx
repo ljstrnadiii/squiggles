@@ -22,7 +22,7 @@ export function AnimationMapControls({ dimension, settings, onChange }: {
     <output title={String(steps[step] ?? "")}>{String(steps[step] ?? "")}</output>
     <div className="map-animation-speed" role="group" aria-label="Animation speed">
       <button type="button" aria-label="Slow animation down" disabled={settings.playbackSpeed <= 0.1} onClick={() => onChange({ ...settings, playbackSpeed: steppedSpeed(settings.playbackSpeed, -1) })}>−</button>
-      <span>{settings.playbackSpeed:g} fps</span>
+      <span>{settings.playbackSpeed} fps</span>
       <button type="button" aria-label="Speed animation up" disabled={settings.playbackSpeed >= 240} onClick={() => onChange({ ...settings, playbackSpeed: steppedSpeed(settings.playbackSpeed, 1) })}>+</button>
     </div>
   </div>;
