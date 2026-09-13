@@ -46,7 +46,7 @@ function nativeHeader() {
   header.className = "topbar";
   header.innerHTML = `
     <div class="brand"></div>
-    <button class="mobile-query-title">Over the years</button>
+    <button class="mobile-query-title" aria-expanded="false">Over the years</button>
     <button class="map-identity-button" aria-expanded="false">
       <span class="map-owner-avatar"><img src="https://example.test/martha.jpg" /></span>
       <strong>Martha</strong>
@@ -71,7 +71,7 @@ describe("MapNavigationEnhancements", () => {
     await waitFor(() => expect(mocks.likeMap).toHaveBeenCalledWith(expect.anything(), expect.anything(), "22222222-2222-2222-2222-222222222222"));
   });
 
-  it("opens the flat settings menu and searchable Favorites", async () => {
+  it("opens the flat settings menu and searchable Favorites without stealing focus", async () => {
     window.history.replaceState({}, "", "/m/22222222-2222-2222-2222-222222222222");
     nativeHeader();
     render(<MapNavigationEnhancements />);
@@ -82,8 +82,25 @@ describe("MapNavigationEnhancements", () => {
     expect(menu).not.toHaveTextContent("Recent");
 
     fireEvent.click(screen.getByRole("button", { name: /Favorites/ }));
-    expect(screen.getByRole("dialog", { name: "Favorites" })).toHaveTextContent("Alex");
-    fireEvent.change(screen.getByPlaceholderText("Search favorites"), { target: { value: "nope" } });
+    const favorites = screen.getByRole("dialog", { name: "Favorites" });
+    expect(favorites).toHaveClass("maps-pane");
+    expect(favorites).toHaveTextContent("Alex");
+    const search = screen.getByPlaceholderText("Search favorites");
+    expect(search).not.toHaveFocus();
+    fireEvent.change(search, { target: { value: "nope" } });
     await waitFor(() => expect(screen.queryByText("Alex")).not.toBeInTheDocument());
+  });
+
+  it("restores Edit map for the owner and opens the native query pane", async () => {
+    window.history.replaceState({}, "", "/m/11111111-1111-1111-1111-111111111111");
+    const header = nativeHeader();
+    const nativeEdit = header.querySelector<HTMLButtonElement>("button.mobile-query-title")!;
+    const clicked = vi.fn();
+    nativeEdit.addEventListener("click", clicked);
+    render(<MapNavigationEnhancements />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Len map views" }));
+    fireEvent.click(screen.getByRole("button", { name: /Edit map/ }));
+    expect(clicked).toHaveBeenCalledTimes(1);
   });
 });
