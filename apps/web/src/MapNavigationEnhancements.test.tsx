@@ -37,6 +37,8 @@ vi.mock("./storage", () => ({
 afterEach(() => {
   cleanup();
   document.querySelector("header.topbar")?.remove();
+  document.querySelector('nav.mobile-menu[aria-label="Query navigation"]')?.remove();
+  document.querySelector('section.toolbar[aria-label="Query and map settings"]')?.remove();
   mocks.likeMap.mockClear();
   mocks.unlikeMap.mockClear();
 });
@@ -53,6 +55,15 @@ function nativeHeader() {
     </button>`;
   document.body.appendChild(header);
   return header;
+}
+
+function nativeQueryNavigation() {
+  const menu = document.createElement("nav");
+  menu.className = "mobile-menu utility-panel";
+  menu.setAttribute("aria-label", "Query navigation");
+  menu.innerHTML = `<button>New query</button><button>Query settings</button>`;
+  document.body.appendChild(menu);
+  return menu;
 }
 
 describe("MapNavigationEnhancements", () => {
@@ -91,16 +102,34 @@ describe("MapNavigationEnhancements", () => {
     await waitFor(() => expect(screen.queryByText("Alex")).not.toBeInTheDocument());
   });
 
-  it("restores Edit map for the owner and opens the native query pane", async () => {
+  it("keeps map views simple and exposes edit and new-map actions for the owner", async () => {
     window.history.replaceState({}, "", "/m/11111111-1111-1111-1111-111111111111");
     const header = nativeHeader();
-    const nativeEdit = header.querySelector<HTMLButtonElement>("button.mobile-query-title")!;
-    const clicked = vi.fn();
-    nativeEdit.addEventListener("click", clicked);
+    const navigation = nativeQueryNavigation();
+    const nativeTrigger = header.querySelector<HTMLButtonElement>("button.mobile-query-title")!;
+    const querySettings = [...navigation.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Query settings")!;
+    const newQuery = [...navigation.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "New query")!;
+    const triggerClicked = vi.fn();
+    const settingsClicked = vi.fn();
+    const newQueryClicked = vi.fn();
+    nativeTrigger.addEventListener("click", triggerClicked);
+    querySettings.addEventListener("click", settingsClicked);
+    newQuery.addEventListener("click", newQueryClicked);
     render(<MapNavigationEnhancements />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Len map views" }));
-    fireEvent.click(screen.getByRole("button", { name: /Edit map/ }));
-    expect(clicked).toHaveBeenCalledTimes(1);
+    const context = await screen.findByRole("button", { name: "Open Len map views" });
+    fireEvent.click(context);
+    const currentView = screen.getByRole("button", { name: "Over the years" });
+    expect(currentView.querySelector("svg")).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit current map" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "+ New map" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit current map" }));
+    await waitFor(() => expect(settingsClicked).toHaveBeenCalledTimes(1));
+    expect(triggerClicked).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(context);
+    fireEvent.click(screen.getByRole("button", { name: "+ New map" }));
+    await waitFor(() => expect(newQueryClicked).toHaveBeenCalledTimes(1));
   });
 });
