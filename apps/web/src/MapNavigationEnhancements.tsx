@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { beginGoogleLogin, clearSession, identityFromSession, loadRuntimeConfig, loadSession } from "./auth";
 import type { QueryTab } from "./contracts";
 import { likeMap, loadMapNavigation, unlikeMap, type MapNavigation } from "./mapIdentity";
-import { createMapView, editMapView, mapViewNavigationState, selectMapView, subscribeMapViewNavigation } from "./mapViewController";
+import { createMapView, editMapView, mapViewNavigationState, openMapStatistics, openMapTable, selectMapView, subscribeMapViewNavigation } from "./mapViewController";
 import { loadPublishedView } from "./publishing";
 import { loadTabs, mapStorageScope, saveTabs } from "./storage";
 
@@ -130,6 +130,7 @@ export function MapNavigationEnhancements() {
   const path = window.location.pathname;
   const mapId = currentMapId();
   const viewingOwnMap = Boolean(navigation?.myMap?.url === path || (mapId && navigation?.myMap?.mapId === mapId));
+  const canEditViews = !mapId || viewingOwnMap;
   const nativeOwner = nativeOwnerButton();
   const nativeOwnerName = nativeOwner?.querySelector("strong")?.textContent?.trim() || "Shared map";
   const ownerName = viewingOwnMap ? (navigation?.myMap?.ownerDisplayName || sessionIdentity.name || sessionIdentity.email || "My map") : nativeOwnerName;
@@ -268,8 +269,8 @@ export function MapNavigationEnhancements() {
   return <>
     <span className="map-navigation-redesign-marker" hidden />
     {topbar && createPortal(<>
-      {mapId && <button className={`map-context-trigger ${contextOpen ? "active" : ""}`} aria-label={`Open ${ownerName} map views`} aria-expanded={contextOpen} onClick={() => { setContextOpen(open => !open); setSettingsOpen(false); }}>
-        <Avatar name={ownerName} url={ownerAvatarUrl} className="map-context-avatar" />
+      {views.length > 0 && <button className={`map-context-trigger ${contextOpen ? "active" : ""}`} aria-label={mapId ? `Open ${ownerName} map views` : "Open map views"} aria-expanded={contextOpen} onClick={() => { setContextOpen(open => !open); setSettingsOpen(false); }}>
+        {mapId ? <Avatar name={ownerName} url={ownerAvatarUrl} className="map-context-avatar" /> : <span className="map-context-avatar map-context-generic"><Icon name="map"/></span>}
         <strong>{currentViewName}</strong>
       </button>}
       {mapId && viewingOwnMap && <div className="map-owner-actions">
@@ -279,18 +280,22 @@ export function MapNavigationEnhancements() {
       <button className={`app-settings-trigger ${settingsOpen ? "active" : ""}`} aria-label="Open account menu" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); setContextOpen(false); }}><span aria-hidden="true">⋮</span></button>
     </>, topbar)}
 
-    {contextOpen && mapId && <div className="map-context-popover" role="dialog" aria-label="Map owner and views">
-      <div className="map-owner-heading"><Avatar name={ownerName} url={ownerAvatarUrl}/><span><strong>{ownerName}</strong><small>Owner of this map</small></span></div>
-      {!viewingOwnMap && <button className={`map-like-action ${favorite ? "active" : ""}`} disabled={pendingLike} onClick={() => void setFavorite()}><Icon name="heart"/><span><strong>{favorite ? "Liked" : "Like map"}</strong><small>{favorite ? "Remove from favorites" : session ? "Add to favorites" : "Log in to add to favorites"}</small></span></button>}
+    {contextOpen && views.length > 0 && <div className="map-context-popover" role="dialog" aria-label="Map owner and views">
+      {mapId && <div className="map-owner-heading"><Avatar name={ownerName} url={ownerAvatarUrl}/><span><strong>{ownerName}</strong><small>Owner of this map</small></span></div>}
+      {mapId && !viewingOwnMap && <button className={`map-like-action ${favorite ? "active" : ""}`} disabled={pendingLike} onClick={() => void setFavorite()}><Icon name="heart"/><span><strong>{favorite ? "Liked" : "Like map"}</strong><small>{favorite ? "Remove from favorites" : session ? "Add to favorites" : "Log in to add to favorites"}</small></span></button>}
       <div className="map-view-list">
         {views.map(view => {
           const active = view.id === currentViewId;
           return <div className={`map-view-row ${active ? "active" : ""}`} key={view.id}>
             <button className="map-view-select" onClick={() => { setContextOpen(false); if (!active) selectMapView(view.id); }}>{view.title}</button>
-            {viewingOwnMap && active && <button className="map-view-edit" aria-label="Edit current map" onClick={() => { setContextOpen(false); editMapView(view.id); }}><Icon name="edit"/></button>}
+            {canEditViews && active && <button className="map-view-edit" aria-label="Edit current map" onClick={() => { setContextOpen(false); editMapView(view.id); }}><Icon name="edit"/></button>}
           </div>;
         })}
-        {viewingOwnMap && <button className="map-new-view" onClick={() => { setContextOpen(false); createMapView(); }}>+ New map</button>}
+        {canEditViews && <button className="map-new-view" onClick={() => { setContextOpen(false); createMapView(); }}>+ New map</button>}
+      </div>
+      <div className="map-view-tools">
+        <button onClick={() => { setContextOpen(false); openMapStatistics(); }}>Statistics</button>
+        <button onClick={() => { setContextOpen(false); openMapTable(); }}>Table</button>
       </div>
     </div>}
 
