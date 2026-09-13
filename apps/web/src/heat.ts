@@ -1,4 +1,4 @@
-import type { BinaryRouteBatch, HeatPalette, MapState, RouteActivity } from "./contracts";
+import type { BinaryRouteBatch, HeatPalette, HeatPresetPalette, MapState, RouteActivity } from "./contracts";
 
 type Color = [number, number, number, number];
 type Cell = { x: number; y: number; total: number };
@@ -7,15 +7,30 @@ export type HeatResult = { scores: Map<string, number>; sourceVertices: number; 
 
 export type CooperativeHeatResult = HeatResult & { yieldCount: number; maxSliceMs: number };
 
-export const HEAT_COLOR_RANGES: Record<HeatPalette, Color[]> = {
+export const HEAT_COLOR_RANGES: Record<HeatPresetPalette, Color[]> = {
   sunset: [[48, 64, 171, 210], [66, 132, 226, 220], [83, 205, 218, 230], [255, 217, 102, 240], [255, 112, 67, 250], [226, 48, 92, 255]],
   viridis: [[68, 1, 84, 210], [59, 82, 139, 220], [33, 145, 140, 230], [94, 201, 98, 242], [253, 231, 37, 255]],
   fire: [[34, 16, 52, 210], [87, 15, 109, 220], [187, 55, 84, 235], [249, 142, 9, 248], [252, 255, 164, 255]],
   ice: [[8, 29, 88, 210], [28, 89, 156, 220], [40, 181, 192, 235], [151, 235, 220, 248], [240, 253, 250, 255]],
 };
 
+function customHeatColors(palette: HeatPalette): Color[] | null {
+  if (!palette.startsWith("custom:")) return null;
+  const stops = palette.slice("custom:".length).split(",").filter(color => /^#[0-9a-f]{6}$/i.test(color));
+  if (stops.length < 2) return null;
+  return stops.map((color, index) => {
+    const ratio = index / Math.max(1, stops.length - 1);
+    return [
+      Number.parseInt(color.slice(1, 3), 16),
+      Number.parseInt(color.slice(3, 5), 16),
+      Number.parseInt(color.slice(5, 7), 16),
+      Math.round(210 + ratio * 45),
+    ];
+  });
+}
+
 export function colorForWeight(weight: number, maximum: number, palette: HeatPalette, temperature = 1.7): Color {
-  const colors = HEAT_COLOR_RANGES[palette];
+  const colors = customHeatColors(palette) ?? HEAT_COLOR_RANGES[palette as HeatPresetPalette];
   const logarithmic = maximum <= 0 ? 0 : Math.log1p(weight) / Math.log1p(maximum);
   const scaled = Math.pow(logarithmic, 1 / Math.max(0.25, temperature));
   const position = scaled * (colors.length - 1);

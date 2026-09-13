@@ -28,8 +28,9 @@ import { loadSystemResolution, saveSystemResolution } from "./resolution";
 import { rasterStyles } from "./mapSources";
 import { recordRenderingDiagnostics } from "./diagnosticState";
 import { VisualEncodingControls } from "./VisualEncodingControls";
+import { CustomPaletteEditor } from "./CustomPaletteEditor";
 import { AnimationMapControls } from "./AnimationMapControls";
-import { activityVisible, colorForVisualDimension, DEFAULT_VISUAL_ENCODING, dimensionByName, reconcileVisualEncoding, type VisualEncodingSettings } from "./visualEncoding";
+import { activityVisible, colorForVisualDimension, customPalette, DEFAULT_CUSTOM_COLOR_STOPS, dimensionByName, isVisualPalette, persistedVisualEncoding, reconcileVisualEncoding, visualEncodingFromPersisted, visualPaletteStops, type VisualEncodingSettings } from "./visualEncoding";
 import { loadMapNavigation, rememberLocalMap, type MapIdentity, type MapNavigation } from "./mapIdentity";
 import { clearMapViewActions, setMapViewActions, updateMapViewNavigation } from "./mapViewController";
 
@@ -41,7 +42,6 @@ const emptyCache: RenderCacheMetrics = { hit: false, bytes: 0, budgetBytes: 0, e
 const emptyHeat: CooperativeHeatResult = { scores: new Map(), sourceVertices: 0, cellCount: 0, maxScore: 0, durationMs: 0, yieldCount: 0, maxSliceMs: 0 };
 const SqlEditor = lazy(() => import("./SqlEditor").then(module => ({ default: module.SqlEditor })));
 const basemaps = new Set<Basemap>(["carto-light", "carto-dark", "streets", "topo", "imagery", "blank"]);
-const heatPalettes = new Set<HeatPalette>(["sunset", "viridis", "fire", "ice"]);
 function finiteParameter(parameters: URLSearchParams, name: string, minimum: number, maximum: number) {
   const raw = parameters.get(name);
   if (raw === null || raw.trim() === "") return undefined;
@@ -77,7 +77,7 @@ function tabsWithUrlSettings(tabs: QueryTab[]) {
     style: {
       ...target.style,
       ...(basemap && basemaps.has(basemap as Basemap) ? { basemap: basemap as Basemap } : {}),
-      ...(palette && heatPalettes.has(palette as HeatPalette) ? { heatPalette: palette as HeatPalette } : {}),
+      ...(palette && isVisualPalette(palette) ? { heatPalette: palette } : {}),
       ...(temperature === undefined ? {} : { heatTemperature: temperature }),
       ...(thickness === undefined ? {} : { lineWidthScale: thickness }),
       ...(exaggeration === undefined ? {} : { terrainExaggeration: exaggeration }),
@@ -246,7 +246,7 @@ export function App() {
   const [spatialDraft, setSpatialDraft] = useState<[number, number][]>([]);
   const [routeBatches, setRouteBatches] = useState<BinaryRouteBatch[]>([]);
   const [queryDimensions, setQueryDimensions] = useState<QueryDimension[]>([]);
-  const [visualEncoding, setVisualEncoding] = useState<VisualEncodingSettings>(DEFAULT_VISUAL_ENCODING);
+  const [visualEncoding, setVisualEncoding] = useState<VisualEncodingSettings>(() => visualEncodingFromPersisted(tab.visualEncoding));
   const [tableActivities, setTableActivities] = useState<ActivityListItem[]>([]);
   const [summary, setSummary] = useState(empty);
   const [status, setStatus] = useState("Ready for a local dataset");
@@ -492,7 +492,7 @@ export function App() {
     selectionReady.current = false;
     ready.current = false;
     terrainCameraRef.current = null;
-    setRouteBatches([]); setHeat(emptyHeat); setQueryDimensions([]); setVisualEncoding(DEFAULT_VISUAL_ENCODING);
+    setRouteBatches([]); setHeat(emptyHeat); setQueryDimensions([]); setVisualEncoding(visualEncodingFromPersisted(initialTab.visualEncoding));
     setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false);
     setStatsOpen(false); setTableOpen(false); setTableActivities([]);
     setTerrainCamera(null); setMapInteracting(false);
@@ -641,18 +641,18 @@ export function App() {
       const destination = updated.find(item => item.id === next.id) ?? next;
       tabsRef.current = updated; activeRef.current = destination.id; viewRef.current = destination.mapState; terrainCameraRef.current = null;
       setTabs(updated); saveTabs(updated, storageScopeRef.current);
-      setActive(destination.id); setDraft(destination.sql); setView(destination.mapState); setRenderedView(destination.mapState); setTerrainCamera(null); setToolbarOpen(openQuery);
+      setActive(destination.id); setDraft(destination.sql); setView(destination.mapState); setRenderedView(destination.mapState); setTerrainCamera(null); setVisualEncoding(visualEncodingFromPersisted(destination.visualEncoding)); setToolbarOpen(openQuery);
       next = destination;
     }
     replaceUrlSettings(next, next.mapState, units); setSelected(null); setProfileHover(null); setHover(null); setIsolateSelected(false); setStatsOpen(false); setTableOpen(false); setAboutOpen(false);
     if (ready.current && !isCurrent) void run(next, next.mapState, next.sql);
   }
   function add() {
-    const next = { ...defaultTab, mapState: { ...view }, style: { ...tab.style }, id: crypto.randomUUID(), title: "New Query" };
+    const next = { ...defaultTab, mapState: { ...view }, style: { ...tab.style }, visualEncoding: persistedVisualEncoding(visualEncoding), id: crypto.randomUUID(), title: "New Query" };
     const updated = [...tabs, next]; tabsRef.current = updated; setTabs(updated); saveTabs(updated, storageScopeRef.current); choose(next, true);
   }
   function duplicate() {
-    const next = { ...tab, style: { ...tab.style }, spatialFilter: tab.spatialFilter ? { ...tab.spatialFilter, polygon: [...tab.spatialFilter.polygon] } : undefined, id: crypto.randomUUID(), title: `${tab.title} copy`, sql: draft };
+    const next = { ...tab, style: { ...tab.style }, visualEncoding: persistedVisualEncoding(visualEncoding), spatialFilter: tab.spatialFilter ? { ...tab.spatialFilter, polygon: [...tab.spatialFilter.polygon] } : undefined, id: crypto.randomUUID(), title: `${tab.title} copy`, sql: draft };
     const updated = [...tabs, next]; tabsRef.current = updated; setTabs(updated); saveTabs(updated, storageScopeRef.current); choose(next, true);
   }
   function remove() {
@@ -668,6 +668,14 @@ export function App() {
     tabsRef.current = updated; setTabs(updated); saveTabs(updated, storageScopeRef.current);
     if (style.viewMode !== undefined && style.viewMode !== tab.style.viewMode) { terrainCameraRef.current = null; setTerrainCamera(null); setMapInteracting(false); replaceUrlSettings(nextTab, nextView, units); }
     if (style.cleanEnabled !== undefined && style.cleanEnabled !== tab.style.cleanEnabled && ready.current) void run(nextTab, view, tab.sql);
+  }
+  function changeVisualEncoding(next: VisualEncodingSettings) {
+    setVisualEncoding(next);
+    const persisted = persistedVisualEncoding(next);
+    const current = tabsRef.current.find(item => item.id === activeRef.current);
+    if (!current || JSON.stringify(current.visualEncoding) === JSON.stringify(persisted)) return;
+    const updated = tabsRef.current.map(item => item.id === activeRef.current ? { ...item, visualEncoding: persisted } : item);
+    tabsRef.current = updated; setTabs(updated); saveTabs(updated, storageScopeRef.current);
   }
   const pitchGesture = usePitchGesture(!terrainEnabled && !spatialDrawing, view, nextView => {
     updateView(nextView);
@@ -921,10 +929,10 @@ export function App() {
       </div><p className="network-note">Wi‑Fi recommended for the best experience with remote archives and basemaps.</p></section>
       <section className="toolbar-section"><h3>Heat</h3><div className="settings-grid">
         <label className="check" data-tooltip="Give each complete route one color based on nearby vertices from other routes in the current SQL selection."><input aria-label="Heat" type="checkbox" checked={tab.style.heatEnabled} onChange={event => changeStyle({ heatEnabled: event.target.checked })} /> Enabled</label>
-        <label data-tooltip="Choose the color ramp for route proximity.">Colors<select aria-label="Heat colormap" value={tab.style.heatPalette} disabled={!tab.style.heatEnabled} onChange={event => changeStyle({ heatPalette: event.target.value as HeatPalette })}><option value="sunset">Sunset</option><option value="viridis">Viridis</option><option value="fire">Fire</option><option value="ice">Ice</option></select></label>
+        <label data-tooltip="Choose the color ramp for route proximity.">Colors<select aria-label="Heat colormap" value={visualPaletteStops(tab.style.heatPalette).length >= 2 ? "custom" : tab.style.heatPalette} disabled={!tab.style.heatEnabled} onChange={event => changeStyle({ heatPalette: event.target.value === "custom" ? customPalette(DEFAULT_CUSTOM_COLOR_STOPS) : event.target.value as HeatPalette })}><option value="sunset">Sunset</option><option value="viridis">Viridis</option><option value="fire">Fire</option><option value="ice">Ice</option><option value="custom">Custom</option></select></label>
         <label className="temperature" data-tooltip="Higher values make less-frequent shared routes reach saturated colors sooner."><span>Temperature</span><input aria-label="Heat temperature" type="range" min="0.5" max="3" step="0.1" disabled={!tab.style.heatEnabled} value={tab.style.heatTemperature} onChange={event => changeStyle({ heatTemperature: Number(event.target.value) })} /><output>{tab.style.heatTemperature.toFixed(1)}×</output></label>
-      </div></section>
-      <VisualEncodingControls dimensions={queryDimensions} settings={visualEncoding} onChange={setVisualEncoding} />
+      </div>{tab.style.heatEnabled && visualPaletteStops(tab.style.heatPalette).length >= 2 && <CustomPaletteEditor palette={tab.style.heatPalette} onChange={palette => changeStyle({ heatPalette: palette })} label="Heat color sequence" />}</section>
+      <VisualEncodingControls dimensions={queryDimensions} settings={visualEncoding} onChange={changeVisualEncoding} />
       <section className="toolbar-section"><h3>Spatial filter</h3><div className="spatial-filter-controls"><label data-tooltip="Intersects selects routes that enter or cross the drawn area. Entirely within requires the whole route to stay inside it.">Predicate<select aria-label="Spatial predicate" value={tab.spatialFilter?.predicate ?? "intersects"} onChange={event => changeSpatialPredicate(event.target.value as SpatialPredicate)}><option value="intersects">Intersects</option><option value="within">Contains</option></select></label><button onClick={startSpatialDraw}>{tab.spatialFilter?.polygon.length ? "Redraw area" : "Draw area"}</button></div>{Boolean(tab.spatialFilter?.polygon.length) && <><p className="spatial-filter-summary">{tab.spatialFilter?.predicate === "within" ? "Contains" : "Intersects"} · {tab.spatialFilter!.polygon.length} vertices</p><div className="spatial-filter-actions"><button onClick={() => saveSpatialFilter({ ...tab.spatialFilter!, visible: !tab.spatialFilter!.visible }, false)}>{tab.spatialFilter?.visible ? "Hide area" : "Show area"}</button><button onClick={clearSpatialFilter}>Clear</button></div></>}</section>
       <section className="toolbar-section"><h3>Data</h3><label className="check" data-tooltip="Run the last successful SQL automatically against a derived view that excludes isolated GPS jumps and elevation spikes. Unsaved SQL stays a draft and raw files are unchanged."><input aria-label="Clean" type="checkbox" checked={tab.style.cleanEnabled} onChange={event => changeStyle({ cleanEnabled: event.target.checked })} /> Clean anomalous points</label></section>
       <section className="toolbar-section sql-section"><div className="section-heading"><div><h3>SQL</h3><p>{draft === tab.sql ? "Current query is applied" : "Draft changed · run to apply"}</p></div><button className="run" title="Run this DuckDB SQL query" disabled={busy || !ready.current} onClick={() => void run()}>▶ Run <kbd>⌘↵</kbd></button></div><Suspense fallback={<div className="sql-loading">Loading SQL editor…</div>}><SqlEditor value={draft} dark={effectiveTheme === "dark"} onChange={setDraft} /></Suspense></section>
@@ -964,7 +972,7 @@ export function App() {
           updateView({ ...viewRef.current, longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });
         }} onClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) { const longitude = coordinate[0], latitude = coordinate[1]; if (longitude !== undefined && latitude !== undefined) setSpatialDraft(previous => [...previous, [longitude, latitude]]); } return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />
       </>}
-      {!spatialDrawing && animationDimension && visualEncoding.showMapControls && animationDimension.steps.length > 0 && <AnimationMapControls dimension={animationDimension} settings={visualEncoding} onChange={setVisualEncoding} />}
+      {!spatialDrawing && animationDimension && visualEncoding.showMapControls && animationDimension.steps.length > 0 && <AnimationMapControls dimension={animationDimension} settings={visualEncoding} onChange={changeVisualEncoding} />}
       {spatialDrawing && <><div className="spatial-draw-tools" role="group" aria-label="Polygon drawing controls"><button aria-label="Undo last polygon vertex" title="Undo last point" disabled={spatialDraft.length === 0} onClick={() => setSpatialDraft(previous => previous.slice(0, -1))}>↶</button><button className="accept" aria-label="Accept polygon" title="Accept polygon" disabled={spatialDraft.length < 3} onClick={acceptSpatialDraw}>✓</button></div><div className="spatial-draw-hint">Tap the map to add polygon vertices · ↶ undo · ✓ apply</div></>}
       {!spatialDrawing && hover?.origin === "map" && <div className="tooltip" style={{ left: hover.x + 12, top: hover.y + 12 }}><strong>{hover.item.name}</strong><span>{hover.item.sportType} · {hover.item.startTime?.slice(0, 10)}</span><span>{distance(hover.item.distanceM ?? 0)} · {elevation(hover.item.elevationGainM ?? 0)} gain</span></div>}
     </section>

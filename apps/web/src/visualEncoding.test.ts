@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QueryDimension } from "./contracts";
-import { activityVisible, colorForVisualDimension, customPalette, DEFAULT_VISUAL_ENCODING, reconcileVisualEncoding, visualPaletteStops } from "./visualEncoding";
+import { activityVisible, colorForVisualDimension, customPalette, DEFAULT_VISUAL_ENCODING, persistedVisualEncoding, reconcileVisualEncoding, visualEncodingFromPersisted, visualPaletteStops } from "./visualEncoding";
 
 const month: QueryDimension = {
   name: "month",
@@ -42,6 +42,27 @@ describe("query visual encoding", () => {
     expect(colorForVisualDimension(category, "a", palette)).toEqual([255, 0, 0, 255]);
     expect(colorForVisualDimension(category, "b", palette)).toEqual([255, 255, 255, 255]);
     expect(colorForVisualDimension(category, "c", palette)).toEqual([0, 0, 255, 255]);
+  });
+
+  it("persists view animation configuration without live playback state", () => {
+    const runtime = {
+      ...DEFAULT_VISUAL_ENCODING,
+      animateBy: "month",
+      animationMode: "windowed" as const,
+      animationStep: 2,
+      windowSize: 3,
+      playbackSpeed: 24,
+      playing: true,
+      loop: false,
+      showMapControls: true,
+      colorBy: "month",
+      palette: customPalette(["#ff0000", "#0000ff"]),
+    };
+    const persisted = persistedVisualEncoding(runtime);
+    expect(persisted).not.toHaveProperty("animationStep");
+    expect(persisted).not.toHaveProperty("playing");
+    expect(persisted).toMatchObject({ playbackSpeed: 24, showMapControls: true, animationMode: "windowed", windowSize: 3 });
+    expect(visualEncodingFromPersisted(persisted)).toMatchObject({ playbackSpeed: 24, showMapControls: true, animationStep: 0, playing: false });
   });
 
   it("drops encodings that are absent from a new query", () => {

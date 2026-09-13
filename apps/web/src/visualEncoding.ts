@@ -15,6 +15,7 @@ export type VisualEncodingSettings = {
   colorBy: string;
   palette: VisualPalette;
 };
+export type PersistedVisualEncodingSettings = Omit<VisualEncodingSettings, "animationStep" | "playing">;
 
 export const DEFAULT_CUSTOM_COLOR_STOPS = ["#440154", "#21918c", "#fde725"];
 
@@ -32,6 +33,7 @@ export const DEFAULT_VISUAL_ENCODING: VisualEncodingSettings = {
 };
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+const PRESET_PALETTES = new Set(["sunset", "viridis", "fire", "ice"]);
 
 type Color = [number, number, number, number];
 
@@ -56,10 +58,46 @@ export function customPalette(colors: string[]): VisualPalette {
   return `custom:${safeStops.join(",")}`;
 }
 
+function parsedCustomStops(palette: string): string[] {
+  if (!palette.startsWith("custom:")) return [];
+  return palette.slice("custom:".length).split(",").map(normalizedHexColor).filter((color): color is string => Boolean(color));
+}
+
 export function visualPaletteStops(palette: VisualPalette): string[] {
   if (!palette.startsWith("custom:")) return [];
-  const stops = palette.slice("custom:".length).split(",").map(normalizedHexColor).filter((color): color is string => Boolean(color));
+  const stops = parsedCustomStops(palette);
   return stops.length >= 2 ? stops : DEFAULT_CUSTOM_COLOR_STOPS;
+}
+
+export function isVisualPalette(value: unknown): value is VisualPalette {
+  return typeof value === "string" && (PRESET_PALETTES.has(value) || parsedCustomStops(value).length >= 2);
+}
+
+export function persistedVisualEncoding(settings: VisualEncodingSettings): PersistedVisualEncodingSettings {
+  const { animationStep: _animationStep, playing: _playing, ...persisted } = settings;
+  return persisted;
+}
+
+export function visualEncodingFromPersisted(settings?: Partial<PersistedVisualEncodingSettings>): VisualEncodingSettings {
+  const playbackSpeed = Number(settings?.playbackSpeed);
+  const windowSize = Number(settings?.windowSize);
+  return {
+    ...DEFAULT_VISUAL_ENCODING,
+    animateBy: typeof settings?.animateBy === "string" ? settings.animateBy : "",
+    animationMode: settings?.animationMode === "windowed" ? "windowed" : "cumulative",
+    windowSize: Number.isFinite(windowSize) ? Math.max(1, Math.round(windowSize)) : DEFAULT_VISUAL_ENCODING.windowSize,
+    playbackSpeed: Number.isFinite(playbackSpeed) ? Math.min(240, Math.max(0.1, playbackSpeed)) : DEFAULT_VISUAL_ENCODING.playbackSpeed,
+    loop: typeof settings?.loop === "boolean" ? settings.loop : DEFAULT_VISUAL_ENCODING.loop,
+    showMapControls: typeof settings?.showMapControls === "boolean" ? settings.showMapControls : DEFAULT_VISUAL_ENCODING.showMapControls,
+    colorBy: typeof settings?.colorBy === "string" ? settings.colorBy : "",
+    palette: isVisualPalette(settings?.palette) ? settings.palette : DEFAULT_VISUAL_ENCODING.palette,
+    animationStep: 0,
+    playing: false,
+  };
+}
+
+export function normalizePersistedVisualEncoding(settings?: Partial<PersistedVisualEncodingSettings>): PersistedVisualEncodingSettings {
+  return persistedVisualEncoding(visualEncodingFromPersisted(settings));
 }
 
 function colorForCustomPosition(position: number, colors: string[]): Color | null {
