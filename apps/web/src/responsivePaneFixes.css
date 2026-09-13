@@ -37,6 +37,7 @@
   font-weight: 700;
 }
 .map-login-trigger:hover { background: var(--input); }
+.topbar:not(:has(.map-context-trigger)) .map-login-trigger { display: none; }
 
 @media (max-width: 600px) {
   .account-panel {
