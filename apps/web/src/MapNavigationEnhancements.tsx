@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { clearSession, identityFromSession, loadRuntimeConfig, loadSession } from "./auth";
+import { beginGoogleLogin, clearSession, identityFromSession, loadRuntimeConfig, loadSession } from "./auth";
 import type { QueryTab } from "./contracts";
 import { likeMap, loadMapNavigation, unlikeMap, type MapNavigation } from "./mapIdentity";
 import { loadPublishedView } from "./publishing";
@@ -32,7 +32,7 @@ function nativeQueryButton() {
 }
 
 function currentMapId() {
-  return /^\/m\/([0-9a-f-]{36})\/?$/i.exec(window.location.pathname)?.[1] ?? null;
+  return /^\/m\/([a-z0-9]{10})\/?$/i.exec(window.location.pathname)?.[1] ?? null;
 }
 
 function mapDefinitionSignature(tabs: QueryTab[]) {
@@ -139,6 +139,11 @@ export function MapNavigationEnhancements() {
     setNavigation(await loadMapNavigation(config, session));
   };
 
+  const login = async () => {
+    const config = await loadRuntimeConfig();
+    if (config) await beginGoogleLogin(config);
+  };
+
   useEffect(() => {
     const update = () => {
       const next = document.querySelector<HTMLElement>("header.topbar");
@@ -221,7 +226,7 @@ export function MapNavigationEnhancements() {
   const setFavorite = async () => {
     if (!mapId || viewingOwnMap || pendingLike) return;
     if (!session) {
-      document.querySelector<HTMLButtonElement>("button.login-button")?.click();
+      await login();
       return;
     }
     setPendingLike(true);
@@ -292,7 +297,9 @@ export function MapNavigationEnhancements() {
         <button className={`map-owner-icon map-save-icon ${saveState}`} aria-label={saveExplanation} title={saveExplanation} disabled={saving} onClick={() => void saveMap()}><Icon name="save"/></button>
         <button className="map-owner-icon" aria-label="Share map" title="Share this map" onClick={() => { setShareOpen(true); setSettingsOpen(false); setContextOpen(false); }}><Icon name="share"/></button>
       </div>}
-      {session && <button className={`app-settings-trigger ${settingsOpen ? "active" : ""}`} aria-label="Open account menu" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); setContextOpen(false); }}><span aria-hidden="true">⋮</span></button>}
+      {session
+        ? <button className={`app-settings-trigger ${settingsOpen ? "active" : ""}`} aria-label="Open account menu" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); setContextOpen(false); }}><span aria-hidden="true">⋮</span></button>
+        : <button className="map-login-trigger" onClick={() => void login()}>Log in</button>}
     </>, topbar)}
 
     {contextOpen && mapId && <div className="map-context-popover" role="dialog" aria-label="Map owner and views">
