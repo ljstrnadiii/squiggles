@@ -131,35 +131,23 @@ describe("App", () => {
     expect(screen.queryByRole("navigation", { name: "Query navigation" })).not.toBeInTheDocument();
   });
 
-  it("opens an unlisted hosted dataset from its share route", async () => {
+  it("rejects retired uuid map routes without reviving legacy views", async () => {
     const datasetId = "31ea1577-b6f1-423a-8bda-ea7712345678";
     const idToken = `x.${btoa(JSON.stringify({ email: "len@example.com", name: "Len" })).replaceAll("=", "")}.x`;
     localStorage.setItem("squiggles-auth-session", JSON.stringify({ accessToken: "access", idToken }));
     localStorage.setItem("activity-map.tabs.v1", JSON.stringify([{ ...defaultTab, id: "curated", title: "Len's curated map", style: { ...defaultTab.style, viewMode: "3d" } }]));
     const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
-      if (url === "/runtime-config.json") {
-        return new Response(JSON.stringify({ apiUrl: "https://api.example.test", cognitoDomain: "", cognitoClientId: "" }));
-      }
-      if (url === `https://api.example.test/api/datasets/${datasetId}/access`) {
-        return new Response(JSON.stringify({ datasetId, manifest: { schema_version: "1.6.0", activity_count: 1, rejection_count: 0, bbox: [-105, 39, -104, 40], shards: [] }, identity: { mapId: datasetId, ownerDisplayName: "Len", viewerRole: "owner" } }));
-      }
+      if (url === "/runtime-config.json") return new Response(JSON.stringify({ apiUrl: "https://api.example.test", cognitoDomain: "", cognitoClientId: "" }));
       return new Response("not found", { status: 404 });
     });
     window.history.replaceState({}, "", `/m/${datasetId}`);
     render(<App />);
-    expect(await screen.findByRole("status", { name: "1 routes selected" })).toBeInTheDocument();
-    expect(engineCalls.maps[0].camera.center).toEqual([-104.5, 39.5]);
-    expect(engineCalls.maps[0].camera.pitch ?? 0).toBe(0);
-    expect(fetcher).toHaveBeenCalledWith(`https://api.example.test/api/datasets/${datasetId}/access`, expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer access" }) }));
-    expect(screen.getByRole("button", { name: "Open map menu for My map" })).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent("This map could not be found.");
+    expect(fetcher).not.toHaveBeenCalledWith(`https://api.example.test/api/datasets/${datasetId}/access`, expect.anything());
     openQueryMenu();
     expect(screen.getByRole("button", { name: "All Activities" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Len's curated map" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Close query menu" }));
-    openLogoMenu();
-    expect(screen.getByRole("button", { name: "Change dataset" })).toBeInTheDocument();
-    expect(screen.queryByText(datasetId)).not.toBeInTheDocument();
   });
 
   it("shows the published map owner's identity without requiring login", async () => {
