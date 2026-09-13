@@ -56,7 +56,8 @@ export function customPalette(colors: string[]): VisualPalette {
 
 export function visualPaletteStops(palette: VisualPalette): string[] {
   if (!palette.startsWith("custom:")) return [];
-  return palette.slice("custom:".length).split(",").map(normalizedHexColor).filter((color): color is string => Boolean(color));
+  const stops = palette.slice("custom:".length).split(",").map(normalizedHexColor).filter((color): color is string => Boolean(color));
+  return stops.length >= 2 ? stops : DEFAULT_CUSTOM_COLOR_STOPS;
 }
 
 function colorForCustomPosition(position: number, colors: string[]): Color | null {
