@@ -28,17 +28,6 @@ export function VisualEncodingControls({ dimensions, settings, onChange }: {
     setFpsInput(String(settings.playbackSpeed));
   }, [settings.playbackSpeed]);
 
-  useEffect(() => {
-    if (!settings.playing || !animation || steps.length < 2) return;
-    const timer = window.setTimeout(() => {
-      const next = step + 1;
-      if (next < steps.length) onChange({ ...settings, animationStep: next });
-      else if (settings.loop) onChange({ ...settings, animationStep: 0 });
-      else onChange({ ...settings, playing: false });
-    }, 1000 / settings.playbackSpeed);
-    return () => window.clearTimeout(timer);
-  }, [animation, onChange, settings, step, steps.length]);
-
   function chooseAnimation(name: string) {
     const next = dimensionByName(dimensions, name);
     onChange({
@@ -96,6 +85,7 @@ export function VisualEncodingControls({ dimensions, settings, onChange }: {
         {animation && <label>Mode<select aria-label="Animation mode" value={settings.animationMode} onChange={event => onChange({ ...settings, animationMode: event.target.value as VisualEncodingSettings["animationMode"] })}><option value="cumulative">Cumulative</option><option value="windowed">Windowed</option></select></label>}
         {animation && settings.animationMode === "windowed" && <label>Window<input aria-label="Animation window" type="number" min="1" max={Math.max(1, steps.length)} value={settings.windowSize} onChange={event => onChange({ ...settings, windowSize: Math.max(1, Number(event.target.value)) })} /></label>}
         {animation && <label>Speed (fps)<input aria-label="Animation speed" type="number" min="0.1" max="240" step="any" inputMode="decimal" value={fpsInput} onChange={event => updatePlaybackSpeed(event.target.value)} onBlur={normalizePlaybackSpeed} /></label>}
+        {animation && <label className="check"><input aria-label="Show animation controls on map" type="checkbox" checked={settings.showMapControls} onChange={event => onChange({ ...settings, showMapControls: event.target.checked })} /> Map controls</label>}
       </div>
       {color && paletteMode === "custom" && <div className="custom-palette-editor">
         <span className="custom-palette-label">Color sequence</span>
