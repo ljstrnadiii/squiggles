@@ -24,18 +24,50 @@
   display: none;
 }
 
-/* Keep the DuckDB/loading dot immediately beside the active map-view control. */
-body:has(.map-navigation-redesign-marker) .topbar .status {
+/* Status follows Save/Share on an owned map, or the view pill on a viewed map. */
+body:has(.map-navigation-redesign-marker) .topbar .map-owner-actions {
   order: 2;
+}
+body:has(.map-navigation-redesign-marker) .topbar .status {
+  order: 3;
   display: flex;
-  min-width: 8px;
+  min-width: 12px;
   min-height: 18px;
-  margin-left: -4px;
-  margin-right: -3px;
+  margin: 0;
 }
 body:has(.map-navigation-redesign-marker) .topbar .status > span {
   width: 6px;
   height: 6px;
+}
+body:has(.map-navigation-redesign-marker) .topbar .status.working > span {
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+  animation: squiggles-status-spin .72s linear infinite;
+}
+body:has(.map-navigation-redesign-marker) .topbar .status.working.duckdb-determinate > span {
+  position: relative;
+  border: 0;
+  background: conic-gradient(
+    var(--accent) var(--duckdb-progress, 0%),
+    color-mix(in srgb, var(--accent) 18%, transparent) 0
+  );
+  animation: none;
+}
+body:has(.map-navigation-redesign-marker) .topbar .status.working.duckdb-determinate > span::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: var(--panel);
+}
+
+@keyframes squiggles-status-spin {
+  to { transform: rotate(360deg); }
 }
 
 @media (max-width: 600px) {
@@ -55,7 +87,8 @@ body:has(.map-navigation-redesign-marker) .topbar .status > span {
 
   body:has(.map-navigation-redesign-marker) .topbar .status {
     display: flex;
-    min-width: 8px;
+    min-width: 12px;
+    margin: 0;
   }
 
   section.toolbar[aria-label="Query and map settings"]:not([data-panel-expanded]) {
