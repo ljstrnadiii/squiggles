@@ -3,41 +3,85 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MapNavigationEnhancements } from "./MapNavigationEnhancements";
 
+const likeMap = vi.fn(async () => undefined);
+const unlikeMap = vi.fn(async () => undefined);
+
 vi.mock("./auth", () => ({
+  clearSession: vi.fn(),
+  identityFromSession: () => ({ name: "Len", email: "len@example.com", picture: "https://example.test/len.jpg" }),
   loadSession: () => ({ accessToken: "access", idToken: "id" }),
   loadRuntimeConfig: async () => ({ apiUrl: "https://api.example.test", cognitoDomain: "", cognitoClientId: "" }),
 }));
 
 vi.mock("./mapIdentity", () => ({
+  likeMap: (...args: unknown[]) => likeMap(...args),
+  unlikeMap: (...args: unknown[]) => unlikeMap(...args),
   loadMapNavigation: async () => ({
     myMap: { mapId: "11111111-1111-1111-1111-111111111111", ownerDisplayName: "Len", viewerRole: "owner", url: "/m/11111111-1111-1111-1111-111111111111" },
     recentMaps: [
-      { mapId: "22222222-2222-2222-2222-222222222222", ownerDisplayName: "Martha", viewerRole: "viewer", url: "/m/22222222-2222-2222-2222-222222222222", lastViewedAt: "2026-09-12T12:00:00Z" },
       { mapId: "33333333-3333-3333-3333-333333333333", ownerDisplayName: "Alex", viewerRole: "viewer", url: "/m/33333333-3333-3333-3333-333333333333", lastViewedAt: "2026-09-11T12:00:00Z" },
     ],
   }),
 }));
 
-afterEach(() => cleanup());
+vi.mock("./storage", () => ({
+  mapStorageScope: () => "map:22222222-2222-2222-2222-222222222222",
+  loadTabs: () => [
+    { id: "all", title: "Map" },
+    { id: "years", title: "Over the years" },
+  ],
+}));
+
+afterEach(() => {
+  cleanup();
+  document.querySelector("header.topbar")?.remove();
+  likeMap.mockClear();
+  unlikeMap.mockClear();
+});
+
+function nativeHeader() {
+  const header = document.createElement("header");
+  header.className = "topbar";
+  header.innerHTML = `
+    <div class="brand"></div>
+    <button class="mobile-query-title">Over the years</button>
+    <button class="map-identity-button" aria-expanded="false">
+      <span class="map-owner-avatar"><img src="https://example.test/martha.jpg" /></span>
+      <strong>Martha</strong>
+    </button>`;
+  document.body.appendChild(header);
+  return header;
+}
 
 describe("MapNavigationEnhancements", () => {
-  it("replaces inline recents with a searchable recent-map picker", async () => {
-    window.history.replaceState({}, "", "/m/11111111-1111-1111-1111-111111111111");
-    const menu = document.createElement("nav");
-    menu.className = "account-menu";
-    menu.setAttribute("aria-label", "Map and account navigation");
-    document.body.appendChild(menu);
-
+  it("uses one map-context avatar and likes someone else's map", async () => {
+    window.history.replaceState({}, "", "/m/22222222-2222-2222-2222-222222222222");
+    nativeHeader();
     render(<MapNavigationEnhancements />);
-    const recent = await screen.findByRole("button", { name: "Recent maps (2)…" });
-    expect(screen.getByRole("button", { name: "Share map" })).toBeInTheDocument();
-    fireEvent.click(recent);
-    expect(screen.getByRole("dialog", { name: "Recent maps" })).toBeInTheDocument();
-    expect(screen.getByText("Martha")).toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText("Search people or map ID"), { target: { value: "Alex" } });
-    await waitFor(() => expect(screen.queryByText("Martha")).not.toBeInTheDocument());
-    expect(screen.getByText("Alex")).toBeInTheDocument();
 
-    menu.remove();
+    const context = await screen.findByRole("button", { name: "Open Martha map views" });
+    expect(screen.getByRole("button", { name: "Open account menu" })).toBeInTheDocument();
+    fireEvent.click(context);
+    expect(screen.getByRole("dialog", { name: "Map owner and views" })).toHaveTextContent("Martha");
+    expect(screen.getByRole("dialog", { name: "Map owner and views" })).toHaveTextContent("Over the years");
+
+    fireEvent.click(screen.getByRole("button", { name: /Like map/ }));
+    await waitFor(() => expect(likeMap).toHaveBeenCalledWith(expect.anything(), expect.anything(), "22222222-2222-2222-2222-222222222222"));
+  });
+
+  it("opens the flat settings menu and searchable Favorites", async () => {
+    window.history.replaceState({}, "", "/m/22222222-2222-2222-2222-222222222222");
+    nativeHeader();
+    render(<MapNavigationEnhancements />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open account menu" }));
+    const menu = screen.getByRole("navigation", { name: "Account navigation" });
+    expect(menu).toHaveTextContent("My mapFavoritesAccountUploadShareLogout");
+    expect(menu).not.toHaveTextContent("Recent");
+
+    fireEvent.click(screen.getByRole("button", { name: /Favorites/ }));
+    expect(screen.getByRole("dialog", { name: "Favorites" })).toHaveTextContent("Alex");
+    fireEvent.change(screen.getByPlaceholderText("Search favorites"), { target: { value: "nope" } });
+    await waitFor(() => expect(screen.queryByText("Alex")).not.toBeInTheDocument());
   });
 });
