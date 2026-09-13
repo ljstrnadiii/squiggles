@@ -1,8 +1,22 @@
 /* Keep drawer placement consistent across desktop and mobile. */
 
 /* Save state is shown by the button chrome, never by a colored glyph. */
-.map-save-icon.saved svg,
-.map-save-icon.dirty svg {
+.map-save-icon.saved {
+  border-color: color-mix(in srgb, #36c66b 55%, var(--line));
+  background: color-mix(in srgb, #36c66b 11%, var(--input));
+  color: var(--text);
+}
+.map-save-icon.view-dirty {
+  border-color: color-mix(in srgb, #f59e0b 62%, var(--line));
+  background: color-mix(in srgb, #f59e0b 12%, var(--input));
+  color: var(--text);
+}
+.map-save-icon.settings-dirty {
+  border-color: color-mix(in srgb, #dc4c4c 62%, var(--line));
+  background: color-mix(in srgb, #dc4c4c 11%, var(--input));
+  color: var(--text);
+}
+.map-save-icon svg {
   color: var(--text);
 }
 
