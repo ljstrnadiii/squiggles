@@ -127,13 +127,20 @@ body:has(.map-navigation-redesign-marker) .topbar .status { order: 2; }
 .map-like-action svg { width: 23px; height: 23px; }
 
 .map-view-list { display: grid; gap: 2px; padding-top: 3px; }
-.map-view-list button {
-  width: 100%;
+.map-view-row {
   min-height: 42px;
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) 22px;
+  grid-template-columns: minmax(0, 1fr) 34px;
   align-items: center;
-  gap: 10px;
+  border-radius: 9px;
+  overflow: hidden;
+}
+.map-view-row:hover,
+.map-view-row.active { background: var(--input); }
+.map-view-select,
+.map-new-view {
+  width: 100%;
+  min-height: 42px;
   padding: 8px 10px;
   border: 0;
   border-radius: 9px;
@@ -141,9 +148,22 @@ body:has(.map-navigation-redesign-marker) .topbar .status { order: 2; }
   text-align: left;
   font-size: 12px;
 }
-.map-view-list button:hover,
-.map-view-list button.active { background: var(--input); }
-.map-view-list button > svg:last-child { width: 18px; height: 18px; color: var(--accent); }
+.map-view-row .map-view-select { grid-column: 1; border-radius: 9px 0 0 9px; }
+.map-view-edit {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted) !important;
+}
+.map-view-edit:hover { background: var(--raised); color: var(--text) !important; }
+.map-view-edit svg { width: 17px; height: 17px; }
+.map-new-view { color: var(--muted) !important; }
+.map-new-view:hover { background: var(--input); color: var(--text) !important; }
 
 .maps-dialog-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 18px; background: rgba(4, 8, 7, .48); backdrop-filter: blur(4px); }
 .maps-dialog { width: min(560px, 100%); max-height: min(720px, calc(100dvh - 36px)); overflow: hidden; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 22px 70px rgba(0, 0, 0, .28); }
@@ -166,12 +186,45 @@ body:has(.map-navigation-redesign-marker) .topbar .status { order: 2; }
 .maps-dialog-avatar { width: 34px; height: 34px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; background: var(--raised); font-size: 11px; font-weight: 750; }
 .maps-dialog-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .maps-empty { margin: 14px; color: var(--muted); font-size: 11px; text-align: center; }
+
+.maps-pane {
+  position: fixed;
+  z-index: 60;
+  top: 54px;
+  right: 0;
+  bottom: 0;
+  width: min(480px, 44vw);
+  max-height: none;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: 0;
+  box-shadow: -18px 0 55px var(--shadow);
+  animation: drawer-right 160ms ease-out;
+}
+
 .share-map-dialog { width: min(520px, 100%); }
 .share-map-dialog > p { margin: 0; padding: 16px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .share-map-url { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 0 16px 16px; }
 .share-map-url button,
 .share-native { white-space: nowrap; }
 .share-native { margin: 0 16px 16px; }
+
+@media (max-width: 700px) {
+  .maps-pane {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    max-height: calc(100dvh - 54px);
+    border-top: 1px solid var(--line);
+    border-left: 0;
+    border-radius: 10px 10px 0 0;
+    box-shadow: 0 -18px 55px var(--shadow);
+    animation: drawer-bottom 160ms ease-out;
+  }
+}
 
 @media (max-width: 600px) {
   .map-context-trigger { max-width: calc(100vw - 112px); height: 34px; }
@@ -182,6 +235,6 @@ body:has(.map-navigation-redesign-marker) .topbar .status { order: 2; }
   .map-context-popover { top: 54px; left: 50%; width: min(410px, calc(100vw - 16px)); transform: translateX(-50%); }
   .simplified-account-menu { top: 54px; right: 6px; width: min(246px, calc(100vw - 12px)); }
   .maps-dialog-backdrop { align-items: end; padding: 0; }
-  .maps-dialog { width: 100%; max-height: 82dvh; border-radius: 14px 14px 0 0; border-left: 0; border-right: 0; border-bottom: 0; }
+  .maps-dialog:not(.maps-pane) { width: 100%; max-height: 82dvh; border-radius: 14px 14px 0 0; border-left: 0; border-right: 0; border-bottom: 0; }
   .share-map-url { grid-template-columns: 1fr; }
 }

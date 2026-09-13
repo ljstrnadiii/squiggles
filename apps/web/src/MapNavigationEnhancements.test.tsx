@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MapNavigationEnhancements } from "./MapNavigationEnhancements";
@@ -37,6 +37,8 @@ vi.mock("./storage", () => ({
 afterEach(() => {
   cleanup();
   document.querySelector("header.topbar")?.remove();
+  document.querySelector('nav.mobile-menu[aria-label="Query navigation"]')?.remove();
+  document.querySelector('section.toolbar[aria-label="Query and map settings"]')?.remove();
   mocks.likeMap.mockClear();
   mocks.unlikeMap.mockClear();
 });
@@ -46,13 +48,22 @@ function nativeHeader() {
   header.className = "topbar";
   header.innerHTML = `
     <div class="brand"></div>
-    <button class="mobile-query-title">Over the years</button>
+    <button class="mobile-query-title" aria-expanded="false">Over the years</button>
     <button class="map-identity-button" aria-expanded="false">
       <span class="map-owner-avatar"><img src="https://example.test/martha.jpg" /></span>
       <strong>Martha</strong>
     </button>`;
   document.body.appendChild(header);
   return header;
+}
+
+function nativeQueryNavigation() {
+  const menu = document.createElement("nav");
+  menu.className = "mobile-menu utility-panel";
+  menu.setAttribute("aria-label", "Query navigation");
+  menu.innerHTML = `<button>New query</button><button>Query settings</button>`;
+  document.body.appendChild(menu);
+  return menu;
 }
 
 describe("MapNavigationEnhancements", () => {
@@ -71,7 +82,7 @@ describe("MapNavigationEnhancements", () => {
     await waitFor(() => expect(mocks.likeMap).toHaveBeenCalledWith(expect.anything(), expect.anything(), "22222222-2222-2222-2222-222222222222"));
   });
 
-  it("opens the flat settings menu and searchable Favorites", async () => {
+  it("opens the flat settings menu and searchable Favorites without stealing focus", async () => {
     window.history.replaceState({}, "", "/m/22222222-2222-2222-2222-222222222222");
     nativeHeader();
     render(<MapNavigationEnhancements />);
@@ -82,8 +93,45 @@ describe("MapNavigationEnhancements", () => {
     expect(menu).not.toHaveTextContent("Recent");
 
     fireEvent.click(screen.getByRole("button", { name: /Favorites/ }));
-    expect(screen.getByRole("dialog", { name: "Favorites" })).toHaveTextContent("Alex");
-    fireEvent.change(screen.getByPlaceholderText("Search favorites"), { target: { value: "nope" } });
+    const favorites = screen.getByRole("dialog", { name: "Favorites" });
+    expect(favorites).toHaveClass("maps-pane");
+    expect(favorites).toHaveTextContent("Alex");
+    const search = screen.getByPlaceholderText("Search favorites");
+    expect(search).not.toHaveFocus();
+    fireEvent.change(search, { target: { value: "nope" } });
     await waitFor(() => expect(screen.queryByText("Alex")).not.toBeInTheDocument());
+  });
+
+  it("keeps map views simple and exposes edit and new-map actions for the owner", async () => {
+    window.history.replaceState({}, "", "/m/11111111-1111-1111-1111-111111111111");
+    const header = nativeHeader();
+    const navigation = nativeQueryNavigation();
+    const nativeTrigger = header.querySelector<HTMLButtonElement>("button.mobile-query-title")!;
+    const querySettings = [...navigation.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Query settings")!;
+    const newQuery = [...navigation.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "New query")!;
+    const triggerClicked = vi.fn();
+    const settingsClicked = vi.fn();
+    const newQueryClicked = vi.fn();
+    nativeTrigger.addEventListener("click", triggerClicked);
+    querySettings.addEventListener("click", settingsClicked);
+    newQuery.addEventListener("click", newQueryClicked);
+    render(<MapNavigationEnhancements />);
+
+    const context = await screen.findByRole("button", { name: "Open Len map views" });
+    fireEvent.click(context);
+    const dropdown = screen.getByRole("dialog", { name: "Map owner and views" });
+    const currentView = within(dropdown).getByRole("button", { name: "Over the years" });
+    expect(currentView.querySelector("svg")).toBeNull();
+    expect(within(dropdown).getByRole("button", { name: "Edit current map" })).toBeInTheDocument();
+    expect(within(dropdown).getByRole("button", { name: "+ New map" })).toBeInTheDocument();
+
+    fireEvent.click(within(dropdown).getByRole("button", { name: "Edit current map" }));
+    await waitFor(() => expect(settingsClicked).toHaveBeenCalledTimes(1));
+    expect(triggerClicked).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(context);
+    const reopened = screen.getByRole("dialog", { name: "Map owner and views" });
+    fireEvent.click(within(reopened).getByRole("button", { name: "+ New map" }));
+    await waitFor(() => expect(newQueryClicked).toHaveBeenCalledTimes(1));
   });
 });
