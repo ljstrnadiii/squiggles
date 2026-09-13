@@ -74,8 +74,16 @@ export function isVisualPalette(value: unknown): value is VisualPalette {
 }
 
 export function persistedVisualEncoding(settings: VisualEncodingSettings): PersistedVisualEncodingSettings {
-  const { animationStep: _animationStep, playing: _playing, ...persisted } = settings;
-  return persisted;
+  return {
+    animateBy: settings.animateBy,
+    animationMode: settings.animationMode,
+    windowSize: settings.windowSize,
+    playbackSpeed: settings.playbackSpeed,
+    loop: settings.loop,
+    showMapControls: settings.showMapControls,
+    colorBy: settings.colorBy,
+    palette: settings.palette,
+  };
 }
 
 export function visualEncodingFromPersisted(settings?: Partial<PersistedVisualEncodingSettings>): VisualEncodingSettings {
