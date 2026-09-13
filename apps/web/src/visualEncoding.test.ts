@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QueryDimension } from "./contracts";
-import { activityVisible, colorForVisualDimension, DEFAULT_VISUAL_ENCODING, reconcileVisualEncoding } from "./visualEncoding";
+import { activityVisible, colorForVisualDimension, customPalette, DEFAULT_VISUAL_ENCODING, reconcileVisualEncoding, visualPaletteStops } from "./visualEncoding";
 
 const month: QueryDimension = {
   name: "month",
@@ -22,6 +22,20 @@ describe("query visual encoding", () => {
   it("maps categorical values to stable palette colors", () => {
     const sport: QueryDimension = { name: "sport", kind: "categorical", values: { a: "run", b: "ride" }, steps: ["ride", "run"] };
     expect(colorForVisualDimension(sport, "a", "viridis")).not.toEqual(colorForVisualDimension(sport, "b", "viridis"));
+  });
+
+  it("interpolates custom color sequences", () => {
+    const category: QueryDimension = {
+      name: "category",
+      kind: "categorical",
+      values: { a: "low", b: "middle", c: "high" },
+      steps: ["low", "middle", "high"],
+    };
+    const palette = customPalette(["#ff0000", "#ffffff", "#0000ff"]);
+    expect(visualPaletteStops(palette)).toEqual(["#ff0000", "#ffffff", "#0000ff"]);
+    expect(colorForVisualDimension(category, "a", palette)).toEqual([255, 0, 0, 255]);
+    expect(colorForVisualDimension(category, "b", palette)).toEqual([255, 255, 255, 255]);
+    expect(colorForVisualDimension(category, "c", palette)).toEqual([0, 0, 255, 255]);
   });
 
   it("drops encodings that are absent from a new query", () => {
