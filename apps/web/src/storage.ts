@@ -63,7 +63,8 @@ export function mapStorageScope(pathname = window.location.pathname, search = wi
   const publicMapId = /^\/p\/([a-z0-9]{8})\/?$/i.exec(pathname)?.[1];
   if (publicMapId) return `published:${publicMapId.toLowerCase()}`;
   const local = new URLSearchParams(search).get("dataset");
-  return local && /^[a-zA-Z0-9_-]+$/.test(local) ? `local:${local}` : "home";
+  if (local && /^[a-zA-Z0-9_-]+$/.test(local)) return `local:${local}`;
+  return pathname === "/" ? "home" : "invalid-route";
 }
 
 export function loadTabs(scope = "home"): QueryTab[] {
