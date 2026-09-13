@@ -128,22 +128,51 @@ async function expandedFavorites(subject, baseResult) {
   };
 }
 
+function datasetTimestamp(dataset, records) {
+  const direct = dataset.updatedAt?.S ?? dataset.createdAt?.S;
+  if (direct) return direct;
+  const datasetId = dataset.datasetId?.S ?? (dataset.SK?.S?.startsWith("DATASET#") ? dataset.SK.S.slice(8) : "");
+  const upload = datasetId ? records.find(item => item.SK?.S === `UPLOAD#${datasetId}`) : null;
+  return upload?.updatedAt?.S ?? upload?.createdAt?.S ?? "";
+}
+
 async function repairLegacyDataset(reference) {
   const context = await mapReference(reference);
   if (!context?.ownerSubject) return;
   const records = await userPartition(context.ownerSubject);
-  if (records.some(item => item.entityType?.S === "dataset" && item.status?.S === "ready")) return;
-  const legacy = records
-    .filter(item => item.entityType?.S === "dataset" && (!item.status?.S || item.status?.S === "completed"))
-    .sort((a, b) => (b.updatedAt?.S ?? b.createdAt?.S ?? "").localeCompare(a.updatedAt?.S ?? a.createdAt?.S ?? ""))[0];
-  if (!legacy?.PK || !legacy?.SK) return;
-  await dynamo.send(new UpdateItemCommand({
-    TableName: tableName,
-    Key: { PK: legacy.PK, SK: legacy.SK },
-    UpdateExpression: "SET #status = :ready, updatedAt = if_not_exists(updatedAt, :now)",
-    ExpressionAttributeNames: { "#status": "status" },
-    ExpressionAttributeValues: { ":ready": { S: "ready" }, ":now": { S: new Date().toISOString() } },
-  }));
+  let ready = records.filter(item => item.entityType?.S === "dataset" && item.status?.S === "ready");
+  if (!ready.length) {
+    const legacy = records
+      .filter(item => item.entityType?.S === "dataset" && (!item.status?.S || item.status?.S === "completed"))
+      .sort((a, b) => datasetTimestamp(b, records).localeCompare(datasetTimestamp(a, records)))[0];
+    if (legacy?.PK && legacy?.SK) {
+      const timestamp = datasetTimestamp(legacy, records) || new Date().toISOString();
+      await dynamo.send(new UpdateItemCommand({
+        TableName: tableName,
+        Key: { PK: legacy.PK, SK: legacy.SK },
+        UpdateExpression: "SET #status = :ready, createdAt = if_not_exists(createdAt, :timestamp), updatedAt = if_not_exists(updatedAt, :timestamp)",
+        ExpressionAttributeNames: { "#status": "status" },
+        ExpressionAttributeValues: { ":ready": { S: "ready" }, ":timestamp": { S: timestamp } },
+      }));
+      legacy.status = { S: "ready" };
+      legacy.createdAt ??= { S: timestamp };
+      legacy.updatedAt ??= { S: timestamp };
+      ready = [legacy];
+    }
+  }
+
+  await Promise.all(ready
+    .filter(item => !item.updatedAt?.S || !item.createdAt?.S)
+    .map(async item => {
+      const timestamp = datasetTimestamp(item, records);
+      if (!timestamp || !item.PK || !item.SK) return;
+      await dynamo.send(new UpdateItemCommand({
+        TableName: tableName,
+        Key: { PK: item.PK, SK: item.SK },
+        UpdateExpression: "SET createdAt = if_not_exists(createdAt, :timestamp), updatedAt = if_not_exists(updatedAt, :timestamp)",
+        ExpressionAttributeValues: { ":timestamp": { S: timestamp } },
+      }));
+    }));
 }
 
 async function safeSend(key, email, stage) {
