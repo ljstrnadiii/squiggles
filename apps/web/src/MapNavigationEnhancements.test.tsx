@@ -11,6 +11,7 @@ const mockTabs = [
 const mocks = vi.hoisted(() => ({
   likeMap: vi.fn(async (...args: [unknown, unknown, string]) => { void args; }),
   unlikeMap: vi.fn(async (...args: [unknown, unknown, string]) => { void args; }),
+  saveTabs: vi.fn(),
 }));
 
 vi.mock("./auth", () => ({
@@ -46,6 +47,7 @@ vi.mock("./publishing", () => ({
 vi.mock("./storage", () => ({
   mapStorageScope: () => "map:22222222-2222-2222-2222-222222222222",
   loadTabs: () => mockTabs,
+  saveTabs: (...args: unknown[]) => mocks.saveTabs(...args),
 }));
 
 afterEach(() => {
@@ -55,6 +57,7 @@ afterEach(() => {
   document.querySelector('section.toolbar[aria-label="Query and map settings"]')?.remove();
   mocks.likeMap.mockClear();
   mocks.unlikeMap.mockClear();
+  mocks.saveTabs.mockClear();
 });
 
 function nativeHeader() {
@@ -133,7 +136,7 @@ describe("MapNavigationEnhancements", () => {
     await waitFor(() => expect(mapClicked).toHaveBeenCalledTimes(1));
   });
 
-  it("keeps map views simple and puts owner-only save and share beside the view control", async () => {
+  it("syncs published views into the scoped store and puts owner-only save and share beside the view control", async () => {
     window.history.replaceState({}, "", "/m/11111111-1111-1111-1111-111111111111");
     const header = nativeHeader();
     const navigation = nativeQueryNavigation();
@@ -149,7 +152,8 @@ describe("MapNavigationEnhancements", () => {
     render(<MapNavigationEnhancements />);
 
     const context = await screen.findByRole("button", { name: "Open Len map views" });
-    expect(await screen.findByRole("button", { name: "Saved — no unsaved query settings" })).toHaveClass("saved");
+    expect(await screen.findByRole("button", { name: "Saved — map settings and view are up to date" })).toHaveClass("saved");
+    await waitFor(() => expect(mocks.saveTabs).toHaveBeenCalledWith(mockTabs, "map:22222222-2222-2222-2222-222222222222"));
     expect(screen.getByRole("button", { name: "Share map" })).toBeInTheDocument();
 
     fireEvent.click(context);
