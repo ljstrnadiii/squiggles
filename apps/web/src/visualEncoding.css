@@ -17,6 +17,29 @@
 .animation-control { align-items: center; display: grid; gap: 8px; grid-template-columns: auto minmax(100px, 1fr) auto auto; }
 .animation-control input[type="range"] { width: 100%; }
 .animation-control output { font-variant-numeric: tabular-nums; min-width: 70px; }
+.custom-palette-editor { display: grid; gap: 7px; }
+.custom-palette-label { font-size: 12px; font-weight: 600; }
+.custom-color-stops { align-items: flex-start; display: flex; flex-wrap: wrap; gap: 8px; }
+.custom-color-stop { display: grid; gap: 4px; justify-items: center; }
+.custom-color-stop input[type="color"] {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  height: 32px;
+  padding: 2px;
+  width: 42px;
+}
+.custom-color-stop-actions { display: flex; gap: 2px; }
+.custom-color-stop-actions button {
+  font-size: 11px;
+  line-height: 1;
+  min-height: 22px;
+  min-width: 22px;
+  padding: 3px 5px;
+}
+.add-color-stop { min-height: 32px; }
+.custom-palette-editor small { color: var(--muted); }
 .dimension-legend { display: flex; flex-wrap: wrap; gap: 8px 12px; }
 .dimension-legend span { align-items: center; display: inline-flex; gap: 5px; font-size: 12px; }
 .dimension-legend i { border-radius: 999px; display: inline-block; height: 9px; width: 9px; }
