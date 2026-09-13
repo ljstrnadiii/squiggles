@@ -17,13 +17,6 @@ const mocks = vi.hoisted(() => ({
   createMapView: vi.fn(),
   openMapStatistics: vi.fn(),
   openMapTable: vi.fn(),
-  viewState: {
-    activeId: "years",
-    views: [
-      { id: "all", title: "Map" },
-      { id: "years", title: "Over the years" },
-    ],
-  },
 }));
 
 vi.mock("./auth", () => ({
@@ -45,15 +38,24 @@ vi.mock("./mapIdentity", () => ({
   }),
 }));
 
-vi.mock("./mapViewController", () => ({
-  mapViewNavigationState: () => mocks.viewState,
-  subscribeMapViewNavigation: () => () => undefined,
-  selectMapView: (...args: unknown[]) => mocks.selectMapView(...args),
-  editMapView: (...args: unknown[]) => mocks.editMapView(...args),
-  createMapView: (...args: unknown[]) => mocks.createMapView(...args),
-  openMapStatistics: (...args: unknown[]) => mocks.openMapStatistics(...args),
-  openMapTable: (...args: unknown[]) => mocks.openMapTable(...args),
-}));
+vi.mock("./mapViewController", () => {
+  const viewState = {
+    activeId: "years",
+    views: [
+      { id: "all", title: "Map" },
+      { id: "years", title: "Over the years" },
+    ],
+  };
+  return {
+    mapViewNavigationState: () => viewState,
+    subscribeMapViewNavigation: () => () => undefined,
+    selectMapView: (...args: unknown[]) => mocks.selectMapView(...args),
+    editMapView: (...args: unknown[]) => mocks.editMapView(...args),
+    createMapView: (...args: unknown[]) => mocks.createMapView(...args),
+    openMapStatistics: (...args: unknown[]) => mocks.openMapStatistics(...args),
+    openMapTable: (...args: unknown[]) => mocks.openMapTable(...args),
+  };
+});
 
 vi.mock("./publishing", () => ({
   loadPublishedView: async () => ({
