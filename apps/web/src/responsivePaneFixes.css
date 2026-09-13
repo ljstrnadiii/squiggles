@@ -24,20 +24,19 @@
   display: none;
 }
 
-.map-login-trigger {
-  order: 4;
-  flex: none;
-  margin-left: auto;
-  padding: .42rem .72rem;
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  background: color-mix(in srgb, var(--input) 88%, transparent);
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 700;
+/* Keep the DuckDB/loading dot immediately beside the active map-view control. */
+body:has(.map-navigation-redesign-marker) .topbar .status {
+  order: 2;
+  display: flex;
+  min-width: 8px;
+  min-height: 18px;
+  margin-left: -4px;
+  margin-right: -3px;
 }
-.map-login-trigger:hover { background: var(--input); }
-.topbar:not(:has(.map-context-trigger)) .map-login-trigger { display: none; }
+body:has(.map-navigation-redesign-marker) .topbar .status > span {
+  width: 6px;
+  height: 6px;
+}
 
 @media (max-width: 600px) {
   .account-panel {
@@ -54,14 +53,9 @@
     animation: drawer-bottom 160ms ease-out;
   }
 
-  /* The loading/duckdb status dot should be as visible on phones as it is on desktop. */
   body:has(.map-navigation-redesign-marker) .topbar .status {
     display: flex;
-    min-width: 16px;
-  }
-
-  .map-login-trigger {
-    padding: .38rem .62rem;
+    min-width: 8px;
   }
 
   section.toolbar[aria-label="Query and map settings"]:not([data-panel-expanded]) {
