@@ -30,18 +30,21 @@ body:has(.map-navigation-redesign-marker) .topbar .map-owner-actions {
 }
 body:has(.map-navigation-redesign-marker) .topbar .status {
   order: 3;
-  display: flex;
+  display: none;
   min-width: 12px;
   min-height: 18px;
   margin: 0;
 }
-body:has(.map-navigation-redesign-marker) .topbar .status > span {
-  width: 6px;
-  height: 6px;
+body:has(.map-navigation-redesign-marker) .topbar .status.working,
+body:has(.map-navigation-redesign-marker) .topbar .status.duckdb-active {
+  display: flex;
 }
-body:has(.map-navigation-redesign-marker) .topbar .status.working > span {
+body:has(.map-navigation-redesign-marker) .topbar .status > span {
   width: 12px;
   height: 12px;
+}
+body:has(.map-navigation-redesign-marker) .topbar .status.working > span,
+body:has(.map-navigation-redesign-marker) .topbar .status.duckdb-active > span {
   border: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
   border-top-color: var(--accent);
   border-radius: 50%;
@@ -49,7 +52,7 @@ body:has(.map-navigation-redesign-marker) .topbar .status.working > span {
   box-shadow: none;
   animation: squiggles-status-spin .72s linear infinite;
 }
-body:has(.map-navigation-redesign-marker) .topbar .status.working.duckdb-determinate > span {
+body:has(.map-navigation-redesign-marker) .topbar .status.duckdb-determinate > span {
   position: relative;
   border: 0;
   background: conic-gradient(
@@ -58,7 +61,7 @@ body:has(.map-navigation-redesign-marker) .topbar .status.working.duckdb-determi
   );
   animation: none;
 }
-body:has(.map-navigation-redesign-marker) .topbar .status.working.duckdb-determinate > span::after {
+body:has(.map-navigation-redesign-marker) .topbar .status.duckdb-determinate > span::after {
   content: "";
   position: absolute;
   inset: 2px;
@@ -86,9 +89,13 @@ body:has(.map-navigation-redesign-marker) .topbar .status.working.duckdb-determi
   }
 
   body:has(.map-navigation-redesign-marker) .topbar .status {
-    display: flex;
+    display: none;
     min-width: 12px;
     margin: 0;
+  }
+  body:has(.map-navigation-redesign-marker) .topbar .status.working,
+  body:has(.map-navigation-redesign-marker) .topbar .status.duckdb-active {
+    display: flex;
   }
 
   section.toolbar[aria-label="Query and map settings"]:not([data-panel-expanded]) {
