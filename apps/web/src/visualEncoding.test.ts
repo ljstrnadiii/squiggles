@@ -19,8 +19,10 @@ describe("query visual encoding", () => {
     expect(activityVisible(month, windowed, "b")).toBe(true);
   });
 
-  it("keeps map animation controls opt-in by default", () => {
+  it("keeps map animation controls opt-in by default and preserves the preference", () => {
     expect(DEFAULT_VISUAL_ENCODING.showMapControls).toBe(false);
+    const settings = { ...DEFAULT_VISUAL_ENCODING, animateBy: "month", showMapControls: true };
+    expect(reconcileVisualEncoding(settings, [month]).showMapControls).toBe(true);
   });
 
   it("maps categorical values to stable palette colors", () => {
