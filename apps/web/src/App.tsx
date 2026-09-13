@@ -28,6 +28,7 @@ import { loadSystemResolution, saveSystemResolution } from "./resolution";
 import { rasterStyles } from "./mapSources";
 import { recordRenderingDiagnostics } from "./diagnosticState";
 import { VisualEncodingControls } from "./VisualEncodingControls";
+import { AnimationMapControls } from "./AnimationMapControls";
 import { activityVisible, colorForVisualDimension, DEFAULT_VISUAL_ENCODING, dimensionByName, reconcileVisualEncoding, type VisualEncodingSettings } from "./visualEncoding";
 import { loadMapNavigation, rememberLocalMap, type MapIdentity, type MapNavigation } from "./mapIdentity";
 import { clearMapViewActions, setMapViewActions, updateMapViewNavigation } from "./mapViewController";
@@ -810,6 +811,18 @@ export function App() {
   }), [tableActivities, tableDescending, tableSort]);
 
   const animationDimension = useMemo(() => dimensionByName(queryDimensions, visualEncoding.animateBy), [queryDimensions, visualEncoding.animateBy]);
+  useEffect(() => {
+    const steps = animationDimension?.steps ?? [];
+    if (!visualEncoding.playing || !animationDimension || steps.length < 2) return;
+    const step = Math.max(0, Math.min(steps.length - 1, visualEncoding.animationStep));
+    const timer = window.setTimeout(() => {
+      const next = step + 1;
+      if (next < steps.length) setVisualEncoding(current => ({ ...current, animationStep: next }));
+      else if (visualEncoding.loop) setVisualEncoding(current => ({ ...current, animationStep: 0 }));
+      else setVisualEncoding(current => ({ ...current, playing: false }));
+    }, 1000 / visualEncoding.playbackSpeed);
+    return () => window.clearTimeout(timer);
+  }, [animationDimension, visualEncoding.animationStep, visualEncoding.loop, visualEncoding.playbackSpeed, visualEncoding.playing]);
   const colorDimension = useMemo(() => dimensionByName(queryDimensions, visualEncoding.colorBy), [queryDimensions, visualEncoding.colorBy]);
   const heatActive = tab.style.heatEnabled && !colorDimension;
   const overviewBatches = useMemo(() => isolateSelected ? [] : routeBatches, [isolateSelected, routeBatches]);
@@ -951,6 +964,7 @@ export function App() {
           updateView({ ...viewRef.current, longitude: next.longitude, latitude: next.latitude, zoom: next.zoom });
         }} onClick={info => { if (spatialDrawing) { const coordinate = info.coordinate; if (coordinate && coordinate.length >= 2) { const longitude = coordinate[0], latitude = coordinate[1]; if (longitude !== undefined && latitude !== undefined) setSpatialDraft(previous => [...previous, [longitude, latitude]]); } return; } if (!info.layer) { setSelected(null); setProfileHover(null); } }} />
       </>}
+      {!spatialDrawing && animationDimension && visualEncoding.showMapControls && animationDimension.steps.length > 0 && <AnimationMapControls dimension={animationDimension} settings={visualEncoding} onChange={setVisualEncoding} />}
       {spatialDrawing && <><div className="spatial-draw-tools" role="group" aria-label="Polygon drawing controls"><button aria-label="Undo last polygon vertex" title="Undo last point" disabled={spatialDraft.length === 0} onClick={() => setSpatialDraft(previous => previous.slice(0, -1))}>↶</button><button className="accept" aria-label="Accept polygon" title="Accept polygon" disabled={spatialDraft.length < 3} onClick={acceptSpatialDraw}>✓</button></div><div className="spatial-draw-hint">Tap the map to add polygon vertices · ↶ undo · ✓ apply</div></>}
       {!spatialDrawing && hover?.origin === "map" && <div className="tooltip" style={{ left: hover.x + 12, top: hover.y + 12 }}><strong>{hover.item.name}</strong><span>{hover.item.sportType} · {hover.item.startTime?.slice(0, 10)}</span><span>{distance(hover.item.distanceM ?? 0)} · {elevation(hover.item.elevationGainM ?? 0)} gain</span></div>}
     </section>

@@ -11,6 +11,7 @@ export type VisualEncodingSettings = {
   playbackSpeed: number;
   playing: boolean;
   loop: boolean;
+  showMapControls: boolean;
   colorBy: string;
   palette: VisualPalette;
 };
@@ -25,6 +26,7 @@ export const DEFAULT_VISUAL_ENCODING: VisualEncodingSettings = {
   playbackSpeed: 2,
   playing: false,
   loop: true,
+  showMapControls: false,
   colorBy: "",
   palette: "viridis",
 };
