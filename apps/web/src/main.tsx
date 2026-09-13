@@ -12,5 +12,9 @@ import "./responsivePaneFixes.css";
 import "./spatial.css";
 import "./mapDisclosure.css";
 
+if (/^\/m\/[0-9a-f-]{36}\/?$/i.test(window.location.pathname)) {
+  window.history.replaceState({}, "", "/");
+}
+
 initErrorTelemetry();
 createRoot(document.getElementById("root")!).render(<StrictMode><><App /><PanelEnhancements /><MapNavigationEnhancements /></></StrictMode>);
