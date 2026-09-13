@@ -6,6 +6,10 @@
   color: var(--text);
 }
 
+.map-context-chevron {
+  display: none;
+}
+
 @media (max-width: 600px) {
   .account-panel {
     top: auto;
