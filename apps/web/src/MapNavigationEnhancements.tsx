@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { clearSession, identityFromSession, loadRuntimeConfig, loadSession } from "./auth";
+import type { QueryTab } from "./contracts";
 import { likeMap, loadMapNavigation, unlikeMap, type MapNavigation } from "./mapIdentity";
+import { loadPublishedView } from "./publishing";
 import { loadTabs, mapStorageScope } from "./storage";
 
 type IconName = "map" | "star" | "user" | "upload" | "save" | "share" | "logout" | "heart" | "edit";
@@ -13,7 +15,7 @@ function Icon({ name }: { name: IconName }) {
   if (name === "star") return <svg {...common}><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/></svg>;
   if (name === "user") return <svg {...common}><circle cx="12" cy="8" r="3.2"/><path d="M5.5 20c.6-4 2.8-6 6.5-6s5.9 2 6.5 6"/></svg>;
   if (name === "upload") return <svg {...common}><path d="M12 16V5m0 0L8 9m4-4 4 4"/><path d="M5 13a4 4 0 0 0 .5 8h13a3.5 3.5 0 0 0 .5-7 7 7 0 0 0-13.4-2"/></svg>;
-  if (name === "save") return <svg {...common}><path d="M12 3v12m0 0-4-4m4 4 4-4"/><path d="M5 18v3h14v-3"/></svg>;
+  if (name === "save") return <svg {...common}><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 14h8v7H8Z"/></svg>;
   if (name === "share") return <svg {...common}><circle cx="6" cy="12" r="2.2"/><circle cx="18" cy="6" r="2.2"/><circle cx="18" cy="18" r="2.2"/><path d="m8 11 8-4m-8 6 8 4"/></svg>;
   if (name === "logout") return <svg {...common}><path d="M10 4H5v16h5"/><path d="M13 8l4 4-4 4m4-4H9"/></svg>;
   if (name === "heart") return <svg {...common}><path d="M20.5 9.5c0 5-8.5 10-8.5 10s-8.5-5-8.5-10A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 8.5 2.5Z"/></svg>;
@@ -30,6 +32,10 @@ function nativeQueryButton() {
 
 function currentMapId() {
   return /^\/m\/([0-9a-f-]{36})\/?$/i.exec(window.location.pathname)?.[1] ?? null;
+}
+
+function mapDefinitionSignature(tabs: QueryTab[]) {
+  return JSON.stringify(tabs.map(tab => ({ id: tab.id, title: tab.title, sql: tab.sql, style: tab.style, spatialFilter: tab.spatialFilter })));
 }
 
 function Avatar({ name, url, className = "maps-dialog-avatar" }: { name: string; url?: string; className?: string }) {
@@ -70,6 +76,20 @@ function createNewMapView() {
   window.setTimeout(() => queryNavigationButton("New query")?.click(), 0);
 }
 
+function chooseNativeMapView(id: string) {
+  const trigger = nativeQueryButton();
+  if (!trigger) return;
+  const tabs = loadTabs(mapStorageScope());
+  const index = tabs.findIndex(tab => tab.id === id);
+  if (index < 0) return;
+  if (trigger.getAttribute("aria-expanded") !== "true") trigger.click();
+  window.setTimeout(() => {
+    const section = document.querySelector<HTMLElement>('nav.mobile-menu[aria-label="Query navigation"] section:first-child');
+    const buttons = section ? [...section.querySelectorAll<HTMLButtonElement>("button")] : [];
+    buttons[index]?.click();
+  }, 0);
+}
+
 export function MapNavigationEnhancements() {
   const [topbar, setTopbar] = useState<HTMLElement | null>(() => document.querySelector<HTMLElement>("header.topbar"));
   const [navigation, setNavigation] = useState<MapNavigation | null>(null);
@@ -81,6 +101,9 @@ export function MapNavigationEnhancements() {
   const [copied, setCopied] = useState(false);
   const [domVersion, setDomVersion] = useState(0);
   const [pendingLike, setPendingLike] = useState(false);
+  const [savedSignature, setSavedSignature] = useState<string | null>(null);
+  const [currentSignature, setCurrentSignature] = useState(() => mapDefinitionSignature(loadTabs(mapStorageScope())));
+  const [saving, setSaving] = useState(false);
 
   const session = loadSession();
   const sessionIdentity = identityFromSession(session);
@@ -127,6 +150,25 @@ export function MapNavigationEnhancements() {
   const currentViewName = nativeQueryButton()?.textContent?.trim() || "Map";
   const views = useMemo(() => loadTabs(mapStorageScope()).map(tab => ({ id: tab.id, title: tab.title })), [domVersion, path]);
   const favorite = Boolean(mapId && navigation?.recentMaps.some(map => map.mapId === mapId));
+  const saveDirty = savedSignature !== null && currentSignature !== savedSignature;
+
+  useEffect(() => {
+    if (!viewingOwnMap || !mapId) { setSavedSignature(null); return; }
+    let cancelled = false;
+    void loadRuntimeConfig()
+      .then(config => config ? loadPublishedView(config, mapId) : null)
+      .then(saved => { if (!cancelled && saved) setSavedSignature(mapDefinitionSignature(saved.tabs)); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [mapId, viewingOwnMap]);
+
+  useEffect(() => {
+    if (!viewingOwnMap) return;
+    const update = () => setCurrentSignature(mapDefinitionSignature(loadTabs(mapStorageScope())));
+    update();
+    const timer = window.setInterval(update, 400);
+    return () => window.clearInterval(timer);
+  }, [mapId, viewingOwnMap]);
 
   const filteredFavorites = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -149,10 +191,24 @@ export function MapNavigationEnhancements() {
     } finally { setPendingLike(false); }
   };
 
-  const chooseView = (id: string) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("tab", id);
-    window.location.assign(url);
+  const saveMap = async () => {
+    if (!viewingOwnMap || !mapId || saving) return;
+    const target = mapDefinitionSignature(loadTabs(mapStorageScope()));
+    setSaving(true);
+    runNativeAccountAction(["Save view"]);
+    try {
+      const config = await loadRuntimeConfig();
+      if (!config) return;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 350));
+        const saved = await loadPublishedView(config, mapId);
+        const signature = mapDefinitionSignature(saved.tabs);
+        setSavedSignature(signature);
+        if (signature === target) break;
+      }
+    } catch {
+      // The native save path owns user-facing errors; leave the dirty state unchanged.
+    } finally { setSaving(false); }
   };
 
   const canonicalShareUrl = mapId ? new URL(`/m/${mapId}`, window.location.origin).toString() : window.location.href;
@@ -171,10 +227,10 @@ export function MapNavigationEnhancements() {
     <button onClick={() => { setFavoritesOpen(true); setSettingsOpen(false); setQuery(""); }}><Icon name="star"/><span>Favorites</span></button>
     <button onClick={() => { setSettingsOpen(false); runNativeAccountAction(["Account"]); }}><Icon name="user"/><span>Account</span></button>
     <button onClick={() => { setSettingsOpen(false); runNativeAccountAction(["Upload Archive"]); }}><Icon name="upload"/><span>Upload</span></button>
-    {viewingOwnMap && <button onClick={() => { setSettingsOpen(false); runNativeAccountAction(["Save view"]); }}><Icon name="save"/><span>Save</span></button>}
-    <button onClick={() => { setShareOpen(true); setSettingsOpen(false); }}><Icon name="share"/><span>Share</span></button>
     <button onClick={() => { clearSession(); window.location.assign("/"); }}><Icon name="logout"/><span>Logout</span></button>
   </>;
+
+  const saveExplanation = saving ? "Saving map…" : saveDirty ? "Unsaved changes — save this map" : "Saved — no unsaved query settings";
 
   return <>
     <span className="map-navigation-redesign-marker" hidden />
@@ -183,6 +239,10 @@ export function MapNavigationEnhancements() {
         <Avatar name={ownerName} url={ownerAvatarUrl} className="map-context-avatar" />
         <strong>{currentViewName}</strong><span className="map-context-chevron" aria-hidden="true">⌄</span>
       </button>}
+      {mapId && viewingOwnMap && <div className="map-owner-actions">
+        <button className={`map-owner-icon map-save-icon ${saveDirty ? "dirty" : "saved"}`} aria-label={saveExplanation} title={saveExplanation} disabled={saving} onClick={() => void saveMap()}><Icon name="save"/></button>
+        <button className="map-owner-icon" aria-label="Share map" title="Share this map" onClick={() => { setShareOpen(true); setSettingsOpen(false); setContextOpen(false); }}><Icon name="share"/></button>
+      </div>}
       {session && <button className={`app-settings-trigger ${settingsOpen ? "active" : ""}`} aria-label="Open account menu" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); setContextOpen(false); }}><span aria-hidden="true">⋮</span></button>}
     </>, topbar)}
 
@@ -193,7 +253,7 @@ export function MapNavigationEnhancements() {
         {views.map(view => {
           const active = view.title === currentViewName;
           return <div className={`map-view-row ${active ? "active" : ""}`} key={view.id}>
-            <button className="map-view-select" onClick={() => { setContextOpen(false); if (!active) chooseView(view.id); }}>{view.title}</button>
+            <button className="map-view-select" onClick={() => { setContextOpen(false); if (!active) chooseNativeMapView(view.id); }}>{view.title}</button>
             {viewingOwnMap && active && <button className="map-view-edit" aria-label="Edit current map" onClick={() => { setContextOpen(false); toggleNativeQuerySettings(); }}><Icon name="edit"/></button>}
           </div>;
         })}
