@@ -105,7 +105,8 @@ body:has(.map-navigation-redesign-marker) .topbar .status { order: 2; }
 .map-owner-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .map-owner-heading small { color: var(--muted); font-size: 10px; }
 
-.map-like-action {
+.map-like-action,
+.map-edit-action {
   width: 100%;
   min-height: 52px;
   display: grid;
@@ -119,12 +120,17 @@ body:has(.map-navigation-redesign-marker) .topbar .status { order: 2; }
   text-align: left;
 }
 .map-like-action:hover,
-.map-like-action.active { background: var(--input); }
+.map-like-action.active,
+.map-edit-action:hover { background: var(--input); }
 .map-like-action.active svg { fill: currentColor; }
-.map-like-action > span { display: grid; gap: 2px; }
-.map-like-action strong { font-size: 12px; }
-.map-like-action small { color: var(--muted); font-size: 9px; }
-.map-like-action svg { width: 23px; height: 23px; }
+.map-like-action > span,
+.map-edit-action > span { display: grid; gap: 2px; }
+.map-like-action strong,
+.map-edit-action strong { font-size: 12px; }
+.map-like-action small,
+.map-edit-action small { color: var(--muted); font-size: 9px; }
+.map-like-action svg,
+.map-edit-action svg { width: 23px; height: 23px; }
 
 .map-view-list { display: grid; gap: 2px; padding-top: 3px; }
 .map-view-list button {
@@ -166,12 +172,45 @@ body:has(.map-navigation-redesign-marker) .topbar .status { order: 2; }
 .maps-dialog-avatar { width: 34px; height: 34px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; background: var(--raised); font-size: 11px; font-weight: 750; }
 .maps-dialog-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .maps-empty { margin: 14px; color: var(--muted); font-size: 11px; text-align: center; }
+
+.maps-pane {
+  position: fixed;
+  z-index: 60;
+  top: 54px;
+  right: 0;
+  bottom: 0;
+  width: min(480px, 44vw);
+  max-height: none;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: 0;
+  box-shadow: -18px 0 55px var(--shadow);
+  animation: drawer-right 160ms ease-out;
+}
+
 .share-map-dialog { width: min(520px, 100%); }
 .share-map-dialog > p { margin: 0; padding: 16px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .share-map-url { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 0 16px 16px; }
 .share-map-url button,
 .share-native { white-space: nowrap; }
 .share-native { margin: 0 16px 16px; }
+
+@media (max-width: 700px) {
+  .maps-pane {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    max-height: calc(100dvh - 54px);
+    border-top: 1px solid var(--line);
+    border-left: 0;
+    border-radius: 10px 10px 0 0;
+    box-shadow: 0 -18px 55px var(--shadow);
+    animation: drawer-bottom 160ms ease-out;
+  }
+}
 
 @media (max-width: 600px) {
   .map-context-trigger { max-width: calc(100vw - 112px); height: 34px; }
@@ -182,6 +221,6 @@ body:has(.map-navigation-redesign-marker) .topbar .status { order: 2; }
   .map-context-popover { top: 54px; left: 50%; width: min(410px, calc(100vw - 16px)); transform: translateX(-50%); }
   .simplified-account-menu { top: 54px; right: 6px; width: min(246px, calc(100vw - 12px)); }
   .maps-dialog-backdrop { align-items: end; padding: 0; }
-  .maps-dialog { width: 100%; max-height: 82dvh; border-radius: 14px 14px 0 0; border-left: 0; border-right: 0; border-bottom: 0; }
+  .maps-dialog:not(.maps-pane) { width: 100%; max-height: 82dvh; border-radius: 14px 14px 0 0; border-left: 0; border-right: 0; border-bottom: 0; }
   .share-map-url { grid-template-columns: 1fr; }
 }
