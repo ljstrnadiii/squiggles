@@ -5,7 +5,7 @@ import { clearSession, identityFromSession, loadRuntimeConfig, loadSession } fro
 import { likeMap, loadMapNavigation, unlikeMap, type MapNavigation } from "./mapIdentity";
 import { loadTabs, mapStorageScope } from "./storage";
 
-type IconName = "map" | "star" | "user" | "upload" | "save" | "share" | "logout" | "heart" | "view" | "check";
+type IconName = "map" | "star" | "user" | "upload" | "save" | "share" | "logout" | "heart" | "view" | "check" | "edit";
 
 function Icon({ name }: { name: IconName }) {
   const common = { width: 20, height: 20, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
@@ -18,6 +18,7 @@ function Icon({ name }: { name: IconName }) {
   if (name === "logout") return <svg {...common}><path d="M10 4H5v16h5"/><path d="M13 8l4 4-4 4m4-4H9"/></svg>;
   if (name === "heart") return <svg {...common}><path d="M20.5 9.5c0 5-8.5 10-8.5 10s-8.5-5-8.5-10A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 8.5 2.5Z"/></svg>;
   if (name === "check") return <svg {...common}><path d="m5 12 4 4L19 6"/></svg>;
+  if (name === "edit") return <svg {...common}><path d="M4 20h4l11-11a2.8 2.8 0 0 0-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/></svg>;
   return <svg {...common}><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>;
 }
 
@@ -45,6 +46,12 @@ function runNativeAccountAction(labels: string[]) {
     const buttons = [...document.querySelectorAll<HTMLButtonElement>('nav.account-menu[aria-label="Map and account navigation"] button')];
     buttons.find(button => labels.includes(button.textContent?.trim() ?? ""))?.click();
   }, 0);
+}
+
+function openNativeMapEditor() {
+  const trigger = nativeQueryButton();
+  if (!trigger) return;
+  if (trigger.getAttribute("aria-expanded") !== "true") trigger.click();
 }
 
 export function MapNavigationEnhancements() {
@@ -165,22 +172,21 @@ export function MapNavigationEnhancements() {
 
     {contextOpen && mapId && <div className="map-context-popover" role="dialog" aria-label="Map owner and views">
       <div className="map-owner-heading"><Avatar name={ownerName} url={ownerAvatarUrl}/><span><strong>{ownerName}</strong><small>Owner of this map</small></span></div>
+      {viewingOwnMap && <button className="map-edit-action" onClick={() => { setContextOpen(false); openNativeMapEditor(); }}><Icon name="edit"/><span><strong>Edit map</strong><small>Query, style, and views</small></span></button>}
       {!viewingOwnMap && <button className={`map-like-action ${favorite ? "active" : ""}`} disabled={pendingLike} onClick={() => void setFavorite()}><Icon name="heart"/><span><strong>{favorite ? "Liked" : "Like map"}</strong><small>{favorite ? "Remove from favorites" : session ? "Add to favorites" : "Log in to add to favorites"}</small></span></button>}
       <div className="map-view-list">{views.map(view => <button className={view.title === currentViewName ? "active" : ""} key={view.id} onClick={() => { setContextOpen(false); if (view.title !== currentViewName) chooseView(view.id); }}><Icon name="view"/><span>{view.title}</span>{view.title === currentViewName && <Icon name="check"/>}</button>)}</div>
     </div>}
 
     {settingsOpen && <nav className="simplified-account-menu" aria-label="Account navigation">{menu}</nav>}
 
-    {favoritesOpen && <div className="maps-dialog-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setFavoritesOpen(false); }}>
-      <section className="maps-dialog" role="dialog" aria-modal="true" aria-label="Favorites">
-        <header><div><span className="eyebrow">MAPS</span><strong>Favorites</strong></div><button aria-label="Close favorites" onClick={() => setFavoritesOpen(false)}>×</button></header>
-        <label className="maps-search"><span>Search</span><input autoFocus value={query} onChange={event => setQuery(event.target.value)} placeholder="Search favorites" /></label>
-        <div className="maps-list">
-          {filteredFavorites.map(map => <a className="maps-row" href={map.url} key={map.mapId}><Avatar name={map.ownerDisplayName} url={map.ownerAvatarUrl}/><span><strong>{map.ownerDisplayName}</strong><small>{map.mapId}</small></span></a>)}
-          {!filteredFavorites.length && <p className="maps-empty">{query ? `No favorites match “${query}”.` : "No favorites yet. Like someone’s map to keep it here."}</p>}
-        </div>
-      </section>
-    </div>}
+    {favoritesOpen && <section className="maps-dialog maps-pane" role="dialog" aria-label="Favorites">
+      <header><div><span className="eyebrow">MAPS</span><strong>Favorites</strong></div><button aria-label="Close favorites" onClick={() => setFavoritesOpen(false)}>×</button></header>
+      <label className="maps-search"><span>Search</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search favorites" /></label>
+      <div className="maps-list">
+        {filteredFavorites.map(map => <a className="maps-row" href={map.url} key={map.mapId}><Avatar name={map.ownerDisplayName} url={map.ownerAvatarUrl}/><span><strong>{map.ownerDisplayName}</strong><small>{map.mapId}</small></span></a>)}
+        {!filteredFavorites.length && <p className="maps-empty">{query ? `No favorites match “${query}”.` : "No favorites yet. Like someone’s map to keep it here."}</p>}
+      </div>
+    </section>}
 
     {shareOpen && <div className="maps-dialog-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setShareOpen(false); }}>
       <section className="maps-dialog share-map-dialog" role="dialog" aria-modal="true" aria-label="Share map">
