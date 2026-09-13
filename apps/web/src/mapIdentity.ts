@@ -17,7 +17,9 @@ export function canonicalMapUrl(identity: MapIdentity) {
 }
 
 // Visiting a map no longer mutates navigation state. Maps only enter Favorites through an explicit Like.
-export function rememberLocalMap(_identity: MapIdentity, _url = canonicalMapUrl(_identity)) {}
+export function rememberLocalMap(identity: MapIdentity, url = canonicalMapUrl(identity)) {
+  void url;
+}
 
 export async function loadMapNavigation(config: RuntimeConfig, session: AuthSession): Promise<MapNavigation> {
   const response = await authFetch(config, session, `${config.apiUrl}/api/recent-maps`, { cache: "no-store" });
