@@ -21,8 +21,10 @@ export async function publishView(
   session: AuthSession,
   tabs: QueryTab[],
   active: string,
-  _datasetId: string | null,
+  datasetId: string | null,
 ) {
+  // Kept temporarily as a call-site compatibility argument; saved views no longer persist dataset bindings.
+  void datasetId;
   const canonicalTabs = tabs.map((tab) => {
     const hint = renderPlanHint(tab.id);
     return {
