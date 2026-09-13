@@ -2,6 +2,7 @@ import type { HeatPalette, QueryDimension } from "./contracts";
 import { colorForWeight } from "./heat";
 
 export type AnimationMode = "cumulative" | "windowed";
+export type VisualPalette = HeatPalette | `custom:${string}`;
 export type VisualEncodingSettings = {
   animateBy: string;
   animationMode: AnimationMode;
@@ -11,8 +12,10 @@ export type VisualEncodingSettings = {
   playing: boolean;
   loop: boolean;
   colorBy: string;
-  palette: HeatPalette;
+  palette: VisualPalette;
 };
+
+export const DEFAULT_CUSTOM_COLOR_STOPS = ["#440154", "#21918c", "#fde725"];
 
 export const DEFAULT_VISUAL_ENCODING: VisualEncodingSettings = {
   animateBy: "",
@@ -25,6 +28,47 @@ export const DEFAULT_VISUAL_ENCODING: VisualEncodingSettings = {
   colorBy: "",
   palette: "viridis",
 };
+
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+
+type Color = [number, number, number, number];
+
+function normalizedHexColor(color: string) {
+  return HEX_COLOR.test(color) ? color.toLowerCase() : null;
+}
+
+function hexToColor(color: string): Color | null {
+  const normalized = normalizedHexColor(color);
+  if (!normalized) return null;
+  return [
+    Number.parseInt(normalized.slice(1, 3), 16),
+    Number.parseInt(normalized.slice(3, 5), 16),
+    Number.parseInt(normalized.slice(5, 7), 16),
+    255,
+  ];
+}
+
+export function customPalette(colors: string[]): VisualPalette {
+  const stops = colors.map(normalizedHexColor).filter((color): color is string => Boolean(color));
+  const safeStops = stops.length >= 2 ? stops : DEFAULT_CUSTOM_COLOR_STOPS;
+  return `custom:${safeStops.join(",")}`;
+}
+
+export function visualPaletteStops(palette: VisualPalette): string[] {
+  if (!palette.startsWith("custom:")) return [];
+  return palette.slice("custom:".length).split(",").map(normalizedHexColor).filter((color): color is string => Boolean(color));
+}
+
+function colorForCustomPosition(position: number, colors: string[]): Color | null {
+  const stops = colors.map(hexToColor).filter((color): color is Color => Boolean(color));
+  if (stops.length < 2) return null;
+  const clamped = Math.max(0, Math.min(1, position));
+  const scaled = clamped * (stops.length - 1);
+  const lower = Math.floor(scaled);
+  const upper = Math.min(stops.length - 1, lower + 1);
+  const ratio = scaled - lower;
+  return stops[lower].map((value, index) => Math.round(value + (stops[upper][index] - value) * ratio)) as Color;
+}
 
 export function dimensionByName(dimensions: QueryDimension[], name: string) {
   return dimensions.find(dimension => dimension.name === name);
@@ -66,15 +110,28 @@ export function activityVisible(
 export function colorForVisualDimension(
   dimension: QueryDimension | undefined,
   activityId: string,
-  palette: HeatPalette,
-): [number, number, number, number] | null {
+  palette: VisualPalette,
+): Color | null {
   if (!dimension) return null;
   const value = dimension.values[activityId];
   if (value == null) return null;
+
+  const customStops = visualPaletteStops(palette);
+  if (customStops.length >= 2) {
+    if (dimension.kind === "numeric" && typeof value === "number" && dimension.domain) {
+      const [minimum, maximum] = dimension.domain;
+      const position = maximum === minimum ? 0 : (value - minimum) / (maximum - minimum);
+      return colorForCustomPosition(position, customStops);
+    }
+    const index = dimension.steps.findIndex(step => step === value);
+    return index < 0 ? null : colorForCustomPosition(index / Math.max(1, dimension.steps.length - 1), customStops);
+  }
+
+  const preset = palette as HeatPalette;
   if (dimension.kind === "numeric" && typeof value === "number" && dimension.domain) {
     const [minimum, maximum] = dimension.domain;
-    return colorForWeight(Math.max(0, value - minimum), Math.max(0, maximum - minimum), palette, 1);
+    return colorForWeight(Math.max(0, value - minimum), Math.max(0, maximum - minimum), preset, 1);
   }
   const index = dimension.steps.findIndex(step => step === value);
-  return index < 0 ? null : colorForWeight(index, Math.max(1, dimension.steps.length - 1), palette, 1);
+  return index < 0 ? null : colorForWeight(index, Math.max(1, dimension.steps.length - 1), preset, 1);
 }
