@@ -1,0 +1,26 @@
+/* Keep drawer placement consistent across desktop and mobile. */
+
+@media (max-width: 600px) {
+  .account-panel {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-width: none;
+    max-height: calc(100dvh - 50px);
+    border-width: 1px 0 0;
+    border-radius: 0;
+    box-shadow: 0 -18px 55px var(--shadow);
+    animation: drawer-bottom 160ms ease-out;
+  }
+
+  section.toolbar[aria-label="Query and map settings"]:not([data-panel-expanded]) {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-height: 62dvh;
+  }
+}
