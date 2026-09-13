@@ -16,12 +16,17 @@ export function VisualEncodingControls({ dimensions, settings, onChange }: {
   onChange: (settings: VisualEncodingSettings) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [fpsInput, setFpsInput] = useState(String(settings.playbackSpeed));
   const animation = dimensionByName(dimensions, settings.animateBy);
   const color = dimensionByName(dimensions, settings.colorBy);
   const steps = animation?.steps ?? [];
   const step = Math.max(0, Math.min(Math.max(0, steps.length - 1), settings.animationStep));
   const customStops = visualPaletteStops(settings.palette);
   const paletteMode = customStops.length >= 2 ? "custom" : settings.palette;
+
+  useEffect(() => {
+    setFpsInput(String(settings.playbackSpeed));
+  }, [settings.playbackSpeed]);
 
   useEffect(() => {
     if (!settings.playing || !animation || steps.length < 2) return;
@@ -63,6 +68,21 @@ export function VisualEncodingControls({ dimensions, settings, onChange }: {
     updateCustomStops(next);
   }
 
+  function updatePlaybackSpeed(raw: string) {
+    setFpsInput(raw);
+    const fps = Number(raw);
+    if (Number.isFinite(fps) && fps >= 0.1 && fps <= 240) {
+      onChange({ ...settings, playbackSpeed: fps });
+    }
+  }
+
+  function normalizePlaybackSpeed() {
+    const parsed = Number(fpsInput);
+    const fps = Number.isFinite(parsed) ? Math.min(240, Math.max(0.1, parsed)) : settings.playbackSpeed;
+    setFpsInput(String(fps));
+    if (fps !== settings.playbackSpeed) onChange({ ...settings, playbackSpeed: fps });
+  }
+
   return <section className="toolbar-section visual-encoding">
     <button className="visual-encoding-toggle" type="button" aria-expanded={open} onClick={() => setOpen(value => !value)}>
       <span><h3>Visual encoding</h3><small>Animate and color from query columns</small></span>
@@ -75,7 +95,7 @@ export function VisualEncodingControls({ dimensions, settings, onChange }: {
         {color && <label>Colors<select aria-label="Visual colormap" value={paletteMode} onChange={event => choosePalette(event.target.value)}><option value="sunset">Sunset</option><option value="viridis">Viridis</option><option value="fire">Fire</option><option value="ice">Ice</option><option value="custom">Custom</option></select></label>}
         {animation && <label>Mode<select aria-label="Animation mode" value={settings.animationMode} onChange={event => onChange({ ...settings, animationMode: event.target.value as VisualEncodingSettings["animationMode"] })}><option value="cumulative">Cumulative</option><option value="windowed">Windowed</option></select></label>}
         {animation && settings.animationMode === "windowed" && <label>Window<input aria-label="Animation window" type="number" min="1" max={Math.max(1, steps.length)} value={settings.windowSize} onChange={event => onChange({ ...settings, windowSize: Math.max(1, Number(event.target.value)) })} /></label>}
-        {animation && <label>Speed<select aria-label="Animation speed" value={settings.playbackSpeed} onChange={event => onChange({ ...settings, playbackSpeed: Number(event.target.value) })}><option value="0.5">0.5 fps</option><option value="1">1 fps</option><option value="2">2 fps</option><option value="4">4 fps</option><option value="8">8 fps</option></select></label>}
+        {animation && <label>Speed (fps)<input aria-label="Animation speed" type="number" min="0.1" max="240" step="any" inputMode="decimal" value={fpsInput} onChange={event => updatePlaybackSpeed(event.target.value)} onBlur={normalizePlaybackSpeed} /></label>}
       </div>
       {color && paletteMode === "custom" && <div className="custom-palette-editor">
         <span className="custom-palette-label">Color sequence</span>
