@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./auth", () => ({
+  beginGoogleLogin: vi.fn(),
   clearSession: vi.fn(),
   identityFromSession: () => ({ name: "Len", email: "len@example.com", picture: "https://example.test/len.jpg" }),
   loadSession: () => ({ accessToken: "access", idToken: "id" }),
@@ -25,27 +26,27 @@ vi.mock("./mapIdentity", () => ({
   likeMap: (...args: [unknown, unknown, string]) => mocks.likeMap(...args),
   unlikeMap: (...args: [unknown, unknown, string]) => mocks.unlikeMap(...args),
   loadMapNavigation: async () => ({
-    myMap: { mapId: "11111111-1111-1111-1111-111111111111", ownerDisplayName: "Len", viewerRole: "owner", url: "/m/11111111-1111-1111-1111-111111111111" },
+    myMap: { mapId: "11111111", ownerDisplayName: "Len", viewerRole: "owner", url: "/p/11111111" },
     recentMaps: [
-      { mapId: "33333333-3333-3333-3333-333333333333", ownerDisplayName: "Alex", viewerRole: "viewer", url: "/m/33333333-3333-3333-3333-333333333333", lastViewedAt: "2026-09-11T12:00:00Z" },
+      { mapId: "33333333", ownerDisplayName: "Alex", viewerRole: "viewer", url: "/p/33333333", lastViewedAt: "2026-09-11T12:00:00Z" },
     ],
   }),
 }));
 
 vi.mock("./publishing", () => ({
   loadPublishedView: async () => ({
-    mapId: "11111111-1111-1111-1111-111111111111",
-    url: "/m/11111111-1111-1111-1111-111111111111",
+    mapId: "11111111",
+    url: "/p/11111111",
     tabs: mockTabs,
     active: "years",
     datasetId: "dataset",
     updatedAt: "2026-09-13T12:00:00Z",
-    identity: { mapId: "11111111-1111-1111-1111-111111111111", ownerDisplayName: "Len", viewerRole: "owner" },
+    identity: { mapId: "11111111", ownerDisplayName: "Len", viewerRole: "owner" },
   }),
 }));
 
 vi.mock("./storage", () => ({
-  mapStorageScope: () => "map:22222222-2222-2222-2222-222222222222",
+  mapStorageScope: () => "published:22222222",
   loadTabs: () => mockTabs,
   saveTabs: (...args: unknown[]) => mocks.saveTabs(...args),
 }));
@@ -85,7 +86,7 @@ function nativeQueryNavigation() {
 
 describe("MapNavigationEnhancements", () => {
   it("uses one map-context avatar and likes someone else's map", async () => {
-    window.history.replaceState({}, "", "/m/22222222-2222-2222-2222-222222222222");
+    window.history.replaceState({}, "", "/p/22222222");
     nativeHeader();
     render(<MapNavigationEnhancements />);
 
@@ -97,11 +98,11 @@ describe("MapNavigationEnhancements", () => {
     expect(screen.getByRole("dialog", { name: "Map owner and views" })).toHaveTextContent("Over the years");
 
     fireEvent.click(screen.getByRole("button", { name: /Like map/ }));
-    await waitFor(() => expect(mocks.likeMap).toHaveBeenCalledWith(expect.anything(), expect.anything(), "22222222-2222-2222-2222-222222222222"));
+    await waitFor(() => expect(mocks.likeMap).toHaveBeenCalledWith(expect.anything(), expect.anything(), "22222222"));
   });
 
   it("opens the flat settings menu and searchable Favorites without stealing focus", async () => {
-    window.history.replaceState({}, "", "/m/22222222-2222-2222-2222-222222222222");
+    window.history.replaceState({}, "", "/p/22222222");
     nativeHeader();
     render(<MapNavigationEnhancements />);
 
@@ -122,7 +123,7 @@ describe("MapNavigationEnhancements", () => {
   });
 
   it("switches saved map views through the native query navigation instead of reloading", async () => {
-    window.history.replaceState({}, "", "/m/11111111-1111-1111-1111-111111111111");
+    window.history.replaceState({}, "", "/p/11111111");
     nativeHeader();
     const navigation = nativeQueryNavigation();
     const mapButton = within(navigation).getByRole("button", { name: "Map" });
@@ -137,7 +138,7 @@ describe("MapNavigationEnhancements", () => {
   });
 
   it("syncs published views into the scoped store and puts owner-only save and share beside the view control", async () => {
-    window.history.replaceState({}, "", "/m/11111111-1111-1111-1111-111111111111");
+    window.history.replaceState({}, "", "/p/11111111");
     const header = nativeHeader();
     const navigation = nativeQueryNavigation();
     const nativeTrigger = header.querySelector<HTMLButtonElement>("button.mobile-query-title")!;
@@ -153,7 +154,7 @@ describe("MapNavigationEnhancements", () => {
 
     const context = await screen.findByRole("button", { name: "Open Len map views" });
     expect(await screen.findByRole("button", { name: "Saved — map settings and view are up to date" })).toHaveClass("saved");
-    await waitFor(() => expect(mocks.saveTabs).toHaveBeenCalledWith(mockTabs, "map:22222222-2222-2222-2222-222222222222"));
+    await waitFor(() => expect(mocks.saveTabs).toHaveBeenCalledWith(mockTabs, "published:22222222"));
     expect(screen.getByRole("button", { name: "Share map" })).toBeInTheDocument();
 
     fireEvent.click(context);

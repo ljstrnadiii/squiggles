@@ -1,5 +1,5 @@
 import { normalizeCamera } from "./camera";
-import { identityFromSession, loadSession, authFetch, type AuthSession, type RuntimeConfig } from "./auth";
+import { authFetch, type AuthSession, type RuntimeConfig } from "./auth";
 import type { QueryTab } from "./contracts";
 import { renderPlanHint } from "./renderPlanHints";
 import { defaultTab, normalizeTab } from "./storage";
@@ -23,6 +23,8 @@ export async function publishView(
   active: string,
   datasetId: string | null,
 ) {
+  // Kept temporarily as a call-site compatibility argument; saved views no longer persist dataset bindings.
+  void datasetId;
   const canonicalTabs = tabs.map((tab) => {
     const hint = renderPlanHint(tab.id);
     return {
@@ -35,7 +37,7 @@ export async function publishView(
   const response = await authFetch(config, session, `${config.apiUrl}/api/published`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ tabs: canonicalTabs, active, datasetId }),
+    body: JSON.stringify({ tabs: canonicalTabs, active }),
   });
   if (!response.ok) {
     throw new Error(
@@ -52,27 +54,7 @@ export async function loadPublishedView(
   mapRef: string,
 ): Promise<PublishedView> {
   const response = await fetch(`${config.apiUrl}/api/published/${mapRef}`, { cache: "no-store" });
-  if (!response.ok) {
-    const canonicalMap = /^[0-9a-f-]{36}$/i.test(mapRef);
-    const session = loadSession();
-    if (!canonicalMap || !session) throw new Error("This map could not be found.");
-    const identity = identityFromSession(session);
-    const ownerDisplayName = identity.name || identity.email || "My map";
-    return {
-      mapId: mapRef,
-      url: `/m/${mapRef}`,
-      tabs: [{ ...defaultTab, style: { ...defaultTab.style }, mapState: { ...defaultTab.mapState } }],
-      active: defaultTab.id,
-      datasetId: mapRef,
-      updatedAt: "",
-      identity: {
-        mapId: mapRef,
-        ownerDisplayName,
-        ...(identity.picture ? { ownerAvatarUrl: identity.picture } : {}),
-        viewerRole: "owner",
-      },
-    };
-  }
+  if (!response.ok) throw new Error("This map could not be found.");
   const saved = (await response.json()) as Partial<PublishedView> & Pick<PublishedView, "datasetId" | "updatedAt" | "identity">;
   const tabs = Array.isArray(saved.tabs) && saved.tabs.length ? saved.tabs.map(tab => normalizeTab(tab)) : [{ ...defaultTab, style: { ...defaultTab.style }, mapState: { ...defaultTab.mapState } }];
   const active = typeof saved.active === "string" && tabs.some(tab => tab.id === saved.active) ? saved.active : tabs[0].id;
@@ -80,7 +62,7 @@ export async function loadPublishedView(
   return {
     ...saved,
     mapId,
-    url: saved.url ?? `/m/${mapId}`,
+    url: saved.url ?? `/p/${mapId}`,
     tabs,
     active,
     datasetId: saved.datasetId ?? null,

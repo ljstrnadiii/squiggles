@@ -13,7 +13,7 @@ export type RecentMap = FavoriteMap;
 export type MapNavigation = { myMap: (MapIdentity & { url: string }) | null; recentMaps: FavoriteMap[] };
 
 export function canonicalMapUrl(identity: MapIdentity) {
-  return `/m/${identity.mapId}`;
+  return `/p/${identity.mapId}`;
 }
 
 // Visiting a map no longer mutates navigation state. Maps only enter Favorites through an explicit Like.

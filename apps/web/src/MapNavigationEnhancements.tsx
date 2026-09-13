@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { clearSession, identityFromSession, loadRuntimeConfig, loadSession } from "./auth";
+import { beginGoogleLogin, clearSession, identityFromSession, loadRuntimeConfig, loadSession } from "./auth";
 import type { QueryTab } from "./contracts";
 import { likeMap, loadMapNavigation, unlikeMap, type MapNavigation } from "./mapIdentity";
 import { loadPublishedView } from "./publishing";
@@ -32,7 +32,7 @@ function nativeQueryButton() {
 }
 
 function currentMapId() {
-  return /^\/m\/([0-9a-f-]{36})\/?$/i.exec(window.location.pathname)?.[1] ?? null;
+  return /^\/p\/([a-z0-9]{8})\/?$/i.exec(window.location.pathname)?.[1] ?? null;
 }
 
 function mapDefinitionSignature(tabs: QueryTab[]) {
@@ -139,6 +139,11 @@ export function MapNavigationEnhancements() {
     setNavigation(await loadMapNavigation(config, session));
   };
 
+  const login = async () => {
+    const config = await loadRuntimeConfig();
+    if (config) await beginGoogleLogin(config);
+  };
+
   useEffect(() => {
     const update = () => {
       const next = document.querySelector<HTMLElement>("header.topbar");
@@ -221,7 +226,7 @@ export function MapNavigationEnhancements() {
   const setFavorite = async () => {
     if (!mapId || viewingOwnMap || pendingLike) return;
     if (!session) {
-      document.querySelector<HTMLButtonElement>("button.login-button")?.click();
+      await login();
       return;
     }
     setPendingLike(true);
@@ -254,7 +259,7 @@ export function MapNavigationEnhancements() {
     } finally { setSaving(false); }
   };
 
-  const canonicalShareUrl = mapId ? new URL(`/m/${mapId}`, window.location.origin).toString() : window.location.href;
+  const canonicalShareUrl = mapId ? new URL(`/p/${mapId}`, window.location.origin).toString() : window.location.href;
   const copyShareUrl = async () => {
     await navigator.clipboard.writeText(canonicalShareUrl);
     setCopied(true);
@@ -265,12 +270,30 @@ export function MapNavigationEnhancements() {
     await navigator.share({ title: `${ownerName} · Squiggles`, url: canonicalShareUrl });
   };
 
+  const loginFromMenu = () => {
+    setSettingsOpen(false);
+    void login();
+  };
+
   const menu = <>
-    {navigation?.myMap && <a href={navigation.myMap.url}><Icon name="map"/><span>My map</span></a>}
-    <button onClick={() => { setFavoritesOpen(true); setSettingsOpen(false); setQuery(""); }}><Icon name="star"/><span>Favorites</span></button>
-    <button onClick={() => { setSettingsOpen(false); runNativeAccountAction(["Account"]); }}><Icon name="user"/><span>Account</span></button>
-    <button onClick={() => { setSettingsOpen(false); runNativeAccountAction(["Upload Archive"]); }}><Icon name="upload"/><span>Upload</span></button>
-    <button onClick={() => { clearSession(); window.location.assign("/"); }}><Icon name="logout"/><span>Logout</span></button>
+    {navigation?.myMap
+      ? <a href={navigation.myMap.url}><Icon name="map"/><span>My map</span></a>
+      : !session && <button onClick={loginFromMenu}><Icon name="map"/><span>My map</span></button>}
+    <button onClick={() => {
+      if (!session) { loginFromMenu(); return; }
+      setFavoritesOpen(true); setSettingsOpen(false); setQuery("");
+    }}><Icon name="star"/><span>Favorites</span></button>
+    <button onClick={() => {
+      if (!session) { loginFromMenu(); return; }
+      setSettingsOpen(false); runNativeAccountAction(["Account"]);
+    }}><Icon name="user"/><span>Account</span></button>
+    <button onClick={() => {
+      if (!session) { loginFromMenu(); return; }
+      setSettingsOpen(false); runNativeAccountAction(["Upload Archive"]);
+    }}><Icon name="upload"/><span>Upload</span></button>
+    {session
+      ? <button onClick={() => { clearSession(); window.location.assign("/"); }}><Icon name="logout"/><span>Logout</span></button>
+      : <button onClick={loginFromMenu}><Icon name="user"/><span>Log in</span></button>}
   </>;
 
   const saveExplanation = saving
@@ -292,7 +315,7 @@ export function MapNavigationEnhancements() {
         <button className={`map-owner-icon map-save-icon ${saveState}`} aria-label={saveExplanation} title={saveExplanation} disabled={saving} onClick={() => void saveMap()}><Icon name="save"/></button>
         <button className="map-owner-icon" aria-label="Share map" title="Share this map" onClick={() => { setShareOpen(true); setSettingsOpen(false); setContextOpen(false); }}><Icon name="share"/></button>
       </div>}
-      {session && <button className={`app-settings-trigger ${settingsOpen ? "active" : ""}`} aria-label="Open account menu" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); setContextOpen(false); }}><span aria-hidden="true">⋮</span></button>}
+      <button className={`app-settings-trigger ${settingsOpen ? "active" : ""}`} aria-label="Open account menu" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); setContextOpen(false); }}><span aria-hidden="true">⋮</span></button>
     </>, topbar)}
 
     {contextOpen && mapId && <div className="map-context-popover" role="dialog" aria-label="Map owner and views">
