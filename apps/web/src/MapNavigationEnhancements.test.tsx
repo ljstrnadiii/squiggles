@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MapNavigationEnhancements } from "./MapNavigationEnhancements";
 
 const mocks = vi.hoisted(() => ({
-  likeMap: vi.fn(async () => undefined),
-  unlikeMap: vi.fn(async () => undefined),
+  likeMap: vi.fn(async (_config: unknown, _session: unknown, _mapId: string) => undefined),
+  unlikeMap: vi.fn(async (_config: unknown, _session: unknown, _mapId: string) => undefined),
 }));
 
 vi.mock("./auth", () => ({
