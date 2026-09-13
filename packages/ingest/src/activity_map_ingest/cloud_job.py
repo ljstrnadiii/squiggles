@@ -141,6 +141,8 @@ def publish_build(
                 "renderVersion": {"S": str(manifest.get("render_pyramid_version", "1"))},
                 "activityCount": {"N": str(manifest["activity_count"])},
                 "byteSize": {"N": str(curated_bytes)},
+                "createdAt": {"S": now},
+                "updatedAt": {"S": now},
             },
         )
     return published, curated_bytes
