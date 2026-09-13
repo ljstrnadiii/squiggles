@@ -26,7 +26,7 @@ export function rememberLocalMap(identity: MapIdentity, url = canonicalMapUrl(id
   if (!validMapUrl(url)) return;
   const canonicalUrl = canonicalMapUrl(identity);
   const current = loadLocalMaps().filter(item => item.url !== canonicalUrl && item.mapId !== identity.mapId);
-  localStorage.setItem(localKey, JSON.stringify([{ ...identity, url: canonicalUrl, lastViewedAt: new Date().toISOString() }, ...current].slice(0, 8)));
+  localStorage.setItem(localKey, JSON.stringify([{ ...identity, url: canonicalUrl, lastViewedAt: new Date().toISOString() }, ...current].slice(0, 100)));
 }
 
 export function loadLocalMaps(): RecentMap[] {

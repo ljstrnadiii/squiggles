@@ -1,0 +1,43 @@
+.account-menu > .recent-maps { display: none; }
+.account-menu { display: flex; flex-direction: column; }
+.account-menu > .current-map-heading { order: 0; }
+.account-menu > .map-menu-link { order: 1; }
+.map-navigation-actions { order: 2; display: grid; gap: 3px; padding: 5px 0; border-top: 1px solid var(--line); }
+.map-navigation-actions button { width: 100%; padding: .42rem .55rem; border-radius: 6px; font-size: 11px; color: var(--text); }
+.map-navigation-actions button:hover { background: var(--input); }
+.account-menu > .account-menu-actions { order: 3; }
+
+.maps-dialog-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 18px; background: rgba(4, 8, 7, .48); backdrop-filter: blur(4px); }
+.maps-dialog { width: min(560px, 100%); max-height: min(720px, calc(100dvh - 36px)); overflow: hidden; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 22px 70px rgba(0, 0, 0, .28); }
+.maps-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.maps-dialog > header > div { display: grid; gap: 2px; }
+.maps-dialog > header strong { font-size: 15px; }
+.maps-dialog > header button { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 19px; }
+.maps-search { display: grid; gap: 5px; padding: 13px 16px 10px; }
+.maps-search > span { font-size: 10px; font-weight: 700; color: var(--muted); }
+.maps-search input, .share-map-url input { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--input); color: var(--text); padding: .65rem .72rem; }
+.maps-list { overflow: auto; display: grid; gap: 4px; padding: 4px 10px 14px; }
+.maps-row { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 54px; padding: 7px 9px; border-radius: 9px; color: var(--text); text-decoration: none; }
+.maps-row:hover { background: var(--input); }
+.maps-row.own { border: 1px solid var(--line); margin-bottom: 4px; }
+.maps-row > span:not(.maps-dialog-avatar) { min-width: 0; display: grid; gap: 2px; }
+.maps-row strong, .maps-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.maps-row strong { font-size: 12px; }
+.maps-row small { color: var(--muted); font-size: 9px; }
+.maps-row em { font-style: normal; color: var(--muted); font-size: 9px; white-space: nowrap; }
+.maps-dialog-avatar { width: 34px; height: 34px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; background: var(--raised); font-size: 11px; font-weight: 750; }
+.maps-dialog-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.maps-empty { margin: 14px; color: var(--muted); font-size: 11px; text-align: center; }
+.share-map-dialog { width: min(520px, 100%); }
+.share-map-dialog > p { margin: 0; padding: 16px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.share-map-url { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 0 16px 16px; }
+.share-map-url button, .share-native { white-space: nowrap; }
+.share-native { margin: 0 16px 16px; }
+
+@media (max-width: 600px) {
+  .maps-dialog-backdrop { align-items: end; padding: 0; }
+  .maps-dialog { width: 100%; max-height: 82dvh; border-radius: 14px 14px 0 0; border-left: 0; border-right: 0; border-bottom: 0; }
+  .maps-row { grid-template-columns: 38px minmax(0, 1fr); }
+  .maps-row em { display: none; }
+  .share-map-url { grid-template-columns: 1fr; }
+}
