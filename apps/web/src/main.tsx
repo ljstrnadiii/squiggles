@@ -8,6 +8,7 @@ import { initErrorTelemetry } from "./errorTelemetry";
 import "./styles.css";
 import "./panelEnhancements.css";
 import "./mapNavigationEnhancements.css";
+import "./responsivePaneFixes.css";
 import "./spatial.css";
 import "./mapDisclosure.css";
 
