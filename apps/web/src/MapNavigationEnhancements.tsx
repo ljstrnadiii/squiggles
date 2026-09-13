@@ -32,7 +32,7 @@ function nativeQueryButton() {
 }
 
 function currentMapId() {
-  return /^\/m\/([a-z0-9]{10})\/?$/i.exec(window.location.pathname)?.[1] ?? null;
+  return /^\/p\/([a-z0-9]{8})\/?$/i.exec(window.location.pathname)?.[1] ?? null;
 }
 
 function mapDefinitionSignature(tabs: QueryTab[]) {
@@ -259,7 +259,7 @@ export function MapNavigationEnhancements() {
     } finally { setSaving(false); }
   };
 
-  const canonicalShareUrl = mapId ? new URL(`/m/${mapId}`, window.location.origin).toString() : window.location.href;
+  const canonicalShareUrl = mapId ? new URL(`/p/${mapId}`, window.location.origin).toString() : window.location.href;
   const copyShareUrl = async () => {
     await navigator.clipboard.writeText(canonicalShareUrl);
     setCopied(true);
