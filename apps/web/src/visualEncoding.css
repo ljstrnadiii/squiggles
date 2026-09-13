@@ -44,7 +44,62 @@
 .dimension-legend span { align-items: center; display: inline-flex; gap: 5px; font-size: 12px; }
 .dimension-legend i { border-radius: 999px; display: inline-block; height: 9px; width: 9px; }
 .visual-encoding-body p { color: var(--muted); margin: 0; }
+
+.map-animation-controls {
+  align-items: center;
+  backdrop-filter: blur(14px);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  bottom: 18px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 18%);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(120px, 1fr) auto auto;
+  left: 50%;
+  max-width: min(720px, calc(100% - 32px));
+  padding: 8px 10px;
+  position: absolute;
+  transform: translateX(-50%);
+  width: min(680px, calc(100% - 32px));
+  z-index: 12;
+}
+.map-animation-controls button {
+  min-height: 34px;
+  min-width: 34px;
+  padding: 5px 8px;
+}
+.map-animation-play { font-size: 15px; }
+.map-animation-controls > input[type="range"] { min-width: 0; width: 100%; }
+.map-animation-controls > output {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.map-animation-speed { align-items: center; display: flex; gap: 5px; }
+.map-animation-speed span {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  min-width: 48px;
+  text-align: center;
+  white-space: nowrap;
+}
+
 @media (max-width: 700px) {
   .animation-control { grid-template-columns: auto 1fr; }
   .animation-control output { grid-column: 2; }
+  .map-animation-controls {
+    bottom: 12px;
+    gap: 7px;
+    grid-template-columns: auto minmax(80px, 1fr) auto;
+    max-width: calc(100% - 20px);
+    padding: 7px;
+    width: calc(100% - 20px);
+  }
+  .map-animation-controls > output { grid-column: 2; grid-row: 2; max-width: none; }
+  .map-animation-speed { grid-column: 3; grid-row: 1 / span 2; }
+  .map-animation-speed span { display: none; }
 }
