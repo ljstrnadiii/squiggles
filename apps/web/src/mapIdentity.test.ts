@@ -1,26 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { loadLocalMaps, loadMapNavigation, rememberLocalMap } from "./mapIdentity";
+import { likeMap, loadMapNavigation, rememberLocalMap, unlikeMap } from "./mapIdentity";
 
 describe("map identity navigation", () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 
-  it("keeps only maps that were explicitly opened", () => {
-    const marthaMapId = "31ea1577-b6f1-423a-8bda-ea7712345678";
-    const alexMapId = "41ea1577-b6f1-423a-8bda-ea7712345678";
-    rememberLocalMap({ mapId: marthaMapId, ownerDisplayName: "Martha", viewerRole: "viewer" }, "/p/abcd1234");
-    rememberLocalMap({ mapId: alexMapId, ownerDisplayName: "Alex", viewerRole: "viewer" }, "/not-a-map");
-    expect(loadLocalMaps()).toMatchObject([{ mapId: marthaMapId, ownerDisplayName: "Martha", url: `/m/${marthaMapId}` }]);
+  it("does not remember maps merely because they were opened", () => {
+    const setItem = vi.spyOn(localStorage, "setItem");
+    rememberLocalMap({ mapId: "31ea1577-b6f1-423a-8bda-ea7712345678", ownerDisplayName: "Martha", viewerRole: "viewer" });
+    expect(setItem).not.toHaveBeenCalled();
   });
 
-  it("merges logged-out maps into authenticated recents by stable map id", async () => {
+  it("loads only server-backed Favorites navigation", async () => {
+    const payload = { myMap: null, recentMaps: [{ mapId: "31ea1577-b6f1-423a-8bda-ea7712345678", ownerDisplayName: "Martha", viewerRole: "viewer", url: "/m/31ea1577-b6f1-423a-8bda-ea7712345678", lastViewedAt: "2026-09-12T12:00:00Z" }] };
+    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify(payload), { status: 200 }));
+    const result = await loadMapNavigation({ apiUrl: "https://api.example.test", cognitoDomain: "", cognitoClientId: "" }, { accessToken: "access", idToken: "id" });
+    expect(result).toEqual(payload);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("likes and unlikes a map explicitly", async () => {
     const mapId = "31ea1577-b6f1-423a-8bda-ea7712345678";
-    rememberLocalMap({ mapId, ownerDisplayName: "Martha", viewerRole: "viewer" }, "/p/abcd1234");
     const fetcher = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response(JSON.stringify({ saved: true }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ myMap: null, recentMaps: [] }), { status: 200 }));
-    await loadMapNavigation({ apiUrl: "https://api.example.test", cognitoDomain: "", cognitoClientId: "" }, { accessToken: "access", idToken: "id" });
-    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({ mapId });
-    expect(loadLocalMaps()).toEqual([]);
+      .mockResolvedValueOnce(new Response(JSON.stringify({ saved: false }), { status: 200 }));
+    const config = { apiUrl: "https://api.example.test", cognitoDomain: "", cognitoClientId: "" };
+    const session = { accessToken: "access", idToken: "id" };
+    await likeMap(config, session, mapId);
+    await unlikeMap(config, session, mapId);
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({ mapId, favorite: true });
+    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body))).toEqual({ mapId, favorite: true, remove: true });
   });
 });
