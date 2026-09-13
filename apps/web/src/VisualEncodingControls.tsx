@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { HeatPalette, QueryDimension } from "./contracts";
+import { CustomPaletteEditor } from "./CustomPaletteEditor";
 import {
   colorForVisualDimension,
   customPalette,
@@ -21,8 +22,7 @@ export function VisualEncodingControls({ dimensions, settings, onChange }: {
   const color = dimensionByName(dimensions, settings.colorBy);
   const steps = animation?.steps ?? [];
   const step = Math.max(0, Math.min(Math.max(0, steps.length - 1), settings.animationStep));
-  const customStops = visualPaletteStops(settings.palette);
-  const paletteMode = customStops.length >= 2 ? "custom" : settings.palette;
+  const paletteMode = visualPaletteStops(settings.palette).length >= 2 ? "custom" : settings.palette;
 
   useEffect(() => {
     setFpsInput(String(settings.playbackSpeed));
@@ -30,39 +30,17 @@ export function VisualEncodingControls({ dimensions, settings, onChange }: {
 
   function chooseAnimation(name: string) {
     const next = dimensionByName(dimensions, name);
-    onChange({
-      ...settings,
-      animateBy: name,
-      animationStep: next ? Math.max(0, next.steps.length - 1) : 0,
-      playing: false,
-    });
+    onChange({ ...settings, animateBy: name, animationStep: next ? Math.max(0, next.steps.length - 1) : 0, playing: false });
   }
 
   function choosePalette(value: string) {
-    onChange({
-      ...settings,
-      palette: value === "custom" ? customPalette(DEFAULT_CUSTOM_COLOR_STOPS) : value as HeatPalette,
-    });
-  }
-
-  function updateCustomStops(next: string[]) {
-    onChange({ ...settings, palette: customPalette(next) });
-  }
-
-  function moveCustomStop(index: number, direction: -1 | 1) {
-    const destination = index + direction;
-    if (destination < 0 || destination >= customStops.length) return;
-    const next = [...customStops];
-    [next[index], next[destination]] = [next[destination], next[index]];
-    updateCustomStops(next);
+    onChange({ ...settings, palette: value === "custom" ? customPalette(DEFAULT_CUSTOM_COLOR_STOPS) : value as HeatPalette });
   }
 
   function updatePlaybackSpeed(raw: string) {
     setFpsInput(raw);
     const fps = Number(raw);
-    if (Number.isFinite(fps) && fps >= 0.1 && fps <= 240) {
-      onChange({ ...settings, playbackSpeed: fps });
-    }
+    if (Number.isFinite(fps) && fps >= 0.1 && fps <= 240) onChange({ ...settings, playbackSpeed: fps });
   }
 
   function normalizePlaybackSpeed() {
@@ -87,26 +65,7 @@ export function VisualEncodingControls({ dimensions, settings, onChange }: {
         {animation && <label>Speed (fps)<input aria-label="Animation speed" type="number" min="0.1" max="240" step="any" inputMode="decimal" value={fpsInput} onChange={event => updatePlaybackSpeed(event.target.value)} onBlur={normalizePlaybackSpeed} /></label>}
         {animation && <label className="check"><input aria-label="Show animation controls on map" type="checkbox" checked={settings.showMapControls} onChange={event => onChange({ ...settings, showMapControls: event.target.checked })} /> Map controls</label>}
       </div>
-      {color && paletteMode === "custom" && <div className="custom-palette-editor">
-        <span className="custom-palette-label">Color sequence</span>
-        <div className="custom-color-stops">
-          {customStops.map((stop, index) => <div className="custom-color-stop" key={`${index}-${stop}`}>
-            <input
-              aria-label={`Color ${index + 1}`}
-              type="color"
-              value={stop}
-              onChange={event => updateCustomStops(customStops.map((colorStop, stopIndex) => stopIndex === index ? event.target.value : colorStop))}
-            />
-            <div className="custom-color-stop-actions">
-              <button type="button" aria-label={`Move color ${index + 1} left`} disabled={index === 0} onClick={() => moveCustomStop(index, -1)}>←</button>
-              <button type="button" aria-label={`Move color ${index + 1} right`} disabled={index === customStops.length - 1} onClick={() => moveCustomStop(index, 1)}>→</button>
-              <button type="button" aria-label={`Remove color ${index + 1}`} disabled={customStops.length <= 2} onClick={() => updateCustomStops(customStops.filter((_, stopIndex) => stopIndex !== index))}>×</button>
-            </div>
-          </div>)}
-          <button className="add-color-stop" type="button" disabled={customStops.length >= 12} onClick={() => updateCustomStops([...customStops, "#ffffff"])}>+ color</button>
-        </div>
-        <small>Colors are interpolated evenly from first to last.</small>
-      </div>}
+      {color && paletteMode === "custom" && <CustomPaletteEditor palette={settings.palette} onChange={palette => onChange({ ...settings, palette })} />}
       {animation && steps.length > 0 && <div className="animation-control">
         <button type="button" onClick={() => onChange({ ...settings, playing: !settings.playing })}>{settings.playing ? "Pause" : "Play"}</button>
         <input aria-label="Animation step" type="range" min="0" max={Math.max(0, steps.length - 1)} value={step} onChange={event => onChange({ ...settings, animationStep: Number(event.target.value), playing: false })} />

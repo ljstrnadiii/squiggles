@@ -33,7 +33,7 @@ function currentMapId() {
 }
 
 function mapDefinitionSignature(tabs: QueryTab[]) {
-  return JSON.stringify(tabs.map(tab => ({ id: tab.id, title: tab.title, sql: tab.sql, style: tab.style, spatialFilter: tab.spatialFilter })));
+  return JSON.stringify(tabs.map(tab => ({ id: tab.id, title: tab.title, sql: tab.sql, style: tab.style, spatialFilter: tab.spatialFilter, visualEncoding: tab.visualEncoding })));
 }
 
 function rounded(value: number | undefined, digits: number) {

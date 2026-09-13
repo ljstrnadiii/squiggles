@@ -1,5 +1,6 @@
 import { normalizeCamera } from "./camera";
 import type { Basemap, QueryTab } from "./contracts";
+import { DEFAULT_VISUAL_ENCODING, normalizePersistedVisualEncoding, persistedVisualEncoding } from "./visualEncoding";
 
 const LEGACY_KEY = "activity-map.tabs.v1";
 const SCOPED_KEY = "activity-map.tabs.v2";
@@ -19,6 +20,7 @@ export const defaultTab: QueryTab = {
   sql: "SELECT activity_id FROM activities",
   mapState: { longitude: -105, latitude: 39, zoom: 5, pitch: 0, bearing: 0 },
   style: defaultStyle,
+  visualEncoding: persistedVisualEncoding(DEFAULT_VISUAL_ENCODING),
 };
 
 export const highRunsTab: QueryTab = {
@@ -52,6 +54,7 @@ export function normalizeTab(tab: QueryTab & { style: QueryTab["style"] & { line
     ...tab,
     mapState: normalizeCamera(tab.mapState, style.viewMode === "3d" ? 60 : 0),
     style: { ...style, color: normalizeRouteColor(style.color) },
+    visualEncoding: normalizePersistedVisualEncoding(tab.visualEncoding),
   };
 }
 

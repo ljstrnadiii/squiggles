@@ -1,7 +1,8 @@
 export type MapState = { longitude: number; latitude: number; zoom: number; pitch: number; bearing: number };
 export type Basemap = "carto-light" | "carto-dark" | "streets" | "topo" | "imagery" | "blank";
 export type MapViewMode = "2d" | "3d";
-export type HeatPalette = "sunset" | "viridis" | "fire" | "ice";
+export type HeatPresetPalette = "sunset" | "viridis" | "fire" | "ice";
+export type HeatPalette = HeatPresetPalette | `custom:${string}`;
 export type ThemeMode = "system" | "light" | "dark";
 export type UnitSystem = "metric" | "imperial";
 export type SystemResolution = "low" | "medium" | "high";
@@ -45,6 +46,7 @@ export type QueryTab = {
   mapState: MapState;
   style: MapStyle;
   spatialFilter?: SpatialFilter;
+  visualEncoding?: import("./visualEncoding").PersistedVisualEncodingSettings;
   startingPlans?: ResolutionRenderPlans;
   startingBounds?: ViewportBounds;
 };
