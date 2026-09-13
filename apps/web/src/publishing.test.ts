@@ -4,15 +4,16 @@ import { loadPublishedView, publishView } from "./publishing";
 import { clearRenderPlanHints, recordRenderPlan } from "./renderPlanHints";
 import { defaultTab } from "./storage";
 
-describe("published maps", () => {
+describe("saved map views", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     clearRenderPlanHints();
   });
 
-  it("persists tabs without system settings", async () => {
+  it("persists tabs without system settings or dataset linkage", async () => {
+    const publicMapId = "31ea1577";
     const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ slug: "abcd1234", url: "/p/abcd1234" }), {
+      new Response(JSON.stringify({ mapId: publicMapId, url: `/p/${publicMapId}` }), {
         status: 200,
       }),
     );
@@ -22,14 +23,16 @@ describe("published maps", () => {
       { accessToken: "access", idToken: "id" },
       [terrainTab],
       "all",
-      null,
+      "31ea1577-b6f1-423a-8bda-ea7712345678",
     );
     const request = fetcher.mock.calls[0][1]!;
-    expect(JSON.parse(String(request.body))).toMatchObject({ active: "all", datasetId: null });
+    const body = JSON.parse(String(request.body));
+    expect(body).toMatchObject({ active: "all" });
+    expect(body).not.toHaveProperty("datasetId");
     expect(String(request.body)).not.toContain("theme");
     expect(String(request.body)).not.toContain("units");
-    expect(JSON.parse(String(request.body)).tabs[0].mapState).toEqual(terrainTab.mapState);
-    expect(result.url).toBe("/p/abcd1234");
+    expect(body.tabs[0].mapState).toEqual(terrainTab.mapState);
+    expect(result.url).toBe(`/p/${publicMapId}`);
   });
 
   it("persists low medium and high render plans with their source viewport", async () => {
@@ -40,8 +43,9 @@ describe("published maps", () => {
       high: { lod: 5 as const, vertexEstimate: 1_600_000 },
     };
     recordRenderPlan(defaultTab.id, { plans, bounds });
+    const publicMapId = "31ea1577";
     const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ slug: "abcd1234", url: "/p/abcd1234" }), {
+      new Response(JSON.stringify({ mapId: publicMapId, url: `/p/${publicMapId}` }), {
         status: 200,
       }),
     );
@@ -59,7 +63,8 @@ describe("published maps", () => {
     });
   });
 
-  it("loads a short published view", async () => {
+  it("loads the compact public map URL", async () => {
+    const publicMapId = "abcd1234";
     const dirty = {
       ...defaultTab,
       mapState: {
@@ -76,19 +81,23 @@ describe("published maps", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
-          slug: "abcd1234",
+          mapId: publicMapId,
+          url: `/p/${publicMapId}`,
           tabs: [dirty],
           active: "all",
-          datasetId: null,
+          datasetId: "31ea1577-b6f1-423a-8bda-ea7712345678",
           updatedAt: "2026-08-24",
+          identity: { mapId: publicMapId, ownerDisplayName: "Martha", viewerRole: "viewer" },
         }),
         { status: 200 },
       ),
     );
     const published = await loadPublishedView(
       { apiUrl: "https://api.example.com", cognitoDomain: "", cognitoClientId: "" },
-      "abcd1234",
+      publicMapId,
     );
+    expect(published.mapId).toBe(publicMapId);
+    expect(published.url).toBe(`/p/${publicMapId}`);
     expect(published.active).toBe("all");
     expect(published.tabs[0].mapState).toEqual({ ...defaultTab.mapState, pitch: 47, bearing: -31 });
   });

@@ -8,8 +8,10 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
+from activity_map_ingest.cloud_errors import failure_detail
 from activity_map_ingest.compiler import (
     CompileOptions,
+    _activity,
     _activity_family,
     _records,
     _safe_extract,
@@ -160,6 +162,38 @@ def test_activity_family_is_coarse_and_stable() -> None:
     assert _activity_family("Mountain Bike Ride") == "ride"
     assert _activity_family("Backcountry Ski") == "ski"
     assert _activity_family("Trail Run") == "run"
+
+
+def test_activity_normalizes_invalid_negative_csv_elevation_summaries(tmp_path: Path) -> None:
+    source_path = tmp_path / "synthetic.gpx"
+    source_path.write_text("synthetic")
+    source = {
+        "path": str(source_path),
+        "source_filename": "synthetic.gpx",
+        "source_activity_id": "synthetic",
+        "name": "Synthetic",
+        "sport_type": "Run",
+        "start_text": "",
+        "distance_csv": 0.0,
+        "elapsed_csv": None,
+        "moving_csv": None,
+        "gain_csv": -1.0,
+        "loss_csv": -1.0,
+        "min_elevation_csv": None,
+        "max_elevation_csv": None,
+    }
+    result = _activity(source, [TrackPoint(-105, 40), TrackPoint(-105.01, 40.01)])
+
+    assert result["elevation_gain_m"] == 0.0
+    assert result["elevation_loss_m"] == 0.0
+
+
+def test_cloud_failure_detail_extracts_actionable_schema_error() -> None:
+    error = RuntimeError(
+        'ray wrapper\npandera.errors.SchemaErrors: {\n"error": "Check elevation_loss_m failed."\n}'
+    )
+
+    assert failure_detail(error) == "Check elevation_loss_m failed."
 
 
 def test_clean_track_removes_only_isolated_spatial_and_elevation_spikes() -> None:

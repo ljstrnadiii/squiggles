@@ -386,6 +386,12 @@ def _activity(source: dict[str, Any], points: list[TrackPoint]) -> dict[str, Any
     full = [[p.longitude, p.latitude] for p in points]
     clean_full = [[p.longitude, p.latitude] for p in clean_points]
     clean_point_ids = {id(point) for point in clean_points}
+    # Strava exports occasionally use negative sentinel values for unavailable
+    # summary metrics. Canonical gain/loss are magnitudes, so normalize those
+    # sentinels when track elevation is unavailable instead of rejecting the
+    # complete archive during final schema validation.
+    source_gain = max(0.0, source["gain_csv"]) if source["gain_csv"] is not None else None
+    source_loss = max(0.0, source["loss_csv"]) if source["loss_csv"] is not None else None
     return {
         "activity_id": activity_id,
         "source_activity_id": source_id,
@@ -403,8 +409,8 @@ def _activity(source: dict[str, Any], points: list[TrackPoint]) -> dict[str, Any
         "distance_m": distance_track if distance_track > 0 else source["distance_csv"],
         "elapsed_seconds": elapsed_track if elapsed_track is not None else source["elapsed_csv"],
         "moving_seconds": source["moving_csv"] or elapsed_track,
-        "elevation_gain_m": gain if gain is not None else source["gain_csv"],
-        "elevation_loss_m": loss if loss is not None else source["loss_csv"],
+        "elevation_gain_m": gain if gain is not None else source_gain,
+        "elevation_loss_m": loss if loss is not None else source_loss,
         "min_elevation_m": min(elevations) if elevations else source["min_elevation_csv"],
         "max_elevation_m": max(elevations) if elevations else source["max_elevation_csv"],
         "point_count": len(points),

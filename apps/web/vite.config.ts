@@ -4,10 +4,25 @@ import { createReadStream, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 const localDataRoot = resolve(import.meta.dirname, "../../data/local");
+const duckdbProgressShim = resolve(import.meta.dirname, "src/duckdbExperimentalProgress.mjs");
 
 export default defineConfig({
-  optimizeDeps: { exclude: ["maplibre-gl"] },
+  optimizeDeps: { exclude: ["maplibre-gl", "@duckdb/duckdb-wasm"] },
   plugins: [
+    {
+      name: "duckdb-progress-runtime",
+      enforce: "pre",
+      resolveId(source, importer) {
+        const normalizedImporter = importer?.replaceAll("\\", "/");
+        if (
+          source === "@duckdb/duckdb-wasm" &&
+          normalizedImporter?.endsWith("/src/duckdb.worker.ts")
+        ) {
+          return duckdbProgressShim;
+        }
+        return null;
+      },
+    },
     react(),
     {
       name: "local-dataset",

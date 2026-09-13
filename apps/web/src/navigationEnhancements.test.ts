@@ -4,21 +4,24 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const source = readFileSync(join(import.meta.dirname, "PanelEnhancements.tsx"), "utf8");
-const disclosure = readFileSync(join(import.meta.dirname, "mapDisclosure.css"), "utf8");
+const app = readFileSync(join(import.meta.dirname, "App.tsx"), "utf8");
+const mapNavigation = readFileSync(join(import.meta.dirname, "MapNavigationEnhancements.tsx"), "utf8");
 const panelCss = readFileSync(join(import.meta.dirname, "panelEnhancements.css"), "utf8");
 const styles = readFileSync(join(import.meta.dirname, "styles.css"), "utf8");
 
 describe("map navigation enhancements", () => {
-  it("keeps the map menu open after switching to another saved map", () => {
-    expect(source).toContain("reopenAfterSwitch");
-    expect(source).toContain('button.mobile-query-title');
-    expect(source).toContain('getAttribute("aria-expanded") !== "true"');
-    expect(source).toContain('button.addEventListener("click", reopenAfterSwitch)');
+  it("removes the legacy query dropdown instead of reopening or hiding it", () => {
+    expect(source).not.toContain("reopenAfterSwitch");
+    expect(source).not.toContain("queryMenu");
+    expect(app).not.toContain("menuOpen");
+    expect(app).not.toContain("mobile-query-title");
+    expect(app).not.toContain('aria-label="Query navigation"');
+    expect(mapNavigation).not.toContain("nativeQueryButton");
+    expect(mapNavigation).not.toContain("chooseNativeMapView");
+    expect(mapNavigation).toContain("selectMapView(view.id)");
   });
 
   it("keeps rendering metrics in the combined Diagnostics panel", () => {
-    expect(disclosure).toContain(".mobile-menu section:nth-child(2) > button:nth-child(4)");
-    expect(disclosure).toContain("display: none");
     expect(source).toContain(">Copy</button>");
     expect(source).not.toContain("openRenderingDiagnostics");
     expect(source).not.toContain('button.textContent?.trim() === "Rendering"');

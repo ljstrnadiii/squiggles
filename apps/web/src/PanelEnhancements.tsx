@@ -6,7 +6,6 @@ type PanelTargets = {
   table: HTMLElement | null;
   toolbar: HTMLElement | null;
   logoMenu: HTMLElement | null;
-  queryMenu: HTMLElement | null;
   detail: HTMLElement | null;
   systemSettings: HTMLElement | null;
 };
@@ -26,9 +25,6 @@ function targets(): PanelTargets {
     ),
     logoMenu: document.querySelector<HTMLElement>(
       'nav.logo-menu[aria-label="Squiggles navigation"]',
-    ),
-    queryMenu: document.querySelector<HTMLElement>(
-      'nav.mobile-menu[aria-label="Query navigation"]',
     ),
     detail: document.querySelector<HTMLElement>('aside.detail[aria-label="Activity detail"]'),
     systemSettings: document.querySelector<HTMLElement>('section.system-settings[aria-label="System settings"]'),
@@ -116,70 +112,16 @@ function Diagnostics({ onClose }: { onClose: () => void }) {
       </header>
       <table>
         <tbody>
-          <tr>
-            <th>DOM interactive</th>
-            <td>
-              {snapshot.startup.domInteractiveMs == null
-                ? "—"
-                : milliseconds(snapshot.startup.domInteractiveMs)}
-            </td>
-          </tr>
-          <tr>
-            <th>DOMContentLoaded</th>
-            <td>
-              {snapshot.startup.domContentLoadedMs == null
-                ? "—"
-                : milliseconds(snapshot.startup.domContentLoadedMs)}
-            </td>
-          </tr>
-          <tr>
-            <th>Load event</th>
-            <td>
-              {snapshot.startup.loadEventMs == null
-                ? "—"
-                : milliseconds(snapshot.startup.loadEventMs)}
-            </td>
-          </tr>
-          <tr>
-            <th>First response</th>
-            <td>
-              {snapshot.startup.responseStartMs == null
-                ? "—"
-                : milliseconds(snapshot.startup.responseStartMs)}
-            </td>
-          </tr>
-          <tr>
-            <th>Resource requests</th>
-            <td>{snapshot.network.resourceRequests}</td>
-          </tr>
-          <tr>
-            <th>Transferred</th>
-            <td>{bytes(snapshot.network.transferredBytes)}</td>
-          </tr>
-          <tr>
-            <th>Connection</th>
-            <td>
-              {snapshot.network.effectiveType ?? "—"}
-              {snapshot.network.downlinkMbps == null
-                ? ""
-                : ` · ${snapshot.network.downlinkMbps} Mbps`}
-              {snapshot.network.rttMs == null ? "" : ` · ${snapshot.network.rttMs} ms RTT`}
-            </td>
-          </tr>
-          <tr>
-            <th>Viewport</th>
-            <td>
-              {snapshot.device.viewport} · {snapshot.device.devicePixelRatio.toFixed(2)}× DPR
-            </td>
-          </tr>
-          <tr>
-            <th>CPU threads</th>
-            <td>{snapshot.device.hardwareConcurrency ?? "—"}</td>
-          </tr>
-          <tr>
-            <th>User agent</th>
-            <td className="diagnostics-user-agent">{snapshot.device.userAgent}</td>
-          </tr>
+          <tr><th>DOM interactive</th><td>{snapshot.startup.domInteractiveMs == null ? "—" : milliseconds(snapshot.startup.domInteractiveMs)}</td></tr>
+          <tr><th>DOMContentLoaded</th><td>{snapshot.startup.domContentLoadedMs == null ? "—" : milliseconds(snapshot.startup.domContentLoadedMs)}</td></tr>
+          <tr><th>Load event</th><td>{snapshot.startup.loadEventMs == null ? "—" : milliseconds(snapshot.startup.loadEventMs)}</td></tr>
+          <tr><th>First response</th><td>{snapshot.startup.responseStartMs == null ? "—" : milliseconds(snapshot.startup.responseStartMs)}</td></tr>
+          <tr><th>Resource requests</th><td>{snapshot.network.resourceRequests}</td></tr>
+          <tr><th>Transferred</th><td>{bytes(snapshot.network.transferredBytes)}</td></tr>
+          <tr><th>Connection</th><td>{snapshot.network.effectiveType ?? "—"}{snapshot.network.downlinkMbps == null ? "" : ` · ${snapshot.network.downlinkMbps} Mbps`}{snapshot.network.rttMs == null ? "" : ` · ${snapshot.network.rttMs} ms RTT`}</td></tr>
+          <tr><th>Viewport</th><td>{snapshot.device.viewport} · {snapshot.device.devicePixelRatio.toFixed(2)}× DPR</td></tr>
+          <tr><th>CPU threads</th><td>{snapshot.device.hardwareConcurrency ?? "—"}</td></tr>
+          <tr><th>User agent</th><td className="diagnostics-user-agent">{snapshot.device.userAgent}</td></tr>
         </tbody>
       </table>
       <h3>Rendering</h3>
@@ -277,7 +219,6 @@ export function PanelEnhancements() {
           previous.table === next.table &&
           previous.toolbar === next.toolbar &&
           previous.logoMenu === next.logoMenu &&
-          previous.queryMenu === next.queryMenu &&
           previous.detail === next.detail &&
           previous.systemSettings === next.systemSettings;
         return unchanged ? previous : next;
@@ -307,25 +248,6 @@ export function PanelEnhancements() {
   }, [panels.logoMenu]);
 
   useEffect(() => {
-    if (!panels.queryMenu) return;
-    const firstSection = panels.queryMenu.querySelector("section:first-child");
-    const mapButtons = [
-      ...(firstSection?.querySelectorAll<HTMLButtonElement>("button:not(:last-child)") ?? []),
-    ].filter((button) => !button.classList.contains("active"));
-
-    const reopenAfterSwitch = () => {
-      window.setTimeout(() => {
-        const title = document.querySelector<HTMLButtonElement>("button.mobile-query-title");
-        if (title?.getAttribute("aria-expanded") !== "true") title?.click();
-      }, 0);
-    };
-
-    mapButtons.forEach((button) => button.addEventListener("click", reopenAfterSwitch));
-    return () =>
-      mapButtons.forEach((button) => button.removeEventListener("click", reopenAfterSwitch));
-  }, [panels.queryMenu]);
-
-  useEffect(() => {
     if (!panels.table) setTableExpanded(false);
   }, [panels.table]);
 
@@ -348,41 +270,20 @@ export function PanelEnhancements() {
 
   return (
     <>
-      {tableHeader &&
-        createPortal(
-          <button
-            className="panel-expand"
-            aria-label={
-              tableExpanded ? "Exit full screen activity table" : "Open activity table full screen"
-            }
-            title={tableExpanded ? "Exit full screen" : "Full screen"}
-            onClick={() => setTableExpanded((value) => !value)}
-          >
-            {tableExpanded ? "⊙" : "⛶"}
-          </button>,
-          tableHeader,
-        )}
-      {toolbarHeader &&
-        createPortal(
-          <button
-            className="panel-expand"
-            aria-label={
-              toolbarExpanded ? "Exit full screen query settings" : "Open query settings full screen"
-            }
-            title={toolbarExpanded ? "Exit full screen" : "Full screen"}
-            onClick={() => setToolbarExpanded((value) => !value)}
-          >
-            {toolbarExpanded ? "⊙" : "⛶"}
-          </button>,
-          toolbarHeader,
-        )}
-      {panels.logoMenu &&
-        createPortal(
-          <button onClick={openDiagnostics}>Diagnostics</button>,
-          panels.logoMenu,
-        )}
-      {diagnosticsOpen &&
-        createPortal(<Diagnostics onClose={() => setDiagnosticsOpen(false)} />, document.body)}
+      {tableHeader && createPortal(
+        <button className="panel-expand" aria-label={tableExpanded ? "Exit full screen activity table" : "Open activity table full screen"} title={tableExpanded ? "Exit full screen" : "Full screen"} onClick={() => setTableExpanded((value) => !value)}>
+          {tableExpanded ? "⊙" : "⛶"}
+        </button>,
+        tableHeader,
+      )}
+      {toolbarHeader && createPortal(
+        <button className="panel-expand" aria-label={toolbarExpanded ? "Exit full screen query settings" : "Open query settings full screen"} title={toolbarExpanded ? "Exit full screen" : "Full screen"} onClick={() => setToolbarExpanded((value) => !value)}>
+          {toolbarExpanded ? "⊙" : "⛶"}
+        </button>,
+        toolbarHeader,
+      )}
+      {panels.logoMenu && createPortal(<button onClick={openDiagnostics}>Diagnostics</button>, panels.logoMenu)}
+      {diagnosticsOpen && createPortal(<Diagnostics onClose={() => setDiagnosticsOpen(false)} />, document.body)}
     </>
   );
 }

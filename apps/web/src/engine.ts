@@ -316,7 +316,9 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     clearRenderPlanHints();
 
     const manifestStarted = performance.now();
-    const manifest =
+    const manifest = source.kind === "url" && source.manifest
+      ? source.manifest
+      :
       source.kind === "directory"
         ? (JSON.parse(
             await (await (await source.handle.getFileHandle("dataset.json")).getFile()).text(),
@@ -341,7 +343,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       name: entry.path,
       ...(buffer
         ? { buffer }
-        : { url: source.kind === "url" ? `${source.baseUrl}/${entry.path}` : undefined }),
+        : { url: source.kind === "url" ? (entry.url ?? `${source.baseUrl}/${entry.path}`) : undefined }),
       bbox: entry.bbox,
       byteSize: entry.byte_size,
       rowCount: entry.row_count,

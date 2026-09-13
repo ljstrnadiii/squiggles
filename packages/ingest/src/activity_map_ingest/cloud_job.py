@@ -10,6 +10,7 @@ from typing import Any
 
 import boto3
 
+from .cloud_errors import failure_detail
 from .compiler import CompileOptions, compile_strava
 from .dataset_builds import rebuild_derived_dataset, versioned_manifest
 from .schema import SCHEMA_VERSION
@@ -140,6 +141,8 @@ def publish_build(
                 "renderVersion": {"S": str(manifest.get("render_pyramid_version", "1"))},
                 "activityCount": {"N": str(manifest["activity_count"])},
                 "byteSize": {"N": str(curated_bytes)},
+                "createdAt": {"S": now},
+                "updatedAt": {"S": now},
             },
         )
     return published, curated_bytes
@@ -248,7 +251,7 @@ def main() -> None:
             )
             status("ready", f"Build {build_id} is active")
     except Exception as error:
-        status("failed", str(error))
+        status("failed", failure_detail(error))
         raise
 
 

@@ -2,14 +2,18 @@ import { normalizeCamera } from "./camera";
 import { authFetch, type AuthSession, type RuntimeConfig } from "./auth";
 import type { QueryTab } from "./contracts";
 import { renderPlanHint } from "./renderPlanHints";
-import { normalizeTab } from "./storage";
+import { defaultTab, normalizeTab } from "./storage";
+import type { MapIdentity } from "./mapIdentity";
 
 export type PublishedView = {
-  slug: string;
+  slug?: string;
+  mapId: string;
+  url: string;
   tabs: QueryTab[];
   active: string;
   datasetId: string | null;
   updatedAt: string;
+  identity: MapIdentity;
 };
 
 export async function publishView(
@@ -19,6 +23,8 @@ export async function publishView(
   active: string,
   datasetId: string | null,
 ) {
+  // Kept temporarily as a call-site compatibility argument; saved views no longer persist dataset bindings.
+  void datasetId;
   const canonicalTabs = tabs.map((tab) => {
     const hint = renderPlanHint(tab.id);
     return {
@@ -31,27 +37,36 @@ export async function publishView(
   const response = await authFetch(config, session, `${config.apiUrl}/api/published`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ tabs: canonicalTabs, active, datasetId }),
+    body: JSON.stringify({ tabs: canonicalTabs, active }),
   });
   if (!response.ok) {
     throw new Error(
       response.status === 403
-        ? "Your account must be approved before publishing."
-        : "Could not publish this map.",
+        ? "Your account must be approved before saving views."
+        : "Could not save this map view.",
     );
   }
-  return response.json() as Promise<{ slug: string; url: string }>;
+  return response.json() as Promise<{ mapId: string; slug?: string; url: string }>;
 }
 
 export async function loadPublishedView(
   config: RuntimeConfig,
-  slug: string,
+  mapRef: string,
 ): Promise<PublishedView> {
-  const response = await fetch(`${config.apiUrl}/api/published/${slug}`, { cache: "no-store" });
-  if (!response.ok) throw new Error("This published map could not be found.");
-  const published = (await response.json()) as PublishedView;
+  const response = await fetch(`${config.apiUrl}/api/published/${mapRef}`, { cache: "no-store" });
+  if (!response.ok) throw new Error("This map could not be found.");
+  const saved = (await response.json()) as Partial<PublishedView> & Pick<PublishedView, "datasetId" | "updatedAt" | "identity">;
+  const tabs = Array.isArray(saved.tabs) && saved.tabs.length ? saved.tabs.map(tab => normalizeTab(tab)) : [{ ...defaultTab, style: { ...defaultTab.style }, mapState: { ...defaultTab.mapState } }];
+  const active = typeof saved.active === "string" && tabs.some(tab => tab.id === saved.active) ? saved.active : tabs[0].id;
+  const mapId = saved.mapId ?? saved.identity.mapId;
   return {
-    ...published,
-    tabs: published.tabs.map(tab => normalizeTab(tab)),
+    ...saved,
+    mapId,
+    url: saved.url ?? `/p/${mapId}`,
+    tabs,
+    active,
+    datasetId: saved.datasetId ?? null,
+    updatedAt: saved.updatedAt ?? "",
+    identity: saved.identity,
   };
 }
