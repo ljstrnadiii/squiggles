@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { listAdminUsers, recompileAdminUpload, setAdminUserAccess, type AdminUser } from "./admin";
 import "./admin.css";
 import { beginGoogleLogin, clearSession, deleteAccount, finishLogin, getProfile, identityFromSession, loadRuntimeConfig, loadSession, type AuthSession, type RuntimeConfig, type UserProfile } from "./auth";
+import { GoogleSignInButton } from "./GoogleSignInButton";
 import { filterStravaArchive, listUploads, reconcileUploadStatuses, uploadArchive, type UploadRecord } from "./uploads";
 
 export function AccountPanel({ onClose, onIdentityChange, view = "account" }: { onClose: () => void; onIdentityChange: (completedLogin?: boolean) => void; view?: "account" | "upload" | "login" }) {
@@ -87,7 +88,7 @@ export function AccountPanel({ onClose, onIdentityChange, view = "account" }: { 
   return <section className="system-settings utility-panel account-panel" aria-label="Account">
     <header><div>{view !== "upload" && <span className="eyebrow">{session ? "ACCOUNT" : "LOG IN"}</span>}<strong>{session ? view === "upload" ? "Upload Archive" : profile?.name || profile?.email : "Log in"}</strong></div><button aria-label="Close account" onClick={onClose}>×</button></header>
     {error && <p className="account-error">{error}</p>}
-    {!loading && !session && <><p>Upload and manage your activity archive.</p><button className="account-primary" disabled={!config} onClick={() => config && void beginGoogleLogin(config)}>Log in with Google</button></>}
+    {!loading && !session && <><p>Sign in to upload and manage your activity archive.</p><GoogleSignInButton disabled={!config} onClick={() => config && void beginGoogleLogin(config)} /></>}
     {profile && <>
       {view === "account" && <div className={`approval-status ${profile.status}`}><span aria-hidden="true" />Access {profile.status}{profile.role === "admin" ? " · admin" : ""}</div>}
       {profile.status === "pending" && <p>Your first login worked. An administrator still needs to approve this account before private data or uploads are available. We’ll email you when access is approved. Squiggles only sends three lifecycle emails: access requested, access approved, and archive optimized.</p>}
