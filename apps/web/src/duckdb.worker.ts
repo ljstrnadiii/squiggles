@@ -6,6 +6,7 @@ import { DEFAULT_RENDER_SETTINGS, type RenderSettings } from "./renderSettings";
 import { canonicalSourceSql, targetedCanonicalSourceSql } from "./canonicalSource";
 import type {
   BinaryRouteBatch,
+  QueryDimension,
   ResolutionRenderPlans,
   RouteMetadata,
   SystemResolution,
@@ -98,6 +99,52 @@ let registeredRenderLevels = new Map<Lod, RegisteredFile[]>();
 let initializationTimings = { selectBundleMs: 0, instantiateMs: 0, connectMs: 0 };
 
 const scalar = (value: unknown) => (typeof value === "bigint" ? Number(value) : value);
+const identifier = (value: string) => `"${value.replaceAll('"', '""')}"`;
+
+function dimensionKind(type: unknown): QueryDimension["kind"] | null {
+  const value = String(type).toLowerCase();
+  if (/list|struct|map|union|binary|blob|geometry/.test(value)) return null;
+  if (/timestamp|date|time/.test(value)) return "temporal";
+  if (/int|float|double|decimal|real|numeric/.test(value)) return "numeric";
+  return "categorical";
+}
+
+async function collectQueryDimensions(fields: readonly { name: string; type: unknown }[]): Promise<QueryDimension[]> {
+  const eligible = fields.flatMap(field => {
+    if (field.name === "activity_id") return [];
+    const kind = dimensionKind(field.type);
+    return kind ? [{ name: field.name, kind }] : [];
+  });
+  if (!eligible.length) return [];
+  const table = await connection!.query(`SELECT activity_id,${eligible.map(field => identifier(field.name)).join(",")} FROM selection_dimensions`);
+  const rows = table.toArray() as unknown as Record<string, unknown>[];
+  return eligible.map(field => {
+    const values: Record<string, string | number | null> = {};
+    const unique = new Set<string | number>();
+    for (const row of rows) {
+      const activityId = String(scalar(row.activity_id));
+      const raw = row[field.name];
+      let value: string | number | null;
+      if (raw == null) value = null;
+      else if (field.kind === "temporal") value = String(raw);
+      else {
+        const normalized = scalar(raw);
+        value = typeof normalized === "number" || typeof normalized === "string" ? normalized : String(normalized);
+      }
+      values[activityId] = value;
+      if (value != null) unique.add(value);
+    }
+    const steps = [...unique].sort((left, right) => typeof left === "number" && typeof right === "number" ? left - right : String(left).localeCompare(String(right)));
+    const numeric = field.kind === "numeric" ? steps.filter((value): value is number => typeof value === "number") : [];
+    return {
+      name: field.name,
+      kind: field.kind,
+      values,
+      steps,
+      ...(numeric.length ? { domain: [numeric[0], numeric[numeric.length - 1]] as [number, number] } : {}),
+    };
+  });
+}
 const coordinates = (value: unknown): [number, number][] =>
   value == null
     ? []
@@ -877,6 +924,8 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       await ensureCanonicalGeometry(request.clean && supportsClean);
     }
     selectionAll = isUniversalSelectionSql(request.sql);
+    let dimensions: QueryDimension[] = [];
+    await connection!.query("DROP TABLE IF EXISTS selection_dimensions");
     if (selectionAll) {
       await connection!.query("DROP TABLE IF EXISTS current_selection");
     } else {
@@ -886,10 +935,14 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       if (!probe.schema.fields.some((field) => field.name === "activity_id")) {
         throw new Error("SQL must return an activity_id column");
       }
+      await connection!.query(
+        `CREATE TEMP TABLE selection_dimensions AS WITH selected AS (${request.sql}) SELECT * FROM selected QUALIFY row_number() OVER (PARTITION BY activity_id)=1`,
+      );
       await connection!.query("DROP TABLE IF EXISTS current_selection");
       await connection!.query(
-        `CREATE TEMP TABLE current_selection AS WITH selected AS (${request.sql}) SELECT DISTINCT CAST(a.activity_id AS VARCHAR) activity_id,a.point_count,a.xmin,a.ymin,a.xmax,a.ymax FROM activities a SEMI JOIN selected s USING(activity_id)`,
+        `CREATE TEMP TABLE current_selection AS SELECT DISTINCT CAST(a.activity_id AS VARCHAR) activity_id,a.point_count,a.xmin,a.ymin,a.xmax,a.ymax FROM activities a SEMI JOIN selection_dimensions s USING(activity_id)`,
       );
+      dimensions = await collectQueryDimensions(probe.schema.fields);
     }
 
     const selectedCount = selectionAll
@@ -915,6 +968,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       queryId: String(request.id),
       selectedCount,
       renderPlan: { type: "arrow", activityIds: [] },
+      dimensions,
       ...viewport,
     });
   } catch (error) {
