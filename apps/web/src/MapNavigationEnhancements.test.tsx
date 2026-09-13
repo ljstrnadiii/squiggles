@@ -3,8 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MapNavigationEnhancements } from "./MapNavigationEnhancements";
 
-const likeMap = vi.fn(async () => undefined);
-const unlikeMap = vi.fn(async () => undefined);
+const mocks = vi.hoisted(() => ({
+  likeMap: vi.fn(async () => undefined),
+  unlikeMap: vi.fn(async () => undefined),
+}));
 
 vi.mock("./auth", () => ({
   clearSession: vi.fn(),
@@ -14,8 +16,8 @@ vi.mock("./auth", () => ({
 }));
 
 vi.mock("./mapIdentity", () => ({
-  likeMap: (...args: unknown[]) => likeMap(...args),
-  unlikeMap: (...args: unknown[]) => unlikeMap(...args),
+  likeMap: (...args: [unknown, unknown, string]) => mocks.likeMap(...args),
+  unlikeMap: (...args: [unknown, unknown, string]) => mocks.unlikeMap(...args),
   loadMapNavigation: async () => ({
     myMap: { mapId: "11111111-1111-1111-1111-111111111111", ownerDisplayName: "Len", viewerRole: "owner", url: "/m/11111111-1111-1111-1111-111111111111" },
     recentMaps: [
@@ -35,8 +37,8 @@ vi.mock("./storage", () => ({
 afterEach(() => {
   cleanup();
   document.querySelector("header.topbar")?.remove();
-  likeMap.mockClear();
-  unlikeMap.mockClear();
+  mocks.likeMap.mockClear();
+  mocks.unlikeMap.mockClear();
 });
 
 function nativeHeader() {
@@ -66,7 +68,7 @@ describe("MapNavigationEnhancements", () => {
     expect(screen.getByRole("dialog", { name: "Map owner and views" })).toHaveTextContent("Over the years");
 
     fireEvent.click(screen.getByRole("button", { name: /Like map/ }));
-    await waitFor(() => expect(likeMap).toHaveBeenCalledWith(expect.anything(), expect.anything(), "22222222-2222-2222-2222-222222222222"));
+    await waitFor(() => expect(mocks.likeMap).toHaveBeenCalledWith(expect.anything(), expect.anything(), "22222222-2222-2222-2222-222222222222"));
   });
 
   it("opens the flat settings menu and searchable Favorites", async () => {
