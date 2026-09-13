@@ -1,0 +1,5 @@
+/* The redesigned map/view pill drives the native query menu programmatically.
+   Keep that compatibility menu mounted, but never let the legacy dropdown surface. */
+body:has(.map-navigation-redesign-marker) nav.mobile-menu[aria-label="Query navigation"] {
+  display: none !important;
+}
