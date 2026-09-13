@@ -3,6 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MapNavigationEnhancements } from "./MapNavigationEnhancements";
 
+const mockTabs = [
+  { id: "all", title: "Map" },
+  { id: "years", title: "Over the years" },
+];
+
 const mocks = vi.hoisted(() => ({
   likeMap: vi.fn(async (...args: [unknown, unknown, string]) => { void args; }),
   unlikeMap: vi.fn(async (...args: [unknown, unknown, string]) => { void args; }),
@@ -26,12 +31,21 @@ vi.mock("./mapIdentity", () => ({
   }),
 }));
 
+vi.mock("./publishing", () => ({
+  loadPublishedView: async () => ({
+    mapId: "11111111-1111-1111-1111-111111111111",
+    url: "/m/11111111-1111-1111-1111-111111111111",
+    tabs: mockTabs,
+    active: "years",
+    datasetId: "dataset",
+    updatedAt: "2026-09-13T12:00:00Z",
+    identity: { mapId: "11111111-1111-1111-1111-111111111111", ownerDisplayName: "Len", viewerRole: "owner" },
+  }),
+}));
+
 vi.mock("./storage", () => ({
   mapStorageScope: () => "map:22222222-2222-2222-2222-222222222222",
-  loadTabs: () => [
-    { id: "all", title: "Map" },
-    { id: "years", title: "Over the years" },
-  ],
+  loadTabs: () => mockTabs,
 }));
 
 afterEach(() => {
@@ -61,7 +75,7 @@ function nativeQueryNavigation() {
   const menu = document.createElement("nav");
   menu.className = "mobile-menu utility-panel";
   menu.setAttribute("aria-label", "Query navigation");
-  menu.innerHTML = `<button>New query</button><button>Query settings</button>`;
+  menu.innerHTML = `<section><button>Map</button><button>Over the years</button><button>New query</button></section><section><button>Query settings</button></section>`;
   document.body.appendChild(menu);
   return menu;
 }
@@ -74,6 +88,7 @@ describe("MapNavigationEnhancements", () => {
 
     const context = await screen.findByRole("button", { name: "Open Martha map views" });
     expect(screen.getByRole("button", { name: "Open account menu" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Share map" })).not.toBeInTheDocument();
     fireEvent.click(context);
     expect(screen.getByRole("dialog", { name: "Map owner and views" })).toHaveTextContent("Martha");
     expect(screen.getByRole("dialog", { name: "Map owner and views" })).toHaveTextContent("Over the years");
@@ -89,8 +104,9 @@ describe("MapNavigationEnhancements", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Open account menu" }));
     const menu = screen.getByRole("navigation", { name: "Account navigation" });
-    expect(menu).toHaveTextContent("My mapFavoritesAccountUploadShareLogout");
+    expect(menu).toHaveTextContent("My mapFavoritesAccountUploadLogout");
     expect(menu).not.toHaveTextContent("Recent");
+    expect(menu).not.toHaveTextContent("Share");
 
     fireEvent.click(screen.getByRole("button", { name: /Favorites/ }));
     const favorites = screen.getByRole("dialog", { name: "Favorites" });
@@ -102,13 +118,28 @@ describe("MapNavigationEnhancements", () => {
     await waitFor(() => expect(screen.queryByText("Alex")).not.toBeInTheDocument());
   });
 
-  it("keeps map views simple and exposes edit and new-map actions for the owner", async () => {
+  it("switches saved map views through the native query navigation instead of reloading", async () => {
+    window.history.replaceState({}, "", "/m/11111111-1111-1111-1111-111111111111");
+    nativeHeader();
+    const navigation = nativeQueryNavigation();
+    const mapButton = within(navigation).getByRole("button", { name: "Map" });
+    const mapClicked = vi.fn();
+    mapButton.addEventListener("click", mapClicked);
+    render(<MapNavigationEnhancements />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Len map views" }));
+    const dropdown = screen.getByRole("dialog", { name: "Map owner and views" });
+    fireEvent.click(within(dropdown).getByRole("button", { name: "Map" }));
+    await waitFor(() => expect(mapClicked).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps map views simple and puts owner-only save and share beside the view control", async () => {
     window.history.replaceState({}, "", "/m/11111111-1111-1111-1111-111111111111");
     const header = nativeHeader();
     const navigation = nativeQueryNavigation();
     const nativeTrigger = header.querySelector<HTMLButtonElement>("button.mobile-query-title")!;
-    const querySettings = [...navigation.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Query settings")!;
-    const newQuery = [...navigation.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "New query")!;
+    const querySettings = within(navigation).getByRole("button", { name: "Query settings" });
+    const newQuery = within(navigation).getByRole("button", { name: "New query" });
     const triggerClicked = vi.fn();
     const settingsClicked = vi.fn();
     const newQueryClicked = vi.fn();
@@ -118,6 +149,9 @@ describe("MapNavigationEnhancements", () => {
     render(<MapNavigationEnhancements />);
 
     const context = await screen.findByRole("button", { name: "Open Len map views" });
+    expect(await screen.findByRole("button", { name: "Saved — no unsaved query settings" })).toHaveClass("saved");
+    expect(screen.getByRole("button", { name: "Share map" })).toBeInTheDocument();
+
     fireEvent.click(context);
     const dropdown = screen.getByRole("dialog", { name: "Map owner and views" });
     const currentView = within(dropdown).getByRole("button", { name: "Over the years" });

@@ -1,5 +1,15 @@
 /* Keep drawer placement consistent across desktop and mobile. */
 
+/* Save state is shown by the button chrome, never by a colored glyph. */
+.map-save-icon.saved svg,
+.map-save-icon.dirty svg {
+  color: var(--text);
+}
+
+.map-context-chevron {
+  display: none;
+}
+
 @media (max-width: 600px) {
   .account-panel {
     top: auto;
