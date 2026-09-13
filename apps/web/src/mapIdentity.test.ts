@@ -6,8 +6,9 @@ describe("map identity navigation", () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 
   it("does not remember maps merely because they were opened", () => {
+    const setItem = vi.spyOn(localStorage, "setItem");
     rememberLocalMap({ mapId: "31ea1577-b6f1-423a-8bda-ea7712345678", ownerDisplayName: "Martha", viewerRole: "viewer" });
-    expect(localStorage.length).toBe(0);
+    expect(setItem).not.toHaveBeenCalled();
   });
 
   it("loads only server-backed Favorites navigation", async () => {
