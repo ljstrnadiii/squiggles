@@ -4,7 +4,7 @@ import type { VisualEncodingSettings } from "./visualEncoding";
 function steppedSpeed(speed: number, direction: -1 | 1) {
   const delta = speed < 1 ? 0.1 : speed < 10 ? 1 : 5;
   const next = speed + direction * delta;
-  return Math.min(240, Math.max(0.1, Number(next.toFixed(next < 1 ? 1 : 0))));
+  return Math.min(240, Math.max(0.1, Number(next.toFixed(next < 1 ? 1 : 2))));
 }
 
 export function AnimationMapControls({ dimension, settings, onChange }: {
