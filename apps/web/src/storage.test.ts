@@ -18,8 +18,8 @@ describe("map-scoped query tabs", () => {
     expect(loadTabs("map:second")).toEqual([defaultTab]);
   });
 
-  it("derives stable scopes from canonical and legacy map routes", () => {
-    expect(mapStorageScope("/m/31ea1577-b6f1-423a-8bda-ea7712345678", "")).toBe("map:31ea1577-b6f1-423a-8bda-ea7712345678");
+  it("uses only compact public map routes as hosted map scopes", () => {
+    expect(mapStorageScope("/m/31ea1577-b6f1-423a-8bda-ea7712345678", "")).toBe("home");
     expect(mapStorageScope("/p/abcd1234", "")).toBe("published:abcd1234");
   });
 });
