@@ -28,6 +28,7 @@ import { loadSystemResolution, saveSystemResolution } from "./resolution";
 import { rasterStyles } from "./mapSources";
 import { recordRenderingDiagnostics } from "./diagnosticState";
 import { loadMapNavigation, rememberLocalMap, type MapIdentity, type MapNavigation } from "./mapIdentity";
+import { clearMapViewActions, setMapViewActions, updateMapViewNavigation } from "./mapViewController";
 
 const blankStyle: maplibregl.StyleSpecification = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": "#07100e" } }] };
 const empty: SummaryStats = { activityCount: 0, distanceM: 0, elapsedSeconds: 0, movingSeconds: 0, elevationGainM: 0, elevationLossM: 0, minElevationM: null, maxElevationM: null, maxDistanceM: null, activeDays: 0, droppedJumpPoints: 0, droppedElevationPoints: 0, sportCounts: [], firstActivity: null, lastActivity: null };
@@ -253,7 +254,6 @@ export function App() {
   const [statsOpen, setStatsOpen] = useState(false);
   const [tableOpen, setTableOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [systemSettingsOpen, setSystemSettingsOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(() => window.location.pathname === "/auth/callback");
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
@@ -320,6 +320,26 @@ export function App() {
     viewRef.current = next;
     setView(next);
   }
+
+  useEffect(() => {
+    setMapViewActions({
+      select: id => {
+        const next = tabsRef.current.find(item => item.id === id);
+        if (next) choose(next);
+      },
+      edit: id => {
+        const next = tabsRef.current.find(item => item.id === id);
+        if (next) choose(next, true);
+      },
+      create: () => add(),
+      statistics: () => { void toggleStats(); },
+      table: () => { void toggleTable(); },
+    });
+  });
+  useEffect(() => () => clearMapViewActions(), []);
+  useEffect(() => {
+    updateMapViewNavigation({ activeId: active, views: tabs.map(item => ({ id: item.id, title: item.title })) });
+  }, [active, tabs]);
 
   useEffect(() => {
     const session = loadSession();
@@ -669,7 +689,7 @@ export function App() {
   function changeSystemResolution(next: SystemResolution) { setSystemResolution(next); saveSystemResolution(next); changeRenderSettings({ ...renderSettings, vertexBudget: null }); }
   function openSystemSettings() {
     window.dispatchEvent(new Event("squiggles:close-diagnostics"));
-    setSystemSettingsOpen(true); setMenuOpen(false); setSchemaOpen(false); setToolbarOpen(false); setStatsOpen(false); setTableOpen(false); setAboutOpen(false);
+    setSystemSettingsOpen(true); setSchemaOpen(false); setToolbarOpen(false); setStatsOpen(false); setTableOpen(false); setAboutOpen(false);
   }
   const openActivity = useCallback(async (activity: RouteMetadata) => {
     setStatsOpen(false); setTableOpen(false); setAboutOpen(false); setToolbarOpen(false);
@@ -839,18 +859,12 @@ export function App() {
 
   return <main className={`app ${systemSettingsOpen ? "with-side-panel" : ""}`} onKeyDown={event => { if (spatialDrawing && event.key === "Escape") { setSpatialDrawing(false); setSpatialDraft([]); return; } if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void run(); }}>
     <header className="topbar">
-      <div className="brand"><button className={`brand-button ${logoMenuOpen ? "active" : ""}`} aria-label="Open Squiggles menu" data-tooltip="Squiggles menu" aria-expanded={logoMenuOpen} onClick={() => { setLogoMenuOpen(open => !open); setMenuOpen(false); setAccountMenuOpen(false); }}><img src={logoUrl} alt="Squiggles" /></button></div>
-      <button className="mobile-query-title" aria-label={menuOpen ? "Close query menu" : "Open query menu"} aria-expanded={menuOpen} onClick={() => { setMenuOpen(open => !open); setLogoMenuOpen(false); setAccountMenuOpen(false); setSystemSettingsOpen(false); }}>{tab.title}</button>
+      <div className="brand"><button className={`brand-button ${logoMenuOpen ? "active" : ""}`} aria-label="Open Squiggles menu" data-tooltip="Squiggles menu" aria-expanded={logoMenuOpen} onClick={() => { setLogoMenuOpen(open => !open); setAccountMenuOpen(false); }}><img src={logoUrl} alt="Squiggles" /></button></div>
       <div className={`status ${busy ? "working" : ""}`} role="status" aria-label={status}><span /></div>
-      {currentIdentity ? <button className="map-identity-button" aria-label={`Open map menu for ${currentMapLabel}`} aria-expanded={accountMenuOpen} onClick={() => { setAccountMenuOpen(open => !open); setMenuOpen(false); setLogoMenuOpen(false); }}><span className="map-owner-avatar">{currentIdentity.ownerAvatarUrl ? <img src={currentIdentity.ownerAvatarUrl} alt="" referrerPolicy="no-referrer" /> : <span>{currentIdentity.ownerDisplayName.slice(0, 1).toUpperCase()}</span>}</span><strong>{currentMapLabel}</strong>{currentIdentity.viewerRole === "admin" && <small>Admin preview</small>}<span aria-hidden="true">▾</span></button> : <button className="login-button" onClick={() => { setAccountView("login"); setAccountOpen(true); setLogoMenuOpen(false); setMenuOpen(false); }}>Log in</button>}
+      {currentIdentity ? <button className="map-identity-button" aria-label={`Open map menu for ${currentMapLabel}`} aria-expanded={accountMenuOpen} onClick={() => { setAccountMenuOpen(open => !open); setLogoMenuOpen(false); }}><span className="map-owner-avatar">{currentIdentity.ownerAvatarUrl ? <img src={currentIdentity.ownerAvatarUrl} alt="" referrerPolicy="no-referrer" /> : <span>{currentIdentity.ownerDisplayName.slice(0, 1).toUpperCase()}</span>}</span><strong>{currentMapLabel}</strong>{currentIdentity.viewerRole === "admin" && <small>Admin preview</small>}<span aria-hidden="true">▾</span></button> : <button className="login-button" onClick={() => { setAccountView("login"); setAccountOpen(true); setLogoMenuOpen(false); }}>Log in</button>}
     </header>
 
     {logoMenuOpen && <nav className="logo-menu utility-panel" aria-label="Squiggles navigation"><button onClick={() => { setAboutOpen(true); setLogoMenuOpen(false); setStatsOpen(false); setTableOpen(false); setToolbarOpen(false); }}>About</button><button disabled={busy} onClick={() => { void openDirectory(); setLogoMenuOpen(false); }}>{datasetName ? "Change dataset" : "Open dataset"}</button><button onClick={() => { setSchemaOpen(true); setLogoMenuOpen(false); }}>AI Skills</button><button onClick={() => { openSystemSettings(); setLogoMenuOpen(false); }}>System settings</button></nav>}
-
-    {menuOpen && <nav className="mobile-menu utility-panel" aria-label="Query navigation">
-      <section><span className="eyebrow">SAVED QUERIES</span>{tabs.map(item => <button className={item.id === tab.id ? "active" : ""} key={item.id} onClick={() => { choose(item); setMenuOpen(false); }}>{item.title}</button>)}<button onClick={() => { add(); setMenuOpen(false); }}>New query</button></section>
-      <section><button onClick={() => { choose(tab, true); setMenuOpen(false); }}>Query settings</button><button disabled={!selectionReady.current} onClick={() => { void toggleStats(); setMenuOpen(false); }}>Statistics</button><button disabled={!selectionReady.current || tableLoading} onClick={() => { void toggleTable(); setMenuOpen(false); }}>Table</button></section>
-    </nav>}
 
     {accountMenuOpen && <nav className="account-menu utility-panel" aria-label="Map and account navigation">
       <div className="current-map-heading"><span>{currentMapLabel}</span>{currentIdentity?.viewerRole === "admin" && <small>Admin preview</small>}</div>

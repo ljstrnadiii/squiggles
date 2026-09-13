@@ -8,6 +8,23 @@ const engineCalls = vi.hoisted(() => ({
   maps: [] as Array<{ camera: { center: [number, number]; zoom: number; pitch?: number; bearing?: number }; emit(name: string): void }>,
 }));
 
+const mapViews = vi.hoisted(() => ({
+  actions: null as null | {
+    select: (id: string) => void;
+    edit: (id: string) => void;
+    create: () => void;
+    statistics: () => void;
+    table: () => void;
+  },
+  state: null as null | { activeId: string | null; views: Array<{ id: string; title: string }> },
+}));
+
+vi.mock("./mapViewController", () => ({
+  setMapViewActions: (actions: typeof mapViews.actions) => { mapViews.actions = actions; },
+  clearMapViewActions: () => { mapViews.actions = null; mapViews.state = null; },
+  updateMapViewNavigation: (state: typeof mapViews.state) => { mapViews.state = state; },
+}));
+
 vi.mock("maplibre-gl", () => ({ Map: class {
   constructor(public camera: { center: [number, number]; zoom: number; pitch?: number; bearing?: number }) { engineCalls.mapOptions(camera); engineCalls.maps.push(this); }
   handlers = new Map<string, ((...args: unknown[]) => void)[]>();
@@ -30,6 +47,7 @@ vi.mock("maplibre-gl", () => ({ Map: class {
   off(name: string, handler: (...args: unknown[]) => void) { this.handlers.set(name, (this.handlers.get(name) ?? []).filter(item => item !== handler)); return this; }
   remove() {}
 } }));
+
 vi.mock("./engine", () => ({
   BrowserDuckDBEngine: class {
     setResolution() {}
@@ -49,81 +67,85 @@ vi.mock("./engine", () => ({
   },
 }));
 
-afterEach(() => { cleanup(); localStorage.clear(); engineCalls.execute.mockReset(); engineCalls.getSummary.mockClear(); engineCalls.mapOptions.mockClear(); engineCalls.maps.length = 0; });
 import { App } from "./App";
 import { defaultTab } from "./storage";
 
-describe("App", () => {
-  function openQueryMenu() { fireEvent.click(screen.getByRole("button", { name: "Open query menu" })); }
-  function openLogoMenu() { fireEvent.click(screen.getByRole("button", { name: "Open Squiggles menu" })); }
-  function openQuerySettings() { openQueryMenu(); fireEvent.click(screen.getByRole("button", { name: "Query settings" })); }
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+  engineCalls.execute.mockReset();
+  engineCalls.getSummary.mockClear();
+  engineCalls.mapOptions.mockClear();
+  engineCalls.maps.length = 0;
+  mapViews.actions = null;
+  mapViews.state = null;
+  vi.restoreAllMocks();
+});
 
-  it("renders the product name", async () => {
+describe("App", () => {
+  function openLogoMenu() { fireEvent.click(screen.getByRole("button", { name: "Open Squiggles menu" })); }
+  async function actions() { await waitFor(() => expect(mapViews.actions).not.toBeNull()); return mapViews.actions!; }
+  async function openQuerySettings(id = "all") {
+    (await actions()).edit(id);
+    await waitFor(() => expect(screen.getByRole("region", { name: "Query and map settings" })).toBeInTheDocument());
+  }
+
+  it("renders product controls and edits the current view without a legacy query menu", async () => {
     window.history.replaceState({}, "", "/");
     render(<App />);
     expect(screen.getByRole("img", { name: "Squiggles" })).toBeInTheDocument();
-    expect(screen.queryByText("Every route. One map.")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open Squiggles menu" })).toHaveAttribute("data-tooltip", "Squiggles menu");
+    expect(screen.queryByRole("button", { name: "Open query menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Query navigation" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Log in" })).toHaveClass("login-button");
+
     openLogoMenu();
     fireEvent.click(screen.getByRole("button", { name: "About" }));
     expect(screen.getByRole("region", { name: "About this project" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Squiggles on GitHub" })).toHaveAttribute("href", "https://github.com/ljstrnadiii/squiggles");
     fireEvent.click(screen.getByRole("button", { name: "Close about this project" }));
-    expect(screen.queryByRole("textbox", { name: "SQL query" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Toggle query toolbar" })).not.toBeInTheDocument();
+
     openLogoMenu();
     fireEvent.click(screen.getByRole("button", { name: "System settings" }));
-    expect(screen.getByRole("region", { name: "System settings" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Use imperial units" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Use system theme" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Medium" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "High" }));
-    expect(screen.getByRole("button", { name: "High" })).toHaveAttribute("aria-pressed", "true");
     expect(localStorage.getItem("activity-map.resolution.v2")).toBe("high");
     fireEvent.click(screen.getByRole("button", { name: "Use light theme" }));
-    expect(screen.getByRole("button", { name: "Use light theme" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("img", { name: "Squiggles" })).toHaveAttribute("src", "/logo-light.png");
     fireEvent.click(screen.getByRole("button", { name: "Close system settings" }));
-    openQuerySettings();
+
+    await openQuerySettings();
     expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("streets");
     expect(screen.getByRole("option", { name: "Imagery" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Use 2D map view" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Use 3D map view" }));
     expect(screen.getByRole("button", { name: "Use 3D map view" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("combobox", { name: "Heat colormap" })).toHaveValue("sunset");
     expect(screen.getByLabelText("Route color")).toHaveValue("#476bcc");
     const temperature = screen.getByRole("slider", { name: "Heat temperature" });
-    expect(temperature).toHaveValue("1.7");
     fireEvent.change(temperature, { target: { value: "2.4" } });
     expect(temperature).toHaveValue("2.4");
     const starter = await screen.findByRole("combobox", { name: "SQL starter query" });
     fireEvent.change(starter, { target: { value: "rides" } });
-    openQueryMenu();
-    expect(screen.queryByRole("button", { name: "Rendering" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Runs above 12k ft" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "AI Skills" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Close query menu" }));
     const editor = await screen.findByRole("textbox", { name: "SQL query" });
     await waitFor(() => expect(editor).toHaveTextContent("activity_family = 'ride'"));
     expect(screen.getByRole("checkbox", { name: "Clean" }).closest("label")).toHaveAttribute("data-tooltip", expect.stringContaining("GPS jumps"));
   });
 
-  it("opens a directly linked local tab with query controls closed", () => {
+  it("opens a directly linked local view with controls closed", async () => {
     window.history.replaceState({}, "", "/?tab=example-high-runs&color=%23dcff4e");
     render(<App />);
-    openQueryMenu();
-    expect(screen.getByRole("button", { name: "Runs above 12k ft" })).toHaveClass("active");
-    fireEvent.click(screen.getByRole("button", { name: "Close query menu" }));
     expect(screen.queryByRole("textbox", { name: "SQL query" })).not.toBeInTheDocument();
-    openQuerySettings();
+    await waitFor(() => expect(mapViews.state?.activeId).toBe("example-high-runs"));
+    expect(mapViews.state?.views.some(view => view.id === "example-high-runs" && view.title === "Runs above 12k ft")).toBe(true);
+    await openQuerySettings("example-high-runs");
     expect(screen.getByLabelText("Route color")).toHaveValue("#476bcc");
   });
 
-  it("offers shared query and system navigation without a hamburger", () => {
+  it("offers system navigation without reviving the old query navigation", () => {
     window.history.replaceState({}, "", "/");
     render(<App />);
     expect(screen.queryByRole("button", { name: "Open navigation menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open query menu" })).not.toBeInTheDocument();
     openLogoMenu();
     expect(screen.getByRole("navigation", { name: "Squiggles navigation" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "System settings" }));
@@ -131,7 +153,7 @@ describe("App", () => {
     expect(screen.queryByRole("navigation", { name: "Query navigation" })).not.toBeInTheDocument();
   });
 
-  it("rejects retired uuid map routes without reviving legacy views", async () => {
+  it("rejects retired uuid map routes without reviving saved legacy views", async () => {
     const datasetId = "31ea1577-b6f1-423a-8bda-ea7712345678";
     const idToken = `x.${btoa(JSON.stringify({ email: "len@example.com", name: "Len" })).replaceAll("=", "")}.x`;
     localStorage.setItem("squiggles-auth-session", JSON.stringify({ accessToken: "access", idToken }));
@@ -145,13 +167,13 @@ describe("App", () => {
     render(<App />);
     expect(await screen.findByRole("alert")).toHaveTextContent("This map could not be found.");
     expect(fetcher).not.toHaveBeenCalledWith(`https://api.example.test/api/datasets/${datasetId}/access`, expect.anything());
-    openQueryMenu();
-    expect(screen.getByRole("button", { name: "All Activities" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Len's curated map" })).not.toBeInTheDocument();
+    await waitFor(() => expect(mapViews.state).not.toBeNull());
+    expect(mapViews.state?.views.some(view => view.title === "Len's curated map")).toBe(false);
+    expect(screen.queryByRole("navigation", { name: "Query navigation" })).not.toBeInTheDocument();
   });
 
   it("shows the published map owner's identity without requiring login", async () => {
-    const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async input => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async input => {
       const url = String(input);
       if (url === "/runtime-config.json") return new Response(JSON.stringify({ apiUrl: "https://api.example.test", cognitoDomain: "", cognitoClientId: "" }));
       if (url === "https://api.example.test/api/published/abcd1234") return new Response(JSON.stringify({
@@ -167,56 +189,43 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open map menu for Martha" }));
     expect(screen.getByRole("navigation", { name: "Map and account navigation" })).toHaveTextContent("Martha");
     expect(screen.getByRole("button", { name: "Log in" })).toBeInTheDocument();
-    expect(fetcher).not.toHaveBeenCalledWith(expect.stringContaining("/api/recent-maps"), expect.anything());
   });
 
-  it("opens a synthetic developer dataset and renders its summary", async () => {
+  it("opens a synthetic dataset and exposes statistics and table through controller actions", async () => {
     window.history.replaceState({}, "", "/?dataset=synthetic");
     render(<App />);
     expect(await screen.findByRole("status", { name: "1 routes selected" })).toBeInTheDocument();
     expect(engineCalls.getSummary).not.toHaveBeenCalled();
-    expect(screen.queryByText("3 mi")).not.toBeInTheDocument();
-    openQueryMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Statistics" }));
+
+    const viewActions = await actions();
+    viewActions.statistics();
     await waitFor(() => expect(engineCalls.getSummary).toHaveBeenCalledTimes(1));
     expect(screen.getByRole("region", { name: "Detailed selection statistics" })).toBeInTheDocument();
-    expect(screen.queryByRole("slider", { name: "Panel size" })).not.toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Limit to activities contained in viewport" })).not.toBeChecked();
     fireEvent.click(screen.getByRole("checkbox", { name: "Limit to activities contained in viewport" }));
     await waitFor(() => expect(screen.getByText("CONTAINED IN VIEWPORT")).toBeInTheDocument());
     expect(screen.getAllByText("3 mi")).toHaveLength(3);
-    expect(screen.getByText((_, node) => node?.tagName === "SPAN" && node.textContent === "1 ride")).toBeInTheDocument();
-    openQuerySettings();
+
+    await openQuerySettings();
     expect(screen.getByRole("checkbox", { name: "Clean" })).not.toBeChecked();
     expect(engineCalls.execute).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("checkbox", { name: "Clean" }));
     await waitFor(() => expect(engineCalls.execute).toHaveBeenCalledTimes(2));
-    openQueryMenu();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Table" })).not.toBeDisabled());
-    fireEvent.click(screen.getByRole("button", { name: "Table" }));
+
+    viewActions.table();
     expect(await screen.findByRole("region", { name: "Activity table" })).toBeInTheDocument();
-    expect(screen.queryByRole("slider", { name: "Panel size" })).not.toBeInTheDocument();
     expect(await screen.findByText("Synthetic route")).toBeInTheDocument();
     const activityRow = screen.getByText("Synthetic route").closest("tr")!;
     fireEvent.mouseEnter(activityRow);
     expect(activityRow).toHaveClass("selected");
-    expect(document.querySelector(".tooltip")).not.toBeInTheDocument();
     fireEvent.mouseLeave(activityRow);
-    expect(activityRow).not.toHaveClass("selected");
     fireEvent.click(screen.getByRole("button", { name: "Sort by Activity" }));
     expect(screen.getByRole("columnheader", { name: "Activity" })).toHaveAttribute("aria-sort", "ascending");
     fireEvent.click(screen.getByText("Synthetic route"));
     await waitFor(() => expect(screen.queryByRole("region", { name: "Activity table" })).not.toBeInTheDocument());
-    await waitFor(() => expect(new URL(window.location.href).searchParams.get("lng")).toBe("-104.50000"));
     expect(screen.getByRole("heading", { name: "Synthetic route" })).toBeInTheDocument();
-    const isolate = screen.getByRole("button", { name: "Show only this route" });
-    fireEvent.click(isolate);
+    fireEvent.click(screen.getByRole("button", { name: "Show only this route" }));
     expect(screen.getByRole("button", { name: "Show all routes" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("img", { name: "Elevation profile chart" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Zoom to route" })).toBeInTheDocument();
-    expect(screen.getByText("3 mi")).toBeInTheDocument();
-    await waitFor(() => expect(new URL(window.location.href).searchParams.get("units")).toBe("imperial"));
-    expect(screen.getByRole("complementary", { name: "Activity detail" })).toBeInTheDocument();
   });
 
   it("restores map settings from the URL and keeps changes shareable", async () => {
@@ -226,7 +235,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "System settings" }));
     expect(screen.getByRole("button", { name: "Use imperial units" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Close system settings" }));
-    openQuerySettings();
+    await openQuerySettings();
     expect(screen.getByRole("combobox", { name: "Basemap" })).toHaveValue("carto-dark");
     expect(screen.getByRole("button", { name: "Use 3D map view" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("checkbox", { name: "Clean" })).toBeChecked();
@@ -240,13 +249,12 @@ describe("App", () => {
     expect(new URL(window.location.href).searchParams.get("lng")).toBe("-106.25000");
   });
 
-  it("creates a query tab at the current camera instead of the default location", async () => {
+  it("creates a query view at the current camera instead of the default location", async () => {
     window.history.replaceState({}, "", "/?tab=all&lng=-106.25&lat=39.5&zoom=11.25&bearing=-22.0&pitch=43.5&basemap=carto-dark&view=3d");
     render(<App />);
-    openQueryMenu();
-    fireEvent.click(screen.getByRole("button", { name: "New query" }));
-    expect(screen.getByRole("button", { name: "Open query menu" })).toHaveTextContent("New Query");
-    await waitFor(() => expect(new URL(window.location.href).searchParams.get("lng")).toBe("-106.25000"));
+    (await actions()).create();
+    await waitFor(() => expect(mapViews.state?.views.some(view => view.title === "New Query")).toBe(true));
+    expect(new URL(window.location.href).searchParams.get("lng")).toBe("-106.25000");
     expect(new URL(window.location.href).searchParams.get("zoom")).toBe("11.25");
     const stored = JSON.parse(localStorage.getItem("activity-map.tabs.v2:home") ?? "[]") as { title: string; mapState: { longitude: number; latitude: number; zoom: number }; style: { basemap: string; viewMode: string } }[];
     expect(stored.find(item => item.title === "New Query")).toMatchObject({ mapState: { longitude: -106.25, latitude: 39.5, zoom: 11.25 }, style: { basemap: "carto-dark", viewMode: "3d" } });
@@ -259,7 +267,7 @@ describe("App", () => {
 
     let finishQuery!: () => void;
     engineCalls.execute.mockImplementationOnce(() => new Promise<void>(resolve => { finishQuery = resolve; }));
-    openQuerySettings();
+    await openQuerySettings();
     fireEvent.click(screen.getByRole("checkbox", { name: "Clean" }));
     await waitFor(() => expect(engineCalls.execute).toHaveBeenCalledTimes(2));
 

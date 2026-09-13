@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 
 import { beginGoogleLogin, clearSession, identityFromSession, loadRuntimeConfig, loadSession } from "./auth";
 import type { QueryTab } from "./contracts";
 import { likeMap, loadMapNavigation, unlikeMap, type MapNavigation } from "./mapIdentity";
+import { createMapView, editMapView, mapViewNavigationState, openMapStatistics, openMapTable, selectMapView, subscribeMapViewNavigation } from "./mapViewController";
 import { loadPublishedView } from "./publishing";
 import { loadTabs, mapStorageScope, saveTabs } from "./storage";
 
@@ -25,10 +26,6 @@ function Icon({ name }: { name: IconName }) {
 
 function nativeOwnerButton() {
   return document.querySelector<HTMLButtonElement>("button.map-identity-button");
-}
-
-function nativeQueryButton() {
-  return document.querySelector<HTMLButtonElement>("button.mobile-query-title");
 }
 
 function currentMapId() {
@@ -74,44 +71,6 @@ function runNativeAccountAction(labels: string[]) {
   }, 0);
 }
 
-function queryNavigationButton(label: string) {
-  return [...document.querySelectorAll<HTMLButtonElement>('nav.mobile-menu[aria-label="Query navigation"] button')]
-    .find(button => button.textContent?.trim() === label);
-}
-
-function toggleNativeQuerySettings() {
-  const toolbar = document.querySelector<HTMLElement>('section.toolbar[aria-label="Query and map settings"]');
-  if (toolbar) {
-    toolbar.querySelector<HTMLButtonElement>('button[aria-label^="Close"]')?.click();
-    return;
-  }
-  const trigger = nativeQueryButton();
-  if (!trigger) return;
-  if (trigger.getAttribute("aria-expanded") !== "true") trigger.click();
-  window.setTimeout(() => queryNavigationButton("Query settings")?.click(), 0);
-}
-
-function createNewMapView() {
-  const trigger = nativeQueryButton();
-  if (!trigger) return;
-  if (trigger.getAttribute("aria-expanded") !== "true") trigger.click();
-  window.setTimeout(() => queryNavigationButton("New query")?.click(), 0);
-}
-
-function chooseNativeMapView(id: string) {
-  const trigger = nativeQueryButton();
-  if (!trigger) return;
-  const tabs = loadTabs(mapStorageScope());
-  const index = tabs.findIndex(tab => tab.id === id);
-  if (index < 0) return;
-  if (trigger.getAttribute("aria-expanded") !== "true") trigger.click();
-  window.setTimeout(() => {
-    const section = document.querySelector<HTMLElement>('nav.mobile-menu[aria-label="Query navigation"] section:first-child');
-    const buttons = section ? [...section.querySelectorAll<HTMLButtonElement>("button")] : [];
-    buttons[index]?.click();
-  }, 0);
-}
-
 export function MapNavigationEnhancements() {
   const [topbar, setTopbar] = useState<HTMLElement | null>(() => document.querySelector<HTMLElement>("header.topbar"));
   const [navigation, setNavigation] = useState<MapNavigation | null>(null);
@@ -121,13 +80,14 @@ export function MapNavigationEnhancements() {
   const [shareOpen, setShareOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [copied, setCopied] = useState(false);
-  const [domVersion, setDomVersion] = useState(0);
+  const [, setDomVersion] = useState(0);
   const [pendingLike, setPendingLike] = useState(false);
   const [savedDefinitionSignature, setSavedDefinitionSignature] = useState<string | null>(null);
   const [savedViewSignature, setSavedViewSignature] = useState<string | null>(null);
   const [currentDefinitionSignature, setCurrentDefinitionSignature] = useState(() => mapDefinitionSignature(loadTabs(mapStorageScope())));
   const [currentViewSignature, setCurrentViewSignature] = useState(() => mapViewSignature(loadTabs(mapStorageScope())));
   const [saving, setSaving] = useState(false);
+  const viewNavigation = useSyncExternalStore(subscribeMapViewNavigation, mapViewNavigationState, mapViewNavigationState);
 
   const session = loadSession();
   const sessionIdentity = identityFromSession(session);
@@ -170,14 +130,17 @@ export function MapNavigationEnhancements() {
   const path = window.location.pathname;
   const mapId = currentMapId();
   const viewingOwnMap = Boolean(navigation?.myMap?.url === path || (mapId && navigation?.myMap?.mapId === mapId));
+  const canEditViews = !mapId || viewingOwnMap;
   const nativeOwner = nativeOwnerButton();
   const nativeOwnerName = nativeOwner?.querySelector("strong")?.textContent?.trim() || "Shared map";
   const ownerName = viewingOwnMap ? (navigation?.myMap?.ownerDisplayName || sessionIdentity.name || sessionIdentity.email || "My map") : nativeOwnerName;
   const ownerAvatarUrl = viewingOwnMap
     ? navigation?.myMap?.ownerAvatarUrl || sessionIdentity.picture
     : nativeOwner?.querySelector<HTMLImageElement>(".map-owner-avatar img")?.src;
-  const currentViewName = nativeQueryButton()?.textContent?.trim() || "Map";
-  const views = useMemo(() => loadTabs(mapStorageScope()).map(tab => ({ id: tab.id, title: tab.title })), [domVersion, path]);
+  const fallbackViews = loadTabs(mapStorageScope()).map(tab => ({ id: tab.id, title: tab.title }));
+  const views = viewNavigation.views.length ? viewNavigation.views : fallbackViews;
+  const currentViewId = viewNavigation.activeId ?? new URLSearchParams(window.location.search).get("tab") ?? views[0]?.id ?? null;
+  const currentViewName = views.find(view => view.id === currentViewId)?.title ?? views[0]?.title ?? "Map";
   const favorite = Boolean(mapId && navigation?.recentMaps.some(map => map.mapId === mapId));
   const settingsDirty = savedDefinitionSignature !== null && currentDefinitionSignature !== savedDefinitionSignature;
   const viewDirty = !settingsDirty && savedViewSignature !== null && currentViewSignature !== savedViewSignature;
@@ -200,7 +163,6 @@ export function MapNavigationEnhancements() {
         setSavedViewSignature(mapViewSignature(saved.tabs));
         setCurrentDefinitionSignature(mapDefinitionSignature(saved.tabs));
         setCurrentViewSignature(mapViewSignature(saved.tabs));
-        setDomVersion(version => version + 1);
       })
       .catch(() => undefined);
     return () => { cancelled = true; };
@@ -307,8 +269,8 @@ export function MapNavigationEnhancements() {
   return <>
     <span className="map-navigation-redesign-marker" hidden />
     {topbar && createPortal(<>
-      {mapId && <button className={`map-context-trigger ${contextOpen ? "active" : ""}`} aria-label={`Open ${ownerName} map views`} aria-expanded={contextOpen} onClick={() => { setContextOpen(open => !open); setSettingsOpen(false); }}>
-        <Avatar name={ownerName} url={ownerAvatarUrl} className="map-context-avatar" />
+      {views.length > 0 && <button className={`map-context-trigger ${contextOpen ? "active" : ""}`} aria-label={mapId ? `Open ${ownerName} map views` : "Open map views"} aria-expanded={contextOpen} onClick={() => { setContextOpen(open => !open); setSettingsOpen(false); }}>
+        {mapId ? <Avatar name={ownerName} url={ownerAvatarUrl} className="map-context-avatar" /> : <span className="map-context-avatar map-context-generic"><Icon name="map"/></span>}
         <strong>{currentViewName}</strong>
       </button>}
       {mapId && viewingOwnMap && <div className="map-owner-actions">
@@ -318,18 +280,22 @@ export function MapNavigationEnhancements() {
       <button className={`app-settings-trigger ${settingsOpen ? "active" : ""}`} aria-label="Open account menu" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); setContextOpen(false); }}><span aria-hidden="true">⋮</span></button>
     </>, topbar)}
 
-    {contextOpen && mapId && <div className="map-context-popover" role="dialog" aria-label="Map owner and views">
-      <div className="map-owner-heading"><Avatar name={ownerName} url={ownerAvatarUrl}/><span><strong>{ownerName}</strong><small>Owner of this map</small></span></div>
-      {!viewingOwnMap && <button className={`map-like-action ${favorite ? "active" : ""}`} disabled={pendingLike} onClick={() => void setFavorite()}><Icon name="heart"/><span><strong>{favorite ? "Liked" : "Like map"}</strong><small>{favorite ? "Remove from favorites" : session ? "Add to favorites" : "Log in to add to favorites"}</small></span></button>}
+    {contextOpen && views.length > 0 && <div className="map-context-popover" role="dialog" aria-label="Map owner and views">
+      {mapId && <div className="map-owner-heading"><Avatar name={ownerName} url={ownerAvatarUrl}/><span><strong>{ownerName}</strong><small>Owner of this map</small></span></div>}
+      {mapId && !viewingOwnMap && <button className={`map-like-action ${favorite ? "active" : ""}`} disabled={pendingLike} onClick={() => void setFavorite()}><Icon name="heart"/><span><strong>{favorite ? "Liked" : "Like map"}</strong><small>{favorite ? "Remove from favorites" : session ? "Add to favorites" : "Log in to add to favorites"}</small></span></button>}
       <div className="map-view-list">
         {views.map(view => {
-          const active = view.title === currentViewName;
+          const active = view.id === currentViewId;
           return <div className={`map-view-row ${active ? "active" : ""}`} key={view.id}>
-            <button className="map-view-select" onClick={() => { setContextOpen(false); if (!active) chooseNativeMapView(view.id); }}>{view.title}</button>
-            {viewingOwnMap && active && <button className="map-view-edit" aria-label="Edit current map" onClick={() => { setContextOpen(false); toggleNativeQuerySettings(); }}><Icon name="edit"/></button>}
+            <button className="map-view-select" onClick={() => { setContextOpen(false); if (!active) selectMapView(view.id); }}>{view.title}</button>
+            {canEditViews && active && <button className="map-view-edit" aria-label="Edit current map" onClick={() => { setContextOpen(false); editMapView(view.id); }}><Icon name="edit"/></button>}
           </div>;
         })}
-        {viewingOwnMap && <button className="map-new-view" onClick={() => { setContextOpen(false); createNewMapView(); }}>+ New map</button>}
+        {canEditViews && <button className="map-new-view" onClick={() => { setContextOpen(false); createMapView(); }}>+ New map</button>}
+      </div>
+      <div className="map-view-tools">
+        <button onClick={() => { setContextOpen(false); openMapStatistics(); }}>Statistics</button>
+        <button onClick={() => { setContextOpen(false); openMapTable(); }}>Table</button>
       </div>
     </div>}
 
