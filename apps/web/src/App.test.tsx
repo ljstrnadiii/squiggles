@@ -85,7 +85,10 @@ afterEach(() => {
 describe("App", () => {
   function openLogoMenu() { fireEvent.click(screen.getByRole("button", { name: "Open Squiggles menu" })); }
   async function actions() { await waitFor(() => expect(mapViews.actions).not.toBeNull()); return mapViews.actions!; }
-  async function openQuerySettings(id = "all") { (await actions()).edit(id); }
+  async function openQuerySettings(id = "all") {
+    (await actions()).edit(id);
+    await waitFor(() => expect(screen.getByRole("region", { name: "Query and map settings" })).toBeInTheDocument());
+  }
 
   it("renders product controls and edits the current view without a legacy query menu", async () => {
     window.history.replaceState({}, "", "/");
