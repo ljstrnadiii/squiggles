@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   selectMapView: vi.fn(),
   editMapView: vi.fn(),
   createMapView: vi.fn(),
+  openMapStatistics: vi.fn(),
+  openMapTable: vi.fn(),
 }));
 
 vi.mock("./auth", () => ({
@@ -37,11 +39,13 @@ vi.mock("./mapIdentity", () => ({
 }));
 
 vi.mock("./mapViewController", () => ({
-  mapViewNavigationState: () => ({ activeId: "years", views: mockTabs }),
+  mapViewNavigationState: () => ({ activeId: "years", views: [{ id: "all", title: "Map" }, { id: "years", title: "Over the years" }] }),
   subscribeMapViewNavigation: () => () => undefined,
   selectMapView: (...args: unknown[]) => mocks.selectMapView(...args),
   editMapView: (...args: unknown[]) => mocks.editMapView(...args),
   createMapView: (...args: unknown[]) => mocks.createMapView(...args),
+  openMapStatistics: (...args: unknown[]) => mocks.openMapStatistics(...args),
+  openMapTable: (...args: unknown[]) => mocks.openMapTable(...args),
 }));
 
 vi.mock("./publishing", () => ({
@@ -72,6 +76,8 @@ afterEach(() => {
   mocks.selectMapView.mockClear();
   mocks.editMapView.mockClear();
   mocks.createMapView.mockClear();
+  mocks.openMapStatistics.mockClear();
+  mocks.openMapTable.mockClear();
 });
 
 function nativeHeader() {
@@ -136,6 +142,23 @@ describe("MapNavigationEnhancements", () => {
     expect(mocks.selectMapView).toHaveBeenCalledWith("all");
   });
 
+  it("keeps current-map tools in the compact view menu", async () => {
+    window.history.replaceState({}, "", "/p/11111111");
+    nativeHeader();
+    render(<MapNavigationEnhancements />);
+
+    const context = await screen.findByRole("button", { name: "Open Len map views" });
+    fireEvent.click(context);
+    let dropdown = screen.getByRole("dialog", { name: "Map owner and views" });
+    fireEvent.click(within(dropdown).getByRole("button", { name: "Statistics" }));
+    expect(mocks.openMapStatistics).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(context);
+    dropdown = screen.getByRole("dialog", { name: "Map owner and views" });
+    fireEvent.click(within(dropdown).getByRole("button", { name: "Table" }));
+    expect(mocks.openMapTable).toHaveBeenCalledTimes(1);
+  });
+
   it("syncs published views and owns edit/new view actions without a legacy query menu", async () => {
     window.history.replaceState({}, "", "/p/11111111");
     nativeHeader();
@@ -160,5 +183,17 @@ describe("MapNavigationEnhancements", () => {
     const reopened = screen.getByRole("dialog", { name: "Map owner and views" });
     fireEvent.click(within(reopened).getByRole("button", { name: "+ New map" }));
     expect(mocks.createMapView).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the same compact view menu without a published map id", async () => {
+    window.history.replaceState({}, "", "/");
+    nativeHeader();
+    render(<MapNavigationEnhancements />);
+
+    const context = await screen.findByRole("button", { name: "Open map views" });
+    fireEvent.click(context);
+    const dropdown = screen.getByRole("dialog", { name: "Map owner and views" });
+    expect(within(dropdown).getByRole("button", { name: "Edit current map" })).toBeInTheDocument();
+    expect(within(dropdown).getByRole("button", { name: "+ New map" })).toBeInTheDocument();
   });
 });
