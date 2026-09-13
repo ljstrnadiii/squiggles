@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MapNavigationEnhancements } from "./MapNavigationEnhancements";
@@ -119,17 +119,19 @@ describe("MapNavigationEnhancements", () => {
 
     const context = await screen.findByRole("button", { name: "Open Len map views" });
     fireEvent.click(context);
-    const currentView = screen.getByRole("button", { name: "Over the years" });
+    const dropdown = screen.getByRole("dialog", { name: "Map owner and views" });
+    const currentView = within(dropdown).getByRole("button", { name: "Over the years" });
     expect(currentView.querySelector("svg")).toBeNull();
-    expect(screen.getByRole("button", { name: "Edit current map" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "+ New map" })).toBeInTheDocument();
+    expect(within(dropdown).getByRole("button", { name: "Edit current map" })).toBeInTheDocument();
+    expect(within(dropdown).getByRole("button", { name: "+ New map" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit current map" }));
+    fireEvent.click(within(dropdown).getByRole("button", { name: "Edit current map" }));
     await waitFor(() => expect(settingsClicked).toHaveBeenCalledTimes(1));
     expect(triggerClicked).toHaveBeenCalledTimes(1);
 
     fireEvent.click(context);
-    fireEvent.click(screen.getByRole("button", { name: "+ New map" }));
+    const reopened = screen.getByRole("dialog", { name: "Map owner and views" });
+    fireEvent.click(within(reopened).getByRole("button", { name: "+ New map" }));
     await waitFor(() => expect(newQueryClicked).toHaveBeenCalledTimes(1));
   });
 });
