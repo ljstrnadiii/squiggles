@@ -12,6 +12,8 @@ type MapViewActions = {
   select: (id: string) => void;
   edit: (id: string) => void;
   create: () => void;
+  statistics: () => void;
+  table: () => void;
 };
 
 const EMPTY_STATE: MapViewNavigationState = { activeId: null, views: [] };
@@ -60,4 +62,12 @@ export function editMapView(id: string) {
 
 export function createMapView() {
   actions?.create();
+}
+
+export function openMapStatistics() {
+  actions?.statistics();
+}
+
+export function openMapTable() {
+  actions?.table();
 }
