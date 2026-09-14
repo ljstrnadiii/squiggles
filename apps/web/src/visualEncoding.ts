@@ -89,9 +89,10 @@ export function persistedVisualEncoding(settings: VisualEncodingSettings): Persi
 export function visualEncodingFromPersisted(settings?: Partial<PersistedVisualEncodingSettings>): VisualEncodingSettings {
   const playbackSpeed = Number(settings?.playbackSpeed);
   const windowSize = Number(settings?.windowSize);
+  const animateBy = typeof settings?.animateBy === "string" ? settings.animateBy : "";
   return {
     ...DEFAULT_VISUAL_ENCODING,
-    animateBy: typeof settings?.animateBy === "string" ? settings.animateBy : "",
+    animateBy,
     animationMode: settings?.animationMode === "windowed" ? "windowed" : "cumulative",
     windowSize: Number.isFinite(windowSize) ? Math.max(1, Math.round(windowSize)) : DEFAULT_VISUAL_ENCODING.windowSize,
     playbackSpeed: Number.isFinite(playbackSpeed) ? Math.min(240, Math.max(0.1, playbackSpeed)) : DEFAULT_VISUAL_ENCODING.playbackSpeed,
@@ -100,7 +101,7 @@ export function visualEncodingFromPersisted(settings?: Partial<PersistedVisualEn
     colorBy: typeof settings?.colorBy === "string" ? settings.colorBy : "",
     palette: isVisualPalette(settings?.palette) ? settings.palette : DEFAULT_VISUAL_ENCODING.palette,
     animationStep: 0,
-    playing: false,
+    playing: Boolean(animateBy),
   };
 }
 
@@ -123,20 +124,28 @@ export function dimensionByName(dimensions: QueryDimension[], name: string) {
   return dimensions.find(dimension => dimension.name === name);
 }
 
+export function animationStepIndex(dimension: QueryDimension, animationStep: number) {
+  if (!dimension.steps.length) return 0;
+  return Math.max(0, Math.min(dimension.steps.length - 1, animationStep));
+}
+
+export function animationFrameLabel(dimension: QueryDimension, animationStep: number) {
+  if (!dimension.steps.length) return dimension.name;
+  const value = dimension.steps[animationStepIndex(dimension, animationStep)];
+  return `${dimension.name} = ${String(value)}`;
+}
+
 export function reconcileVisualEncoding(
   settings: VisualEncodingSettings,
   dimensions: QueryDimension[],
 ): VisualEncodingSettings {
   const animation = dimensionByName(dimensions, settings.animateBy);
   const color = dimensionByName(dimensions, settings.colorBy);
-  const animationStep = animation
-    ? Math.max(0, Math.min(animation.steps.length - 1, settings.animationStep || animation.steps.length - 1))
-    : 0;
   return {
     ...settings,
     animateBy: animation ? settings.animateBy : "",
-    animationStep,
-    playing: animation ? settings.playing : false,
+    animationStep: animation ? animationStepIndex(animation, settings.animationStep) : 0,
+    playing: Boolean(animation && animation.steps.length > 1 && settings.playing),
     colorBy: color ? settings.colorBy : "",
   };
 }
@@ -151,7 +160,7 @@ export function activityVisible(
   if (value == null) return false;
   const index = dimension.steps.findIndex(step => step === value);
   if (index < 0) return false;
-  const current = Math.max(0, Math.min(dimension.steps.length - 1, settings.animationStep));
+  const current = animationStepIndex(dimension, settings.animationStep);
   if (settings.animationMode === "cumulative") return index <= current;
   return index <= current && index >= Math.max(0, current - settings.windowSize + 1);
 }
