@@ -103,5 +103,4 @@
   }
   .map-animation-controls > output { grid-column: 2; grid-row: 2; max-width: none; }
   .map-animation-speed { grid-column: 3; grid-row: 1 / span 2; }
-  .map-animation-speed span { display: none; }
 }
