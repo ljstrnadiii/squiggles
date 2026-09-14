@@ -186,13 +186,13 @@ export interface ExecutionEngine {
   execute(
     tab: QueryTab,
     zoom: number,
-    bounds?: ViewportBounds,
-    viewportSize?: ViewportSize,
+    bounds: ViewportBounds | undefined,
+    viewportSize: ViewportSize,
   ): Promise<QueryResult & ViewportResult>;
   renderViewport(
     zoom: number,
     bounds: ViewportBounds,
-    viewportSize?: ViewportSize,
+    viewportSize: ViewportSize,
   ): Promise<ViewportResult>;
   getSummary(bounds?: ViewportBounds): Promise<SummaryStats>;
   getActivities(bounds?: ViewportBounds): Promise<ActivityListItem[]>;
