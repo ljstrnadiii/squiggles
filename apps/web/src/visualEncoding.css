@@ -15,8 +15,10 @@
 .visual-encoding-toggle small { color: var(--muted); font-weight: 400; }
 .visual-encoding-body { display: grid; gap: 12px; margin-top: 12px; }
 .animation-control { align-items: center; display: grid; gap: 8px; grid-template-columns: auto minmax(100px, 1fr) auto auto; }
+.animation-control input[type="range"],
+.map-animation-controls > input[type="range"] { accent-color: var(--accent); }
 .animation-control input[type="range"] { width: 100%; }
-.animation-control output { font-variant-numeric: tabular-nums; min-width: 70px; }
+.animation-control output { font-variant-numeric: tabular-nums; min-width: 120px; }
 .custom-palette-editor { display: grid; gap: 7px; }
 .custom-palette-label { font-size: 12px; font-weight: 600; }
 .custom-color-stops { align-items: flex-start; display: flex; flex-wrap: wrap; gap: 8px; }
@@ -74,7 +76,7 @@
 .map-animation-controls > output {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  max-width: 150px;
+  max-width: 190px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
