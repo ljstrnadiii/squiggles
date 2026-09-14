@@ -6,6 +6,7 @@ import { MapNavigationEnhancements } from "./MapNavigationEnhancements";
 import { PanelEnhancements } from "./PanelEnhancements";
 import { initDuckDBProgressIndicator } from "./duckdbProgressIndicator";
 import { initErrorTelemetry } from "./errorTelemetry";
+import { legacyDatasetRedirect } from "./legacyRoute";
 import "./styles.css";
 import "./designTokens.css";
 import "./panelEnhancements.css";
@@ -13,9 +14,8 @@ import "./mapNavigationEnhancements.css";
 import "./responsivePanels.css";
 import "./spatial.css";
 
-if (/^\/m\/[0-9a-f-]{36}\/?$/i.test(window.location.pathname)) {
-  window.history.replaceState({}, "", "/");
-}
+const legacyRedirect = legacyDatasetRedirect(window.location.pathname, window.location.search);
+if (legacyRedirect) window.history.replaceState({}, "", legacyRedirect);
 
 document.documentElement.classList.add("map-navigation-redesign");
 initErrorTelemetry();
