@@ -138,7 +138,12 @@ export function MapNavigationEnhancements() {
     ? navigation?.myMap?.ownerAvatarUrl || sessionIdentity.picture
     : nativeOwner?.querySelector<HTMLImageElement>(".map-owner-avatar img")?.src;
   const fallbackViews = loadTabs(mapStorageScope()).map(tab => ({ id: tab.id, title: tab.title }));
-  const views = viewNavigation.views.length ? viewNavigation.views : fallbackViews;
+  const publishedViewsReady = !mapId || Boolean(nativeOwner && viewNavigation.views.length);
+  const views = mapId
+    ? viewNavigation.views
+    : viewNavigation.views.length
+      ? viewNavigation.views
+      : fallbackViews;
   const currentViewId = viewNavigation.activeId ?? new URLSearchParams(window.location.search).get("tab") ?? views[0]?.id ?? null;
   const currentViewName = views.find(view => view.id === currentViewId)?.title ?? views[0]?.title ?? "Map";
   const favorite = Boolean(mapId && navigation?.recentMaps.some(map => map.mapId === mapId));
@@ -267,9 +272,8 @@ export function MapNavigationEnhancements() {
         : "Saved — map settings and view are up to date";
 
   return <>
-    <span className="map-navigation-redesign-marker" hidden />
     {topbar && createPortal(<>
-      {views.length > 0 && <button className={`map-context-trigger ${contextOpen ? "active" : ""}`} aria-label={mapId ? `Open ${ownerName} map views` : "Open map views"} aria-expanded={contextOpen} onClick={() => { setContextOpen(open => !open); setSettingsOpen(false); }}>
+      {publishedViewsReady && views.length > 0 && <button className={`map-context-trigger ${contextOpen ? "active" : ""}`} aria-label={mapId ? `Open ${ownerName} map views` : "Open map views"} aria-expanded={contextOpen} onClick={() => { setContextOpen(open => !open); setSettingsOpen(false); }}>
         {mapId ? <Avatar name={ownerName} url={ownerAvatarUrl} className="map-context-avatar" /> : <span className="map-context-avatar map-context-generic"><Icon name="map"/></span>}
         <strong>{currentViewName}</strong>
       </button>}
@@ -280,7 +284,7 @@ export function MapNavigationEnhancements() {
       <button className={`app-settings-trigger ${settingsOpen ? "active" : ""}`} aria-label="Open account menu" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); setContextOpen(false); }}><span aria-hidden="true">⋮</span></button>
     </>, topbar)}
 
-    {contextOpen && views.length > 0 && <div className="map-context-popover" role="dialog" aria-label="Map owner and views">
+    {contextOpen && publishedViewsReady && views.length > 0 && <div className="map-context-popover" role="dialog" aria-label="Map owner and views">
       {mapId && <div className="map-owner-heading"><Avatar name={ownerName} url={ownerAvatarUrl}/><span><strong>{ownerName}</strong><small>Owner of this map</small></span></div>}
       {mapId && !viewingOwnMap && <button className={`map-like-action ${favorite ? "active" : ""}`} disabled={pendingLike} onClick={() => void setFavorite()}><Icon name="heart"/><span><strong>{favorite ? "Liked" : "Like map"}</strong><small>{favorite ? "Remove from favorites" : session ? "Add to favorites" : "Log in to add to favorites"}</small></span></button>}
       <div className="map-view-list">
