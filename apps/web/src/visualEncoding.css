@@ -15,15 +15,17 @@
 .visual-encoding-toggle small { color: var(--muted); font-weight: 400; }
 .visual-encoding-body { display: grid; gap: 12px; margin-top: 12px; }
 .animation-control { align-items: center; display: grid; gap: 8px; grid-template-columns: auto minmax(100px, 1fr) auto auto; }
+.animation-control input[type="range"],
+.map-animation-controls > input[type="range"] { accent-color: var(--accent); }
 .animation-control input[type="range"] { width: 100%; }
-.animation-control output { font-variant-numeric: tabular-nums; min-width: 70px; }
+.animation-control output { font-variant-numeric: tabular-nums; min-width: 120px; }
 .custom-palette-editor { display: grid; gap: 7px; }
 .custom-palette-label { font-size: 12px; font-weight: 600; }
 .custom-color-stops { align-items: flex-start; display: flex; flex-wrap: wrap; gap: 8px; }
 .custom-color-stop { display: grid; gap: 4px; justify-items: center; }
 .custom-color-stop input[type="color"] {
   background: transparent;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: 8px;
   cursor: pointer;
   height: 32px;
@@ -49,7 +51,7 @@
   align-items: center;
   backdrop-filter: blur(14px);
   background: color-mix(in srgb, var(--panel) 88%, transparent);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: 12px;
   bottom: 18px;
   box-shadow: 0 6px 24px rgb(0 0 0 / 18%);
@@ -74,7 +76,7 @@
 .map-animation-controls > output {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  max-width: 150px;
+  max-width: 190px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -101,5 +103,4 @@
   }
   .map-animation-controls > output { grid-column: 2; grid-row: 2; max-width: none; }
   .map-animation-speed { grid-column: 3; grid-row: 1 / span 2; }
-  .map-animation-speed span { display: none; }
 }

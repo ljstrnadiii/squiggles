@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 
 const source = readFileSync(join(import.meta.dirname, "PanelEnhancements.tsx"), "utf8");
 const app = readFileSync(join(import.meta.dirname, "App.tsx"), "utf8");
+const main = readFileSync(join(import.meta.dirname, "main.tsx"), "utf8");
 const mapNavigation = readFileSync(join(import.meta.dirname, "MapNavigationEnhancements.tsx"), "utf8");
+const mapNavigationCss = readFileSync(join(import.meta.dirname, "mapNavigationEnhancements.css"), "utf8");
 const panelCss = readFileSync(join(import.meta.dirname, "panelEnhancements.css"), "utf8");
 const styles = readFileSync(join(import.meta.dirname, "styles.css"), "utf8");
 
@@ -19,6 +21,12 @@ describe("map navigation enhancements", () => {
     expect(mapNavigation).not.toContain("nativeQueryButton");
     expect(mapNavigation).not.toContain("chooseNativeMapView");
     expect(mapNavigation).toContain("selectMapView(view.id)");
+  });
+
+  it("applies the redesigned navigation before first paint", () => {
+    expect(main).toContain('document.documentElement.classList.add("map-navigation-redesign")');
+    expect(mapNavigationCss).toContain(".map-navigation-redesign .topbar .login-button");
+    expect(mapNavigation).not.toContain("map-navigation-redesign-marker");
   });
 
   it("keeps rendering metrics in the combined Diagnostics panel", () => {

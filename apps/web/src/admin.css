@@ -10,9 +10,9 @@
 .admin-user-identity strong { font-size: 11px; }
 .admin-user-identity span, .admin-user-meta, .admin-user-detail { color: var(--muted); font-size: 9px; }
 .admin-user-status { flex: none; padding: 3px 6px; border: 1px solid var(--line); border-radius: 999px; font-size: 9px; text-transform: uppercase; }
-.admin-user-status.pending { color: #d4aa4f; }
-.admin-user-status.approved { color: #68b88a; }
-.admin-user-status.rejected { color: #d77870; }
+.admin-user-status.pending { color: var(--warning); }
+.admin-user-status.approved { color: var(--success); }
+.admin-user-status.rejected { color: var(--danger); }
 .admin-user-meta { display: flex; flex-wrap: wrap; gap: 8px; }
 .admin-user-detail { overflow-wrap: anywhere; }
 .admin-user-links, .admin-user-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
