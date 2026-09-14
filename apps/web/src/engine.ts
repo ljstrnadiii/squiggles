@@ -189,12 +189,6 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     }
   }
 
-  private viewportSize(viewportSize?: ViewportSize): ViewportSize | undefined {
-    if (viewportSize) return viewportSize;
-    const map = document.querySelector<HTMLElement>("section.map");
-    return map ? { width: map.clientWidth, height: map.clientHeight } : undefined;
-  }
-
   private requestedLod(
     zoom: number,
     viewportSize?: ViewportSize,
@@ -452,9 +446,8 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     const nextClean = tab.style.cleanEnabled;
     const baseSql = normalizeSelectionSql(tab.sql);
     const sql = applySpatialFilterSql(baseSql, tab.spatialFilter);
-    const size = this.viewportSize(viewportSize);
-    const fidelityLod = this.requestedLod(zoom, size);
-    const renderSettings = this.effectiveRenderSettings(zoom, size);
+    const fidelityLod = this.requestedLod(zoom, viewportSize);
+    const renderSettings = this.effectiveRenderSettings(zoom, viewportSize);
     const result = await this.networkRequest<QueryResult & WorkerViewportResult>({
       type: "execute",
       sql,
@@ -463,7 +456,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       renderSettings,
       bounds,
       visibleBounds: bounds,
-      viewportSize: size,
+      viewportSize,
       clean: nextClean,
       startingLod: this.startingLod(tab),
       needsCanonicalGeometry: Boolean(tab.spatialFilter?.polygon.length && tab.spatialFilter.polygon.length >= 3),
@@ -500,9 +493,8 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
     bounds: ViewportBounds,
     viewportSize?: ViewportSize,
   ): Promise<ViewportResult> {
-    const size = this.viewportSize(viewportSize);
-    const fidelityLod = this.requestedLod(zoom, size);
-    const renderSettings = this.effectiveRenderSettings(zoom, size);
+    const fidelityLod = this.requestedLod(zoom, viewportSize);
+    const renderSettings = this.effectiveRenderSettings(zoom, viewportSize);
     const vertexBudget = renderSettings.vertexBudget!;
     const requestedKey = this.cacheKey(fidelityLod, bounds, vertexBudget);
     const cached = this.cached(requestedKey, bounds, fidelityLod, vertexBudget);
@@ -527,7 +519,7 @@ export class BrowserDuckDBEngine implements ExecutionEngine {
       renderSettings,
       bounds: fetchBounds,
       visibleBounds: bounds,
-      viewportSize: size,
+      viewportSize,
       clean: this.clean,
     });
     recordActiveRenderPlan({ plans: result.resolutionPlans, bounds });
