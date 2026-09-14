@@ -1,4 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
+import type { SetStateAction } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { QueryDimension } from "./contracts";
@@ -18,7 +19,7 @@ describe("useAnimationPlayback", () => {
   it("advances frames at the configured speed", () => {
     vi.useFakeTimers();
     let settings: VisualEncodingSettings = { ...DEFAULT_VISUAL_ENCODING, animateBy: "month", playing: true, playbackSpeed: 4 };
-    const setSettings = vi.fn((update: React.SetStateAction<VisualEncodingSettings>) => {
+    const setSettings = vi.fn((update: SetStateAction<VisualEncodingSettings>) => {
       settings = typeof update === "function" ? update(settings) : update;
     });
 
@@ -31,7 +32,7 @@ describe("useAnimationPlayback", () => {
   it("loops or pauses at the last frame", () => {
     vi.useFakeTimers();
     let settings: VisualEncodingSettings = { ...DEFAULT_VISUAL_ENCODING, animateBy: "month", animationStep: 1, playing: true, playbackSpeed: 2, loop: false };
-    const setSettings = vi.fn((update: React.SetStateAction<VisualEncodingSettings>) => {
+    const setSettings = vi.fn((update: SetStateAction<VisualEncodingSettings>) => {
       settings = typeof update === "function" ? update(settings) : update;
     });
 
