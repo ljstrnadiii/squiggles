@@ -1,6 +1,7 @@
 import { RenderSettingsControls } from "./RenderSettingsControls";
 import { loadRenderSettings, normalizeRenderSettings, saveRenderSettings, type RenderSettings } from "./renderSettings";
 import { usePitchGesture } from "./usePitchGesture";
+import { useAnimationPlayback } from "./useAnimationPlayback";
 import { normalizeCamera } from "./camera";
 import { WebMercatorViewport, type PickingInfo } from "@deck.gl/core";
 import { PathLayer, ScatterplotLayer } from "@deck.gl/layers";
@@ -441,7 +442,7 @@ export function App() {
       const renderStarted = performance.now();
       const capturedTerrainCamera = terrainCameraRef.current;
       const activeTerrainCamera = queryTab.style.viewMode === "3d" && capturedTerrainCamera && Math.abs(capturedTerrainCamera.view.zoom - mapState.zoom) < 0.01 ? capturedTerrainCamera : null;
-      const result = await engine.execute(current, mapState.zoom, activeTerrainCamera?.bounds ?? viewportBounds(mapState, mapElement.current), activeTerrainCamera?.size);
+      const result = await engine.execute(current, mapState.zoom, activeTerrainCamera?.bounds ?? viewportBounds(mapState, mapElement.current), activeTerrainCamera?.size ?? mapSize);
       if (selection !== selectionRequest.current) return;
       const dimensions = result.dimensions ?? [];
       setQueryDimensions(dimensions);
@@ -459,7 +460,7 @@ export function App() {
         if (bounds) {
           const request = ++viewportRequest.current;
           const viewportStarted = performance.now();
-          const latestResult = await engine.renderViewport(latestView.zoom, bounds, latestCamera?.size);
+          const latestResult = await engine.renderViewport(latestView.zoom, bounds, latestCamera?.size ?? mapSize);
           if (selection === selectionRequest.current && request === viewportRequest.current) {
             setRouteBatches(latestResult.batches); setRenderedView(latestView);
             setRenderMetrics({ diagnostics: latestResult.diagnostics, lod: latestResult.lod, vertexCount: latestResult.vertexCount, geometryBufferBytes: latestResult.geometryBufferBytes, plannedVertexEstimate: latestResult.plannedVertexEstimate, rawVertexEstimate: latestResult.rawVertexEstimate, vertexBudget: latestResult.vertexBudget, visibleCount: latestResult.activityCount, durationMs: performance.now() - viewportStarted, scan: latestResult.scan, cache: latestResult.cache });
@@ -597,7 +598,7 @@ export function App() {
       if (!bounds) return;
       try {
         const renderStarted = performance.now();
-        const result = await engine.renderViewport(view.zoom, bounds, camera?.size);
+        const result = await engine.renderViewport(view.zoom, bounds, camera?.size ?? mapSize);
         if (request !== viewportRequest.current) return;
         setRouteBatches(result.batches); setRenderedView(view);
         setRenderMetrics({ diagnostics: result.diagnostics, lod: result.lod, vertexCount: result.vertexCount, geometryBufferBytes: result.geometryBufferBytes, plannedVertexEstimate: result.plannedVertexEstimate, rawVertexEstimate: result.rawVertexEstimate, vertexBudget: result.vertexBudget, visibleCount: result.activityCount, durationMs: performance.now() - renderStarted, scan: result.scan, cache: result.cache });
@@ -606,7 +607,7 @@ export function App() {
       }
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [engine, mapInteracting, renderReload, systemResolution, renderSettings, terrainCamera, terrainEnabled, view]);
+  }, [engine, mapInteracting, mapSize, renderReload, systemResolution, renderSettings, terrainCamera, terrainEnabled, view]);
 
   useEffect(() => {
     if (!viewportScope || (!statsOpen && !tableOpen) || !selectionReady.current) return;
@@ -819,18 +820,7 @@ export function App() {
   }), [tableActivities, tableDescending, tableSort]);
 
   const animationDimension = useMemo(() => dimensionByName(queryDimensions, visualEncoding.animateBy), [queryDimensions, visualEncoding.animateBy]);
-  useEffect(() => {
-    const steps = animationDimension?.steps ?? [];
-    if (!visualEncoding.playing || !animationDimension || steps.length < 2) return;
-    const step = Math.max(0, Math.min(steps.length - 1, visualEncoding.animationStep));
-    const timer = window.setTimeout(() => {
-      const next = step + 1;
-      if (next < steps.length) setVisualEncoding(current => ({ ...current, animationStep: next }));
-      else if (visualEncoding.loop) setVisualEncoding(current => ({ ...current, animationStep: 0 }));
-      else setVisualEncoding(current => ({ ...current, playing: false }));
-    }, 1000 / visualEncoding.playbackSpeed);
-    return () => window.clearTimeout(timer);
-  }, [animationDimension, visualEncoding.animationStep, visualEncoding.loop, visualEncoding.playbackSpeed, visualEncoding.playing]);
+  useAnimationPlayback(animationDimension, visualEncoding, setVisualEncoding);
   const colorDimension = useMemo(() => dimensionByName(queryDimensions, visualEncoding.colorBy), [queryDimensions, visualEncoding.colorBy]);
   const heatActive = tab.style.heatEnabled && !colorDimension;
   const overviewBatches = useMemo(() => isolateSelected ? [] : routeBatches, [isolateSelected, routeBatches]);

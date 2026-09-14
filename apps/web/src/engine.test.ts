@@ -10,6 +10,7 @@ const resolutionPlans = {
   medium: { lod: 2 as const, vertexEstimate: 900_000 },
   high: { lod: 2 as const, vertexEstimate: 900_000 },
 };
+const viewportSize = { width: 1200, height: 800 };
 
 const viewport = (): Omit<ViewportResult, "cache"> => ({
   batches: [
@@ -116,7 +117,7 @@ describe("BrowserDuckDBEngine viewport cache", () => {
       }
     } as unknown as typeof Worker;
     try {
-      await new BrowserDuckDBEngine().renderViewport(14, [-110, 39, -100, 45], { width: 1200, height: 800 });
+      await new BrowserDuckDBEngine().renderViewport(14, [-110, 39, -100, 45], viewportSize);
       expect(posted[0].lod).toBeGreaterThanOrEqual(5);
     } finally { globalThis.Worker = originalWorker; }
   });
@@ -261,8 +262,8 @@ describe("BrowserDuckDBEngine viewport cache", () => {
       sql: "SELECT activity_id FROM activities",
     };
     const bounds: [number, number, number, number] = [-105.3, 39.9, -105.1, 40.1];
-    const first = await engine.execute(tab, 12, bounds);
-    const second = await engine.renderViewport(12, bounds);
+    const first = await engine.execute(tab, 12, bounds, viewportSize);
+    const second = await engine.renderViewport(12, bounds, viewportSize);
     expect(posted).toHaveLength(1);
     expect(second.cache.hit).toBe(true);
     expect(second.batches[0].positions).toBe(first.batches[0].positions);
@@ -298,8 +299,8 @@ describe("BrowserDuckDBEngine viewport cache", () => {
       style: { ...defaultTab.style },
       sql: "SELECT activity_id FROM activities",
     };
-    await engine.execute(tab, 12.1, [-106, 39, -104, 41]);
-    const result = await engine.renderViewport(12.4, [-105.5, 39.5, -104.5, 40.5]);
+    await engine.execute(tab, 12.1, [-106, 39, -104, 41], viewportSize);
+    const result = await engine.renderViewport(12.4, [-105.5, 39.5, -104.5, 40.5], viewportSize);
     expect(posted).toHaveLength(1);
     expect(result.cache.hit).toBe(true);
     globalThis.Worker = originalWorker;
@@ -374,7 +375,7 @@ describe("BrowserDuckDBEngine viewport cache", () => {
       style: { ...defaultTab.style },
       sql: "SELECT activity_id FROM activities",
     };
-    const result = await engine.execute(tab, 12, [-106, 39, -104, 41]);
+    const result = await engine.execute(tab, 12, [-106, 39, -104, 41], viewportSize);
     expect(attempts).toBe(2);
     expect(result.activityCount).toBe(1);
     globalThis.Worker = originalWorker;
