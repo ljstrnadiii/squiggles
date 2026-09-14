@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import type { HeatPalette, QueryDimension } from "./contracts";
 import { CustomPaletteEditor } from "./CustomPaletteEditor";
 import {
+  animationFrameLabel,
+  animationStepIndex,
   colorForVisualDimension,
   customPalette,
   DEFAULT_CUSTOM_COLOR_STOPS,
@@ -21,7 +23,7 @@ export function VisualEncodingControls({ dimensions, settings, onChange }: {
   const animation = dimensionByName(dimensions, settings.animateBy);
   const color = dimensionByName(dimensions, settings.colorBy);
   const steps = animation?.steps ?? [];
-  const step = Math.max(0, Math.min(Math.max(0, steps.length - 1), settings.animationStep));
+  const step = animation ? animationStepIndex(animation, settings.animationStep) : 0;
   const paletteMode = visualPaletteStops(settings.palette).length >= 2 ? "custom" : settings.palette;
 
   useEffect(() => {
@@ -30,7 +32,7 @@ export function VisualEncodingControls({ dimensions, settings, onChange }: {
 
   function chooseAnimation(name: string) {
     const next = dimensionByName(dimensions, name);
-    onChange({ ...settings, animateBy: name, animationStep: next ? Math.max(0, next.steps.length - 1) : 0, playing: false });
+    onChange({ ...settings, animateBy: name, animationStep: 0, playing: Boolean(next && next.steps.length > 1) });
   }
 
   function choosePalette(value: string) {
@@ -69,7 +71,7 @@ export function VisualEncodingControls({ dimensions, settings, onChange }: {
       {animation && steps.length > 0 && <div className="animation-control">
         <button type="button" onClick={() => onChange({ ...settings, playing: !settings.playing })}>{settings.playing ? "Pause" : "Play"}</button>
         <input aria-label="Animation step" type="range" min="0" max={Math.max(0, steps.length - 1)} value={step} onChange={event => onChange({ ...settings, animationStep: Number(event.target.value), playing: false })} />
-        <output>{String(steps[step] ?? "")}</output>
+        <output title={animationFrameLabel(animation, step)}>{animationFrameLabel(animation, step)}</output>
         <label className="check"><input type="checkbox" checked={settings.loop} onChange={event => onChange({ ...settings, loop: event.target.checked })} /> Loop</label>
       </div>}
       {color && <div className="dimension-legend" aria-label="Color legend">
