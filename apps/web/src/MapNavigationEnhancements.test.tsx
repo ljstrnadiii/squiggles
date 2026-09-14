@@ -103,6 +103,18 @@ function nativeHeader() {
 }
 
 describe("MapNavigationEnhancements", () => {
+  it("waits for published map identity before showing saved views", async () => {
+    window.history.replaceState({}, "", "/p/22222222");
+    render(<MapNavigationEnhancements />);
+
+    expect(screen.queryByRole("button", { name: /Open .* map views/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("Over the years")).not.toBeInTheDocument();
+
+    nativeHeader();
+    const context = await screen.findByRole("button", { name: "Open Martha map views" });
+    expect(context).toHaveTextContent("Over the years");
+  });
+
   it("uses one map-context avatar and likes someone else's map", async () => {
     window.history.replaceState({}, "", "/p/22222222");
     nativeHeader();
