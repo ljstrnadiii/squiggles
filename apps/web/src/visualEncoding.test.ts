@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QueryDimension } from "./contracts";
-import { activityVisible, colorForVisualDimension, customPalette, DEFAULT_VISUAL_ENCODING, persistedVisualEncoding, reconcileVisualEncoding, visualEncodingFromPersisted, visualPaletteStops } from "./visualEncoding";
+import { activityVisible, animationFrameLabel, colorForVisualDimension, customPalette, DEFAULT_VISUAL_ENCODING, persistedVisualEncoding, reconcileVisualEncoding, visualEncodingFromPersisted, visualPaletteStops } from "./visualEncoding";
 
 const month: QueryDimension = {
   name: "month",
@@ -44,7 +44,7 @@ describe("query visual encoding", () => {
     expect(colorForVisualDimension(category, "c", palette)).toEqual([0, 0, 255, 255]);
   });
 
-  it("persists view animation configuration without live playback state", () => {
+  it("persists animation configuration while restarting playback from the first frame", () => {
     const runtime = {
       ...DEFAULT_VISUAL_ENCODING,
       animateBy: "month",
@@ -52,7 +52,7 @@ describe("query visual encoding", () => {
       animationStep: 2,
       windowSize: 3,
       playbackSpeed: 24,
-      playing: true,
+      playing: false,
       loop: false,
       showMapControls: true,
       colorBy: "month",
@@ -62,7 +62,15 @@ describe("query visual encoding", () => {
     expect(persisted).not.toHaveProperty("animationStep");
     expect(persisted).not.toHaveProperty("playing");
     expect(persisted).toMatchObject({ playbackSpeed: 24, showMapControls: true, animationMode: "windowed", windowSize: 3 });
-    expect(visualEncodingFromPersisted(persisted)).toMatchObject({ playbackSpeed: 24, showMapControls: true, animationStep: 0, playing: false });
+    const restored = visualEncodingFromPersisted(persisted);
+    expect(restored).toMatchObject({ playbackSpeed: 24, showMapControls: true, animationStep: 0, playing: true });
+    expect(reconcileVisualEncoding(restored, [month])).toMatchObject({ animationStep: 0, playing: true });
+  });
+
+  it("keeps the first frame at zero instead of treating it as an unset value", () => {
+    const settings = { ...DEFAULT_VISUAL_ENCODING, animateBy: "month", animationStep: 0, playing: true };
+    expect(reconcileVisualEncoding(settings, [month])).toMatchObject({ animationStep: 0, playing: true });
+    expect(animationFrameLabel(month, 0)).toBe("month = 2026-01-01");
   });
 
   it("drops encodings that are absent from a new query", () => {
