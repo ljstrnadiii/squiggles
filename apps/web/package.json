@@ -31,7 +31,7 @@
     "maplibre-gl": "github:ljstrnadiii/maplibre-gl-js#45ed5dbd2e4184548e7ef9573614338bc78e670c",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "vite": "8.2.2"
+    "vite": "8.2.4"
   },
   "devDependencies": {
     "@eslint/js": "9.35.0",
