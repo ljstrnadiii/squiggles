@@ -9,7 +9,7 @@ dependencies = [
     "gpxpy>=1.6,<2",
     "lxml>=5,<7",
     "pandera[pyarrow]",
-    "pyarrow>=20,<24",
+    "pyarrow>=20,<26",
     "ray[data]>=2.50,<3",
     "shapely>=2.1,<3",
 ]
